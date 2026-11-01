@@ -1,8 +1,6 @@
 import { useEffect, type ReactNode, type Ref } from "react";
-import { PanelLeft, RotateCw, Settings2, SquareTerminal, Wrench } from "lucide-react";
-import { installAppReload, reloadApp } from "./reload";
-import type { WorkspaceId } from "../server/types";
-import { WorkspacePill } from "./WorkspacePill";
+import { Activity, Globe, PanelLeft, SquareTerminal } from "lucide-react";
+import { installAppReload } from "./reload";
 import { t } from "./i18n";
 import { SinawiMark } from "./SinawiMark";
 import { Beat } from "./Beat";
@@ -20,23 +18,25 @@ type WindowHeaderProps = {
   /** ISO time the current run started; shows the running pill while set. */
   runningSince?: string;
   sidebar?: { open: boolean; controls: string; onToggle: () => void; buttonRef?: Ref<HTMLButtonElement> };
-  workspaceId?: WorkspaceId;
-  onSwitchWorkspace?: () => void;
-  otherRunning?: number;
-  onTools?: () => void;
-  toolsActive?: boolean;
-  onSettings?: () => void;
-  settingsActive?: boolean;
+  /** Workspace switcher (renders nothing with a single workspace). */
+  workspace?: ReactNode;
   onTerminal?: () => void;
+  onBrowser?: () => void;
   notifications?: ReactNode;
+  /** Activity panel toggle for the open conversation. */
+  activity?: { open: boolean; controls: string; onToggle: () => void };
+  /** Contextual controls placed before the fixed icons (e.g. folding the chat beside the browser). */
+  extra?: ReactNode;
 };
 
 /**
- * App title bar: a plain flex row. In Tauri the macOS traffic lights overlay its left edge, so a
- * spacer reserves them; the sidebar toggle always sits right after it. Every non-interactive
- * element carries data-tauri-drag-region because the drag listener only reacts to direct hits.
+ * App title bar: lights · sidebar toggle · brand / project / title · run status, and on the right
+ * only the workspace switcher and panel toggles. In Tauri the macOS traffic lights overlay the left
+ * edge, so a spacer reserves them. Reload has no button: ⌘R (installAppReload) and settings/help.
+ * Every non-interactive element carries data-tauri-drag-region because the drag listener only
+ * reacts to direct hits.
  */
-export function WindowHeader({ title, project, runningSince, sidebar, workspaceId, onSwitchWorkspace, otherRunning, onTools, toolsActive, onSettings, settingsActive, onTerminal, notifications }: WindowHeaderProps) {
+export function WindowHeader({ title, project, runningSince, sidebar, workspace, onTerminal, onBrowser, notifications, activity, extra }: WindowHeaderProps) {
   useEffect(() => installAppReload(window), []);
   const desktop = isTauri();
   if (!desktop && !sidebar && !onTerminal && !notifications) return null;
@@ -45,12 +45,12 @@ export function WindowHeader({ title, project, runningSince, sidebar, workspaceI
 
   // Tauri's drag-region listener also handles native double-click maximize.
   return (
-    <header className="window-header" data-tauri-drag-region>
+    <header className={`window-header${desktop ? " has-traffic-lights" : ""}`} data-tauri-drag-region>
       {desktop && <div className="window-header-traffic" aria-hidden="true" data-tauri-drag-region />}
       {sidebar && <button ref={sidebar.buttonRef} type="button" className="header-icon-button window-header-sidebar" aria-label={toggleLabel} title={t("side.toggleTitle", { label: toggleLabel })}
         aria-expanded={sidebar.open} aria-controls={sidebar.controls} onClick={sidebar.onToggle}><PanelLeft size={18} aria-hidden="true" /></button>}
       <div className="window-header-crumbs" role="group" aria-label={t("header.location")} data-tauri-drag-region>
-        <span className="window-header-brand" data-tauri-drag-region><SinawiMark size={20} />Sinawi</span>
+        <span className="window-header-brand" data-tauri-drag-region><SinawiMark size={18} />Sinawi</span>
         {project && <>
           <span className="window-header-separator" aria-hidden="true" data-tauri-drag-region>/</span>
           <span className="window-header-project" data-tauri-drag-region title={project}>{project}</span>
@@ -60,14 +60,12 @@ export function WindowHeader({ title, project, runningSince, sidebar, workspaceI
         {runningSince && <span className="window-header-status" data-tauri-drag-region><Beat />{t("status.running")} · <Elapsed start={runningSince} /></span>}
       </div>
       <div className="window-header-actions" data-tauri-drag-region>
-        {workspaceId && onSwitchWorkspace && <WorkspacePill workspaceId={workspaceId} onSwitch={onSwitchWorkspace} otherRunning={otherRunning} />}
+        {workspace}
+        {extra}
         {onTerminal && <button className="header-icon-button" type="button" aria-label={t("header.terminal")} title={t("header.terminalTitle")} onClick={onTerminal}><SquareTerminal size={18} aria-hidden="true" /></button>}
+        {onBrowser && <button className="header-icon-button" type="button" aria-label={t("ws.browser")} title={t("ws.browserTitle")} onClick={onBrowser}><Globe size={18} aria-hidden="true" /></button>}
         {notifications}
-        {onTools && <button type="button" className="header-icon-button" aria-label={t("header.tools")} aria-current={toolsActive ? "page" : undefined} title={t("header.toolsTitle")} onClick={onTools}><Wrench size={18} aria-hidden="true" /></button>}
-        {onSettings && <button type="button" className="header-icon-button" aria-label={t("side.settings")} aria-current={settingsActive ? "page" : undefined} title={t("side.settings")} onClick={onSettings}><Settings2 size={18} aria-hidden="true" /></button>}
-        <button type="button" className="header-icon-button" aria-label={t("common.reload")} title={t("header.reloadTitle")} onClick={() => reloadApp()}>
-          <RotateCw size={17} aria-hidden="true" />
-        </button>
+        {activity && <button className="header-icon-button" type="button" aria-label={t("activity.label")} title={t("activity.title")} aria-expanded={activity.open} aria-controls={activity.controls} onClick={activity.onToggle}><Activity size={18} aria-hidden="true" /></button>}
       </div>
     </header>
   );

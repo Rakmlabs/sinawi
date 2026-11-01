@@ -34,10 +34,14 @@ test("sidebar nests project chats and keeps ungrouped and orphaned chats in rece
   assert.match(recents, /aria-label="오류"/);
   assert.match(html, /data-draggable="true"/);
 });
-test("sidebar offers new chat, project creation and compact management tools without a group page", () => {
+test("sidebar offers new chat, search, project creation and a single settings row", () => {
   const html = render();
-  for (const label of ["새 채팅", "채팅 및 프로젝트 검색", "프로젝트 만들기", "도구 관리", "설정", "봇", "스킬"]) assert.ok(html.includes(`aria-label="${label}"`));
-  assert.doesNotMatch(html, /작업 그룹|작업 공간|에이전트 관리/);
+  for (const label of ["새 채팅", "채팅 및 프로젝트 검색", "프로젝트 만들기"]) assert.ok(html.includes(`aria-label="${label}"`));
+  // One settings row opens a menu (tools, bots, skills, usage, help, reload): no row of tiny icons.
+  assert.match(html, /<button class="sidebar-settings" aria-haspopup="menu" aria-expanded="false"><svg[^>]*>[\s\S]*?<span>설정<\/span><\/button>/);
+  assert.doesNotMatch(html, /sidebar-tools|aria-label="도구 관리"|aria-label="봇"|aria-label="스킬"/);
+  assert.match(html, /<kbd aria-hidden="true">(?:⌘K|Ctrl\+K)<\/kbd>/);
+  assert.doesNotMatch(html, /작업 그룹|에이전트 관리/);
   // The collapse toggle lives in the title bar now, not inside the sidebar.
   assert.doesNotMatch(html, /사이드바 접기|사이드바 펼치기/);
   assert.match(html, /<kbd aria-hidden="true">(?:⌘N|Ctrl\+N)<\/kbd>/);
@@ -45,23 +49,21 @@ test("sidebar offers new chat, project creation and compact management tools wit
   assert.match(html, /프로젝트로 채팅을 모아 보세요/);
 });
 test("sidebar keeps the workspace switcher exclusively in the header", () => {
-  const html = render({ workspaceId: "company", otherRunning: 2, onSwitchWorkspace: noop });
-  assert.doesNotMatch(html, /aria-label="회사 작업 공간, 개인으로 전환"/);
-  assert.doesNotMatch(html, /개인에서 진행 중인 작업 2개/);
+  const html = render({ workspaceId: "company" });
+  assert.doesNotMatch(html, /workspace-switcher/);
 });
 test("a closed sidebar is inert and busy chats cannot be dragged", () => {
   const companySession = { ...session("busy"), workspaceId: "company" as const };
-  const html = render({ id: "app-sidebar", closed: true, busy: true, sessions: [companySession], workspaceId: "company", onSwitchWorkspace: noop });
+  const html = render({ id: "app-sidebar", closed: true, busy: true, sessions: [companySession], workspaceId: "company" });
   assert.match(html, /<aside id="app-sidebar" class="rail" aria-label="사이드바" inert="">/);
   assert.match(html, /data-draggable="false"/);
-  assert.doesNotMatch(html, /회사 작업 공간, 개인으로 전환/);
   assert.doesNotMatch(render({ id: "app-sidebar" }), /inert/);
 });
 
-test("sidebar exposes usage from its management footer", () => {
-  const html = render({ onUsage: noop });
-  assert.match(html, /aria-label="사용량"/);
-  assert.match(html, /title="사용량"/);
+test("project rows offer a hover new-chat button next to the menu", () => {
+  const html = render({ groups: [group], sessions: [session("nested", group.id)] });
+  assert.match(html, /aria-label="앱 개발에서 새 채팅"/);
+  assert.match(html, /role="status"[^>]*>[\s\S]*연결됨/);
 });
 
 test("active conversation expands one sidebar child per worker with task count and live status", () => {

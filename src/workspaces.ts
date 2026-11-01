@@ -2,22 +2,67 @@ import { allowedAgentsForWorkspace } from "../server/workspace-policy";
 import type { ProviderQuota } from "../server/quota";
 import type { AgentId, Group, Session, WorkspaceId, WorkspaceState } from "../server/types";
 import { remainingQuota } from "./quota-data";
+import { t } from "./i18n";
 
-export function inWorkspace<T extends { workspaceId?: WorkspaceId }>(items: T[], workspaceId: WorkspaceId): T[] {
-  return items.filter((item) => (item.workspaceId ?? "personal") === workspaceId);
+/** A user-defined workspace as listed by `GET /api/workspaces`. */
+export type WorkspaceSummary = { id: WorkspaceId; name: string };
+/** Workspace state plus the ordered, user-defined workspace list. */
+export type WorkspacesState = WorkspaceState & { workspaces: WorkspaceSummary[]; runningByWorkspace: Record<string, number> };
+
+/**
+ * Accepts the server payload and guarantees a usable list: every listed workspace has defaults and
+ * the current id is one of them. An older server without `workspaces` lists its defaults keys.
+ */
+export function normalizeWorkspaces(raw: Omit<WorkspaceState, "workspaces"> & { workspaces?: unknown; runningByWorkspace?: unknown }): WorkspacesState {
+  const defaults = { ...(raw.defaults ?? {}) } as Record<WorkspaceId, WorkspaceState["defaults"][WorkspaceId]>;
+  const listed = Array.isArray(raw.workspaces)
+    ? (raw.workspaces as unknown[]).filter((item): item is WorkspaceSummary => Boolean(item) && typeof (item as WorkspaceSummary).id === "string" && typeof (item as WorkspaceSummary).name === "string")
+    : [];
+  const workspaces = listed.length ? listed : (Object.keys(defaults) as WorkspaceId[]).map((id) => ({ id, name: id }));
+  for (const workspace of workspaces) defaults[workspace.id] ??= {};
+  const currentWorkspaceId = workspaces.some((workspace) => workspace.id === raw.currentWorkspaceId) ? raw.currentWorkspaceId : workspaces[0]?.id ?? raw.currentWorkspaceId;
+  const running = raw.runningByWorkspace && typeof raw.runningByWorkspace === "object" ? raw.runningByWorkspace as Record<string, number> : {};
+  return { ...raw, currentWorkspaceId, defaults, workspaces, runningByWorkspace: running };
+}
+
+/** Display name; the server's seeded `default` workspace keeps a localized name until renamed. */
+export function displayWorkspaceName(workspace: WorkspaceSummary | undefined, fallbackId?: WorkspaceId): string {
+  if (!workspace) return String(fallbackId ?? "");
+  return workspace.id === "default" && workspace.name === "기본" ? t("workspace.default") : workspace.name;
+}
+
+export function workspaceName(workspaces: readonly WorkspaceSummary[], id: WorkspaceId | undefined): string {
+  return displayWorkspaceName(workspaces.find((workspace) => workspace.id === id), id);
+}
+
+/** Running sessions per workspace id. */
+export function runningByWorkspace(sessions: readonly Pick<Session, "workspaceId" | "status">[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const session of sessions) if (session.status === "running") counts[session.workspaceId] = (counts[session.workspaceId] ?? 0) + 1;
+  return counts;
+}
+
+/** Items of one workspace. Legacy records without an id belong to `defaultWorkspaceId` (the first workspace). */
+export function inWorkspace<T extends { workspaceId?: WorkspaceId }>(items: T[], workspaceId: WorkspaceId, defaultWorkspaceId?: WorkspaceId): T[] {
+  return items.filter((item) => (item.workspaceId ?? defaultWorkspaceId) === workspaceId);
 }
 
 type WorkspaceKey = { key: string; isComposing?: boolean; keyCode?: number; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean };
-export function workspaceShortcut(event: WorkspaceKey): WorkspaceId | undefined {
+/** F1/F2 pick the first/second workspace in list order; returns that index. */
+export function workspaceShortcut(event: WorkspaceKey): number | undefined {
   if (event.isComposing || event.keyCode === 229 || event.metaKey || event.ctrlKey || event.altKey) return undefined;
-  return event.key === "F1" ? "personal" : event.key === "F2" ? "company" : undefined;
+  return event.key === "F1" ? 0 : event.key === "F2" ? 1 : undefined;
 }
 
+/**
+ * Serialized `PATCH /api/workspaces` saves. Each save carries the current workspace plus the
+ * defaults of one workspace only, so a queued save can never resurrect a workspace deleted meanwhile.
+ */
 export function createWorkspaceSaver(request: (body: unknown) => Promise<unknown>) {
   let queue: Promise<unknown> = Promise.resolve();
   let generation = 0;
-  return (state: WorkspaceState, immediate = false): Promise<void> => {
-    const body = structuredClone({ currentWorkspaceId: state.currentWorkspaceId, defaultsByWorkspace: state.defaults });
+  return (state: WorkspaceState, immediate = false, workspaceId: WorkspaceId = state.currentWorkspaceId): Promise<void> => {
+    const body = structuredClone({ currentWorkspaceId: state.currentWorkspaceId, workspaceId, defaults: state.defaults[workspaceId] ?? {} });
     if (immediate) {
       generation += 1;
       return request(body).then(() => undefined);
@@ -31,9 +76,10 @@ export function createWorkspaceSaver(request: (body: unknown) => Promise<unknown
   };
 }
 
-export function searchWorkspace(sessions: Session[], groups: Group[], workspaceId: WorkspaceId, query: string) {
-  const scopedSessions = inWorkspace(sessions, workspaceId);
-  const scopedGroups = inWorkspace(groups, workspaceId);
+/** Search chats and projects; with `workspaceId` the lists are scoped to it first (undefined: already scoped). */
+export function searchWorkspace(sessions: Session[], groups: Group[], workspaceId: WorkspaceId | undefined, query: string) {
+  const scopedSessions = workspaceId === undefined ? sessions : inWorkspace(sessions, workspaceId);
+  const scopedGroups = workspaceId === undefined ? groups : inWorkspace(groups, workspaceId);
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return { sessions: scopedSessions, groups: scopedGroups };
   const matches = (text: string) => text.toLocaleLowerCase().includes(needle);
@@ -51,7 +97,7 @@ export function searchWorkspace(sessions: Session[], groups: Group[], workspaceI
 export function workspaceTeamDefaults(workspaceId: WorkspaceId, defaults: import("../server/types").WorkspaceDefaults) {
   const allowed = allowedAgentsForWorkspace(workspaceId, defaults.allowedAgents);
   const preferredOrchestrator = (["claude", "codex", "grok"] as const).find((id) => allowed.includes(id));
-  const agent = defaults.agent && allowed.includes(defaults.agent) ? defaults.agent : preferredOrchestrator ?? (workspaceId === "company" ? "claude" : "codex");
+  const agent = defaults.agent && allowed.includes(defaults.agent) ? defaults.agent : preferredOrchestrator ?? "claude";
   const isSavedAgent = agent === defaults.agent;
   const workers = (defaults.workers ?? []).filter((id) => allowed.includes(id));
   return {

@@ -1,22 +1,42 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createWorkspaceSaver, searchWorkspace, inWorkspace, workspaceShortcut } from "./workspaces";
+import { createWorkspaceSaver, searchWorkspace, inWorkspace, normalizeWorkspaces, runningByWorkspace, workspaceName, workspaceShortcut } from "./workspaces";
+import { setLang, getLang } from "./i18n";
 
-test("workspace lists exclude the other workspace, including search candidates", () => {
+const list = [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }];
+
+test("workspace lists exclude the other workspace; legacy records belong to the first workspace", () => {
   const records = [{ id: "old" }, { id: "mine", workspaceId: "personal" as const }, { id: "work", workspaceId: "company" as const }];
-  assert.deepEqual(inWorkspace(records, "personal").map((item) => item.id), ["old", "mine"]);
+  assert.deepEqual(inWorkspace(records, "personal", "personal").map((item) => item.id), ["old", "mine"]);
+  assert.deepEqual(inWorkspace(records, "company", "personal").map((item) => item.id), ["work"]);
   assert.deepEqual(inWorkspace(records, "company").map((item) => item.id), ["work"]);
 });
 
-test("F1/F2 switch workspaces while IME composition and modified shortcuts are left alone", () => {
-  assert.equal(workspaceShortcut({ key: "F1" }), "personal");
-  assert.equal(workspaceShortcut({ key: "F2" }), "company");
+test("user-defined workspaces: normalized list, running counts and the localized default name", () => {
+  const state = normalizeWorkspaces({ currentWorkspaceId: "gone", defaults: { a: { cwd: "/a" } }, workspaces: [{ id: "a", name: "Alpha" }, { id: "b", name: "Beta" }], runningByWorkspace: { b: 2 } });
+  assert.equal(state.currentWorkspaceId, "a");
+  assert.deepEqual(state.defaults.b, {});
+  assert.deepEqual(state.runningByWorkspace, { b: 2 });
+  assert.deepEqual(normalizeWorkspaces({ currentWorkspaceId: "x", defaults: { x: {} } }).workspaces, [{ id: "x", name: "x" }]);
+  assert.deepEqual(runningByWorkspace([{ workspaceId: "a", status: "running" }, { workspaceId: "a", status: "done" }, { workspaceId: "b", status: "running" }]), { a: 1, b: 1 });
+  const before = getLang();
+  try {
+    setLang("en");
+    assert.equal(workspaceName([{ id: "default", name: "기본" }], "default"), "Default");
+    assert.equal(workspaceName([{ id: "default", name: "Lab" }], "default"), "Lab");
+    assert.equal(workspaceName(list, "company"), "회사");
+  } finally { setLang(before); }
+});
+
+test("F1/F2 pick the first and second workspace while IME composition and modified shortcuts are left alone", () => {
+  assert.equal(workspaceShortcut({ key: "F1" }), 0);
+  assert.equal(workspaceShortcut({ key: "F2" }), 1);
   for (const event of [{ key: "F2", isComposing: true }, { key: "F1", keyCode: 229 }, { key: "F2", metaKey: true }, { key: "F2", ctrlKey: true }, { key: "F1", altKey: true }, { key: "F3" }]) {
     assert.equal(workspaceShortcut(event), undefined);
   }
 });
 
-test("preference saves serialize snapshots and a later full save recovers a failed switch", async () => {
+test("preference saves serialize snapshots of one workspace's defaults and a later save recovers a failed switch", async () => {
   const calls: any[] = [];
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -24,20 +44,21 @@ test("preference saves serialize snapshots and a later full save recovers a fail
     calls.push(body);
     if (calls.length === 1) { await gate; throw new Error("offline"); }
   });
-  const state = { currentWorkspaceId: "personal" as const, defaults: { personal: { cwd: "/home" }, company: { cwd: "/work" } } };
+  const state = { currentWorkspaceId: "personal", workspaces: list, defaults: { personal: { cwd: "/home" }, company: { cwd: "/work" } } };
   const first = save(state);
   state.defaults.personal.cwd = "/changed";
   const second = save({ ...state, currentWorkspaceId: "company" });
   await Promise.resolve();
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].defaultsByWorkspace.personal.cwd, "/home");
+  assert.deepEqual(calls[0], { currentWorkspaceId: "personal", workspaceId: "personal", defaults: { cwd: "/home" } });
   const failed = assert.rejects(first, /offline/);
   release();
   await failed;
   await second;
   assert.equal(calls.length, 2);
-  assert.equal(calls[1].currentWorkspaceId, "company");
-  assert.deepEqual(calls[1].defaultsByWorkspace, { personal: { cwd: "/changed" }, company: { cwd: "/work" } });
+  assert.deepEqual(calls[1], { currentWorkspaceId: "company", workspaceId: "company", defaults: { cwd: "/work" } });
+  await save(state, false, "company");
+  assert.deepEqual(calls[2], { currentWorkspaceId: "personal", workspaceId: "company", defaults: { cwd: "/work" } });
 });
 
 test("closing flush sends latest defaults immediately and skips stale queued saves", async () => {
@@ -45,15 +66,14 @@ test("closing flush sends latest defaults immediately and skips stale queued sav
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const save = createWorkspaceSaver(async (body) => { calls.push(body); if (calls.length === 1) await gate; });
-  const initial = { currentWorkspaceId: "personal" as const, defaults: { personal: { cwd: "/first" }, company: {} } };
+  const initial = { currentWorkspaceId: "personal", workspaces: list, defaults: { personal: { cwd: "/first" }, company: {} } as Record<string, { cwd?: string }> };
   const first = save(initial);
   await Promise.resolve();
   const stale = save({ ...initial, defaults: { ...initial.defaults, personal: { cwd: "/stale" } } });
-  const closing = save({ ...initial, currentWorkspaceId: "company", defaults: { personal: { cwd: "/latest" }, company: {} } }, true);
+  const closing = save({ ...initial, defaults: { personal: { cwd: "/latest" }, company: {} } }, true);
   try { assert.equal(calls.length, 2); } finally { release(); }
   await Promise.all([first, stale, closing]);
-  assert.deepEqual(calls.map((call) => call.defaultsByWorkspace.personal.cwd), ["/first", "/latest"]);
-  assert.equal(calls[1].currentWorkspaceId, "company");
+  assert.deepEqual(calls.map((call) => call.defaults.cwd), ["/first", "/latest"]);
 });
 
 test("chat and project search scopes content before matching and retains project membership", () => {

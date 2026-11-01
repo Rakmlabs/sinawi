@@ -314,15 +314,25 @@ body,
   padding: 0;
 }
 
+/* Empty chat: optically centred (a little above the middle) between title bar and composer. */
 .minimal-empty {
   min-height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  padding: 28px 20px;
+  gap: 16px;
+  padding: 28px 20px 8vh;
   text-align: center;
+}
+
+.minimal-empty-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 -6px;
+  color: var(--text-muted);
+  font-size: calc(13px * var(--font-scale));
 }
 
 .minimal-empty h2 {
@@ -344,13 +354,31 @@ body,
 }
 
 .prompt-chips button {
-  min-height: 34px;
-  padding: 7px 11px;
+  min-height: 32px;
+  padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--bg-active);
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-secondary);
 }
+
+.prompt-chips button:hover { background: var(--bg-hover); color: var(--text); border-color: var(--border-strong); }
+.prompt-chips button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Worker-session context strip (replaces the old team row while a worker is open). */
+.chat-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.help-heading { margin: 16px 0 8px; font-size: calc(14px * var(--font-scale)); font-weight: 600; }
+.help-shortcuts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; padding: 0; list-style: none; }
+.help-shortcuts li { padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-secondary); font-size: calc(12px * var(--font-scale)); }
 
 .routing-message {
   width: min(720px, calc(100% - 32px));
@@ -439,8 +467,9 @@ body,
 }
 
 .composer {
+  position: relative;
   min-width: 0;
-  padding: 12px 12px 10px 16px;
+  padding: 12px 10px 8px 16px;
   border: 1px solid var(--border-strong);
   border-radius: 14px;
   background: var(--bg-raised);
@@ -463,34 +492,48 @@ body,
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
+  margin-left: -6px;
 }
+
+.composer-bottom-spacer { flex: 1 1 0; min-width: 0; }
 
 .composer-bottom .directory-button {
   flex: 0 1 auto;
   width: auto;
-  max-width: min(230px, 38%);
-  height: 30px;
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
+  max-width: min(200px, 32%);
+  height: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
+  font-size: calc(13px * var(--font-scale));
 }
+
+.composer-bottom .directory-button:hover:not(:disabled) { background: var(--bg-active); color: var(--text); }
+.composer-bottom .directory-button:disabled { opacity: 1; cursor: default; }
+.composer-bottom .directory-button:disabled > svg:last-child { display: none; }
+.composer-bottom .directory-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .composer-bottom .routing-mode {
   flex: 0 0 auto;
+  margin-left: 4px;
   padding: 2px;
   border-radius: 8px;
+  background: var(--bg-inset);
 }
 
 .composer-bottom .routing-mode button {
-  min-height: 24px;
+  min-height: 26px;
   padding: 0 10px;
   border-radius: 6px;
+  color: var(--text-muted);
   font-size: calc(12px * var(--font-scale));
 }
+
+.composer-bottom .routing-mode button[aria-pressed="true"] { background: var(--bg-raised); box-shadow: var(--shadow-sm); color: var(--text); }
 
 .composer-bottom .session-group-control {
   display: flex;
@@ -508,8 +551,8 @@ body,
 }
 
 .composer-bottom > .icon-button {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border-radius: 8px;
   color: var(--icon);
@@ -521,7 +564,7 @@ body,
 }
 
 .composer-bottom .send-button {
-  margin-left: auto;
+  margin-left: 4px;
 }
 
 .composer-note,

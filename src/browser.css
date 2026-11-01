@@ -168,7 +168,7 @@
 .app-shell main.chat-float .activity-panel { display: none; }
 .chat-float-close { position: absolute; top: 10px; right: 12px; z-index: 5; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: var(--radius-control); color: var(--text); background: var(--bg-strong); cursor: pointer; }
 .chat-float-close:hover { background: var(--bg-strong); }
-.app-shell main.chat-float .chat-actions { margin-right: 38px; }
+.app-shell main.chat-float .chat-context-bar { margin-right: 38px; }
 .chat-bubble { position: fixed; right: 22px; bottom: 22px; z-index: 95; display: grid; place-items: center; width: 56px; height: 56px; border: 0; border-radius: var(--radius-round); color: var(--on-status); cursor: pointer;
   background: var(--info); box-shadow: 0 14px 34px var(--shadow-color); transition: transform .15s; }
 .chat-bubble:hover { transform: scale(1.07); }

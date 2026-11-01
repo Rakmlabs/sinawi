@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MotionConfig } from "framer-motion";
-import { Activity, ArrowDown, ChevronDown, Globe, MessageSquare, PanelRightClose, PanelRightOpen, Square } from "lucide-react";
+import { ArrowDown, ArrowLeft, ChevronDown, Folder, MessageSquare, PanelRightClose, PanelRightOpen, Square } from "lucide-react";
 import { MarkdownSessionContext } from "../markdown-images";
 import { isNetworkFailure, teamAvailabilityWarning } from "../team";
 import { normalizeWorkerConfigs } from "../../server/workers";
@@ -12,7 +12,10 @@ import { submitSession } from "../submit";
 import { WorkerThread } from "../WorkerThread";
 import { workerLogRows } from "../worker-log";
 import { Sidebar } from "../Sidebar";
-import { inWorkspace, workspaceTeamDefaults } from "../workspaces";
+import { inWorkspace, runningByWorkspace, workspaceTeamDefaults } from "../workspaces";
+import { useWorkspaces, WorkspacesContext } from "../workspace-context";
+import { WorkspaceSwitcher } from "../WorkspaceSwitcher";
+import { WorkspaceSettings } from "./WorkspaceSettings";
 import { readPreference, writePreference, savedBoolean } from "../preferences";
 import { TerminalPanel } from "../TerminalPanel";
 import { NotificationsCenter } from "../NotificationsCenter";
@@ -66,11 +69,13 @@ function useMediaQuery(query: string): boolean {
 }
 const folderName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? "";
 
-/** One workspace (personal/company): sessions, chat, browser desktop, terminal and dialogs. */
-export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitchWorkspace }: {
+/** One user-defined workspace: sessions, chat, browser desktop, terminal and dialogs. */
+export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   workspaceId: WorkspaceId; defaults: WorkspaceDefaults;
-  onDefaultsChange: (id: WorkspaceId, defaults: WorkspaceDefaults) => void; onSwitchWorkspace: () => void;
+  onDefaultsChange: (id: WorkspaceId, defaults: WorkspaceDefaults) => void;
 }) {
+  const workspacesApi = useWorkspaces();
+  const defaultWorkspaceId = workspacesApi.workspaces[0]?.id;
   const api = useMemo(() => scopedApi(workspaceId), [workspaceId]);
   const [boot, setBoot] = useState<Bootstrap>({
     agents: [],
@@ -80,9 +85,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     defaultCwd: "",
   });
   const [allSessions, setSessions] = useState<Session[]>([]);
-  const sessions = useMemo(() => inWorkspace(allSessions, workspaceId), [allSessions, workspaceId]);
-  const groups = useMemo(() => inWorkspace(boot.groups, workspaceId), [boot.groups, workspaceId]);
-  const otherRunning = useMemo(() => allSessions.filter((session) => session.workspaceId !== workspaceId && session.status === "running").length, [allSessions, workspaceId]);
+  const sessions = useMemo(() => inWorkspace(allSessions, workspaceId, defaultWorkspaceId), [allSessions, workspaceId, defaultWorkspaceId]);
+  const groups = useMemo(() => inWorkspace(boot.groups, workspaceId, defaultWorkspaceId), [boot.groups, workspaceId, defaultWorkspaceId]);
+  // Live running counts from the pushed session list (every workspace), over the server's snapshot.
+  const liveRunning = useMemo(() => runningByWorkspace(allSessions), [allSessions]);
+  const scopedWorkspaces = useMemo(() => ({ ...workspacesApi, running: allSessions.length ? liveRunning : workspacesApi.running }), [workspacesApi, liveRunning, allSessions.length]);
   const [workerSelection, setWorkerSelection] = useState<{ sessionId: string; taskId: string }>();
   const [selected, setSelected] = useState<string>();
   const [tab, setTab] = useState("workspace");
@@ -504,6 +511,13 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
       if (event.repeat || terminalOwnsKeyboardEvent(event)) return;
       if (sidebarShortcut(event, mac)) { event.preventDefault(); toggleSidebar(); return; }
       const mod = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+        // ⌘K: search chats. Opens the sidebar first when it is folded away.
+        event.preventDefault();
+        if (!sidebarState.current.open) setSidebarOpen(true);
+        requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector<HTMLInputElement>(`#${SIDEBAR_ID} .sidebar-search input`)?.focus()));
+        return;
+      }
       if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
         newSessionRef.current();
@@ -513,7 +527,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleSidebar]);
+  }, [toggleSidebar, setSidebarOpen]);
   // Derived conversation data: recomputed only when the active session changes, not per render.
   const tasksById = useMemo(() => new Map(active ? delegationTasks(active, Date.now()).map((task) => [task.event.id, task]) : []), [active]);
   const conversationEvents = useMemo(() => active ? mainConversation(active) : [], [active]);
@@ -531,8 +545,13 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
   const runningSince = useMemo(() => active?.status === "running" ? [...active.events].reverse().find((event) => event.agent === "user")?.time ?? active.createdAt : undefined, [active]);
   const viewTitles: Record<string, string> = { tools: t("tools.title"), routing: t("side.settings"), sessions: t("sessions.title"), bots: t("bots.title") };
   const teamAgents = boot.agents.length ? availableAgents : allowedAgents;
+  const openWorkspaceSettings = () => {
+    setTab("routing");
+    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("workspace-settings")?.scrollIntoView({ block: "start" })));
+  };
   const sessionAction = (path: string, body?: unknown, method?: string) => safe(async () => { replaceFromServer(await api<Session>(path, body, method)); });
   return (
+    <WorkspacesContext.Provider value={scopedWorkspaces}>
     <WorkspaceAgentPolicy.Provider value={{ workspaceId, allowedAgents }}>
     <MarkdownSessionContext.Provider value={active?.id}>
     <ViewerContext.Provider value={viewerApi}>
@@ -540,10 +559,14 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
       <div style={{ "--terminal-height": `${terminalHeight}px` } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
         <WindowHeader title={tab === "workspace" ? active?.title : viewTitles[tab]} project={tab === "workspace" ? activeProject : undefined} runningSince={tab === "workspace" ? runningSince : undefined}
           sidebar={{ open: sidebarOpen, controls: SIDEBAR_ID, onToggle: toggleSidebar, buttonRef: sidebarToggle }}
-          workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} onTools={() => setTab("tools")} toolsActive={tab === "tools"} onSettings={() => setTab("routing")} settingsActive={tab === "routing"} onTerminal={() => toggleTerminal()} notifications={<NotificationsCenter workspaceId={workspaceId} cwd={shownCwd} connected={connected} onSession={selectConversation} onRefreshAuth={() => { void refreshModels(); }} />} />
+          workspace={<WorkspaceSwitcher onManage={openWorkspaceSettings} />}
+          extra={desktopMode !== "none" && desktopMode !== "max" && tab === "workspace" ? <button type="button" className="header-icon-button" aria-label={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} title={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} aria-pressed={chatCollapsed} onClick={() => setChatCollapsed((value) => !value)}>{chatCollapsed ? <PanelRightOpen size={18} aria-hidden="true" /> : <PanelRightClose size={18} aria-hidden="true" />}</button> : undefined}
+          onBrowser={() => showBrowser(false)}
+          activity={tab === "workspace" ? { open: activityOpen, controls: "activity-panel", onToggle: () => setActivityOpen((value) => !value) } : undefined}
+          onTerminal={() => toggleTerminal()} notifications={<NotificationsCenter workspaceId={workspaceId} cwd={shownCwd} connected={connected} onSession={selectConversation} onRefreshAuth={() => { void refreshModels(); }} />} />
         <TerminalPanel storageKey={workspaceId} cwd={shownCwd} homeCwd={boot.homeCwd} onHeightChange={setTerminalHeight} />
         {sidebarOverlay && sidebarOpen && <div className="sidebar-scrim" aria-hidden="true" onClick={() => setSidebarOpen(false)} />}
-        <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} tab={tab}
+        <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} tab={tab}
           onNavigate={(next) => { setTab(next); closeSidebarOverlay(); }} onSkills={() => { closeSidebarOverlay(); setSkillReturn(undefined); setModal("skills"); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
           onNew={(id) => { newSession(); setGroupId(id ?? ""); closeSidebarOverlay(); }} selectedWorker={selectedWorker?.id} onSelectWorker={(sessionId, taskId) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); }} onSelect={(id) => { selectConversation(id); closeSidebarOverlay(); }}
           onHelp={() => { closeSidebarOverlay(); setModal("help"); }} onUsage={() => { closeSidebarOverlay(); setModal("usage"); }}
@@ -561,13 +584,12 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
             setSessions((old) => old.map((session) => session.groupId === id ? { ...session, groupId: undefined } : session));
             if (groupId === id) setGroupId("");
           })}
-          onMoveSession={(id) => safe(async () => {
-            const updated = await api<Session>(`/sessions/${id}/workspace`, { workspaceId: workspaceId === "personal" ? "company" : "personal" }, "PATCH");
+          onMoveSession={(id, target) => safe(async () => {
+            const updated = await api<Session>(`/sessions/${id}/workspace`, { workspaceId: target }, "PATCH");
             setSessions((old) => old.map((session) => session.id === id ? updated : session));
             if (selected === id) { newSession(); setGroupId(""); }
           })}
-          onMoveGroup={(id) => safe(async () => {
-            const target = workspaceId === "personal" ? "company" : "personal";
+          onMoveGroup={(id, target) => safe(async () => {
             await api(`/groups/${id}/workspace`, { workspaceId: target }, "PATCH");
             setBoot((old) => ({ ...old, groups: old.groups.map((group) => group.id === id ? { ...group, workspaceId: target } : group) }));
             setSessions((old) => old.map((session) => session.groupId === id ? { ...session, workspaceId: target } : session));
@@ -606,6 +628,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
         </button>}
         <main className={`${tab === "workspace" ? "chat-view" : "management-view"}${desktopMode === "max" ? (chatWidgetOpen ? " chat-float" : " chat-hidden") : ""}`}>
           {desktopMode === "max" && chatWidgetOpen && <button type="button" className="chat-float-close" onClick={() => setChatWidgetOpen(false)} aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")}><ChevronDown size={16} /></button>}
+          {tab === "routing" && <WorkspaceSettings currentId={workspaceId} busy={busy} cwd={cwd} onPickFolder={() => setModal("directory")} />}
           {tab === "routing" && <section className="panel routing-settings"><AppearanceSettings /></section>}
           {tab === "routing" && <AllowedAgentsSettings workspaceId={workspaceId} allowedAgents={allowedAgents} busy={busy}
             quotaFallback={quotaFallback} setQuotaFallback={setQuotaFallback} quotaThreshold={quotaThreshold} setQuotaThreshold={setQuotaThreshold}
@@ -641,27 +664,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
               <div className={`workspace-grid ${activityOpen ? "activity-open" : ""}`}>
                 <section className={`conversation${dragging ? " drop-target" : ""}`} aria-label={selectedWorker ? t("ws.workerSession") : t("ws.conversation")} {...dropHandlers}>
                   {dragging && <div className="drop-overlay"><strong>{t("ws.dropHere")}</strong><span>{t("ws.dropKinds")}</span></div>}
-                  <TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
-                    manual={{ agent, model, reasoningEffort, workers, workerConfigs }} availableAgents={teamAgents}
-                    quotaFallback={quotaFallback} quotaThreshold={quotaThreshold} routingSettings={routingSettings} busy={busy}
-                    actions={<div className="chat-actions" role="group" aria-label={t("ws.chatActions")}>
-                      {selectedWorker && <span className="chat-actions-context" title={selectedWorker.label}>{t("ws.workerSession")} · {selectedWorker.label}</span>}
-                      {selectedWorker && active && <button type="button" className="chat-action-text" onClick={() => selectConversation(active.id)}>{t("ws.backToConversation")}</button>}
-                      {active?.status === "running" && <button type="button" className="chat-action-text" disabled={busy} onClick={() => stopSession(active.id)}><Square size={11} fill="currentColor" aria-hidden="true" />{t("ws.stop")}</button>}
-                      <button type="button" className="chat-action-icon" aria-label={t("ws.browser")} title={t("ws.browserTitle")} onClick={() => showBrowser(false)}><Globe size={18} aria-hidden="true" /></button>
-                      {desktopMode !== "max" && <button type="button" className="chat-action-icon" aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")} onClick={() => setChatCollapsed(true)}><PanelRightClose size={18} aria-hidden="true" /></button>}
-                      <button type="button" className="chat-action-icon" aria-label={t("activity.label")} title={t("activity.label")} aria-expanded={activityOpen} aria-controls="activity-panel" onClick={() => setActivityOpen((value) => !value)}><Activity size={18} aria-hidden="true" /></button>
-                    </div>}
-                    onSave={(next, crew) => safe(async () => {
-                      if (active) {
-                        replaceFromServer(await api<Session>(`/sessions/${active.id}/team`, { ...next, workers: crew.map((worker) => worker.agent), workerConfigs: crew }, "PATCH"));
-                      } else if (pendingRecommendation) {
-                        setRecommendation({ key: routingKey, value: { ...pendingRecommendation, orchestrator: next, workers: crew } });
-                      } else {
-                        setAgent(next.agent); setModel(next.model ?? ""); setReasoningEffort(next.reasoningEffort ?? "");
-                        setWorkers(crew.map((worker) => worker.agent)); setWorkerConfigs(crew); setMode("manual");
-                      }
-                    })} />
+                  {selectedWorker && active && <div className="chat-context-bar" role="group" aria-label={t("ws.chatActions")}>
+                    <button type="button" className="chat-action-text" onClick={() => selectConversation(active.id)}><ArrowLeft size={14} aria-hidden="true" />{t("ws.backToConversation")}</button>
+                    <span className="chat-actions-context" title={selectedWorker.label}>{t("ws.workerSession")} · {selectedWorker.label}</span>
+                    {active.status === "running" && <button type="button" className="chat-action-text" disabled={busy} onClick={() => stopSession(active.id)}><Square size={11} fill="currentColor" aria-hidden="true" />{t("ws.stop")}</button>}
+                  </div>}
                   {active && active.status !== "running" && <QuotaReturnBanner active={active} threshold={quotaThreshold} allowedAgents={allowedAgents} busy={busy}
                     onReturn={(eventId) => void sessionAction(`/sessions/${active.id}/quota/return`, { eventId })} />}
                   <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} onScroll={onChatScroll}>
@@ -671,6 +678,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
                         <RecommendationCard value={pendingRecommendation} settings={routingSettings} skills={boot.skills} editing={editingRecommendation} busy={busy} runDisabled={!canSend || Boolean(unavailableWarning)} availableAgents={teamAgents} onEdit={() => setEditingRecommendation((old) => !old)} onChange={(value) => setRecommendation({ key: routingKey, value })} onRun={() => void send(true)} />
                         <div ref={bottom} />
                       </div> : <div className="minimal-empty">
+                        {activeProject && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
                         <h2>{t("ws.emptyTitle")}</h2>
                         <div className="prompt-chips">
                           {promptChips().map(([label, text]) => <button key={label} onClick={() => { setPrompt(text); composerInput.current?.focus(); }}>{label}</button>)}
@@ -690,7 +698,21 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
                     skills={skills} messageSkills={messageSkills} setMessageSkills={setMessageSkills} availableSkills={boot.skills}
                     active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning}
                     mode={mode} setMode={setMode} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
-                    send={send} stopActive={stopActive} openModal={setModal} openViewer={openViewer} />}
+                    send={send} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
+                    teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
+                      manual={{ agent, model, reasoningEffort, workers, workerConfigs }} availableAgents={teamAgents}
+                      quotaFallback={quotaFallback} quotaThreshold={quotaThreshold} routingSettings={routingSettings} busy={busy}
+                      onAdvanced={() => setModal("settings")}
+                      onSave={(next, crew) => safe(async () => {
+                        if (active) {
+                          replaceFromServer(await api<Session>(`/sessions/${active.id}/team`, { ...next, workers: crew.map((worker) => worker.agent), workerConfigs: crew }, "PATCH"));
+                        } else if (pendingRecommendation) {
+                          setRecommendation({ key: routingKey, value: { ...pendingRecommendation, orchestrator: next, workers: crew } });
+                        } else {
+                          setAgent(next.agent); setModel(next.model ?? ""); setReasoningEffort(next.reasoningEffort ?? "");
+                          setWorkers(crew.map((worker) => worker.agent)); setWorkerConfigs(crew); setMode("manual");
+                        }
+                      })} />} />}
                 </section>
                 {activityOpen && <ActivityPanel active={active} connected={connected} rows={activityEvents} onClose={() => setActivityOpen(false)} />}
               </div>
@@ -759,5 +781,6 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     </ViewerContext.Provider>
     </MarkdownSessionContext.Provider>
     </WorkspaceAgentPolicy.Provider>
+    </WorkspacesContext.Provider>
   );
 }

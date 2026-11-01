@@ -3,6 +3,8 @@ import { LockKeyhole, Search, SlidersHorizontal, Wrench } from "lucide-react";
 import type { WorkspaceId } from "../server/types";
 import { AgentMark } from "./AgentMark";
 import { openTerminal } from "./terminal-events";
+import { useWorkspaces } from "./workspace-context";
+import { workspaceName } from "./workspaces";
 import { t, translatedMap } from "./i18n";
 
 export type McpTool = {
@@ -46,8 +48,9 @@ const statusLabels: Record<string, string> = translatedMap({
   "app-level": "tools.appLevel",
 });
 
+/** The tools API takes any workspace id (it still accepts the legacy "work" alias). */
 function workspaceParam(workspaceId: WorkspaceId) {
-  return workspaceId === "company" ? "work" : "personal";
+  return workspaceId;
 }
 
 export function toolsListPath(workspaceId: WorkspaceId, cwd: string) {
@@ -119,6 +122,7 @@ export function ToolsPanel({ workspaceId, cwd, initialState, initialTab = "mcp",
   request?: (path: string, init?: RequestInit) => Promise<ToolsState>;
   onChange?: (state: ToolsState) => void;
 }) {
+  const { workspaces } = useWorkspaces();
   const [tab, setTab] = useState<ToolTab>(initialTab);
   const [query, setQuery] = useState("");
   const [tools, setTools] = useState<ToolsState | undefined>(initialState);
@@ -186,7 +190,7 @@ export function ToolsPanel({ workspaceId, cwd, initialState, initialTab = "mcp",
   const visible = tab === "mcp" ? mcpGroups.reduce((sum, [, rows]) => sum + rows.length, 0) : skillGroups.reduce((sum, [, rows]) => sum + rows.length, 0);
   return <section className="tools-page" aria-labelledby="tools-heading">
     <header className="tools-heading">
-      <div><Wrench size={24} aria-hidden="true" /><div><h1 id="tools-heading">{t("tools.title")}</h1><p>{t("tools.intro", { space: workspaceId === "company" ? t("workspace.company") : t("workspace.personal") })}</p></div></div>
+      <div><Wrench size={24} aria-hidden="true" /><div><h1 id="tools-heading">{t("tools.title")}</h1><p>{t("tools.intro", { space: workspaceName(workspaces, workspaceId) })}</p></div></div>
       <span className="tools-count" aria-label={t("tools.total", { n: total })}>{total}</span>
     </header>
     <div className="panel tools-surface">

@@ -5,9 +5,10 @@ import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
 import { delegationWorkers } from "./conversation";
 import type { Group, Session, SessionStatus, WorkspaceId } from "../server/types";
-import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, Search, Settings2, WandSparkles, Wrench, X } from "lucide-react";
-import { workspaceTargetLabel } from "./WorkspacePill";
-import { searchWorkspace } from "./workspaces";
+import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, RotateCw, Search, Settings2, SquarePen, WandSparkles, Wrench, X } from "lucide-react";
+import { searchWorkspace, workspaceName } from "./workspaces";
+import { useWorkspaces } from "./workspace-context";
+import { reloadApp } from "./reload";
 import { isMacPlatform } from "./sidebar-rail";
 import { Beat } from "./Beat";
 import { t, translatedMap } from "./i18n";
@@ -20,8 +21,8 @@ type SidebarProps = {
   sessions: Session[]; groups: Group[]; busy: boolean; selected?: string; onNew: (groupId?: string) => void; onSelect: (id: string) => void; onHelp: () => void;
   onCreateGroup: (name: string) => Promise<boolean>; onRenameGroup: (id: string, name: string) => Promise<boolean>; onDeleteGroup: (id: string) => Promise<boolean>;
   onRenameSession: (id: string, title: string) => Promise<boolean>; onDeleteSession: (id: string) => Promise<boolean>; onAssign: (id: string, groupId: string | null) => Promise<boolean>;
-  workspaceId?: WorkspaceId; onSwitchWorkspace?: () => void; otherRunning?: number;
-  onMoveSession?: (id: string) => Promise<boolean>; onMoveGroup?: (id: string) => Promise<boolean>;
+  workspaceId?: WorkspaceId;
+  onMoveSession?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>; onMoveGroup?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>;
   onUsage?: () => void;
   onDeleteWorker?: (sessionId: string, workerId: string) => Promise<boolean>;
 };
@@ -44,6 +45,8 @@ export function workerTreeReducer(state: WorkerTreeState, action: WorkerTreeActi
 
 export function Sidebar(props: SidebarProps) {
   const { closed: railClosed, tab, onNavigate, onSkills, connected, sessions, groups, busy, selected, onNew, onSelect, onHelp } = props;
+  const { workspaces } = useWorkspaces();
+  const [footerMenu, setFooterMenu] = useState<{ x: number; y: number }>();
   const [workerTree, dispatchWorkerTree] = useReducer(workerTreeReducer, { expanded: new Set(selected ? [selected] : []) });
   const [closed, setClosed] = useState<Set<string>>(new Set());
   const activeSession = sessions.find((session) => session.id === selected);
@@ -68,8 +71,9 @@ export function Sidebar(props: SidebarProps) {
   const [deleting, setDeleting] = useState<{ kind: "group" | "session"; id: string; name: string }>();
   const [dropTarget, setDropTarget] = useState<string>();
   const [query, setQuery] = useState("");
-  const scoped = searchWorkspace(sessions, groups, props.workspaceId ?? "personal", "");
-  const results = searchWorkspace(sessions, groups, props.workspaceId ?? "personal", query);
+  // Sessions and groups arrive already scoped to the current workspace.
+  const scoped = { sessions, groups };
+  const results = searchWorkspace(sessions, groups, undefined, query);
   const visibleSessions = results.sessions;
   const visibleGroups = results.groups;
   const searching = Boolean(query.trim());
@@ -199,10 +203,24 @@ export function Sidebar(props: SidebarProps) {
   </div>;
   };
   const ungrouped = visibleSessions.filter((session) => !visibleGroups.some((group) => group.id === session.groupId));
-  const newChatKey = isMacPlatform() ? "⌘N" : "Ctrl+N";
+  const mac = isMacPlatform();
+  const newChatKey = mac ? "⌘N" : "Ctrl+N";
+  const searchKey = mac ? "⌘K" : "Ctrl+K";
+  const footerItems: MenuItem[] = [
+    { kind: "action", label: t("side.settings"), icon: <Settings2 size={15} />, onSelect: () => onNavigate("routing") },
+    { kind: "action", label: t("header.tools"), icon: <Wrench size={15} />, meta: <kbd>{mac ? "⌘⇧T" : "F3"}</kbd>, onSelect: () => onNavigate("tools") },
+    { kind: "action", label: t("side.bots"), icon: <Bot size={15} />, onSelect: () => onNavigate("bots") },
+    { kind: "action", label: t("side.skills"), icon: <WandSparkles size={15} />, onSelect: onSkills },
+    ...(props.onUsage ? [{ kind: "action" as const, label: t("side.usage"), icon: <BarChart3 size={15} />, onSelect: props.onUsage }] : []),
+    { kind: "separator" },
+    { kind: "action", label: t("side.help"), icon: <CircleHelp size={15} />, onSelect: onHelp },
+    { kind: "action", label: t("common.reload"), icon: <RotateCw size={15} />, meta: <kbd>{mac ? "⌘R" : "Ctrl+R"}</kbd>, onSelect: () => reloadApp() },
+  ];
+  const managementTab = ["routing", "tools", "bots"].includes(tab);
   return <aside id={props.id} className="rail" aria-label={t("side.label")} inert={railClosed || undefined}>
-    <button className="sidebar-new" onClick={() => onNew()} aria-label={t("common.newChat")} title={`${t("common.newChat")} (${newChatKey})`}><Plus size={18} aria-hidden="true" /><span>{t("common.newChat")}</span><kbd aria-hidden="true">{newChatKey}</kbd></button>
-    <label className="sidebar-search"><Search size={18} aria-hidden="true" /><input type="search" aria-label={t("side.search")} placeholder={t("side.search")} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+    <button className="sidebar-new" onClick={() => onNew()} aria-label={t("common.newChat")} title={`${t("common.newChat")} (${newChatKey})`}><SquarePen size={16} aria-hidden="true" /><span>{t("common.newChat")}</span><kbd aria-hidden="true">{newChatKey}</kbd></button>
+    <label className="sidebar-search" title={`${t("side.search")} (${searchKey})`}><Search size={16} aria-hidden="true" /><input type="search" aria-label={t("side.search")} placeholder={t("side.searchShort")} value={query}
+      onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && query) { event.stopPropagation(); setQuery(""); } }} />{!query && <kbd aria-hidden="true">{searchKey}</kbd>}</label>
     <nav id="sidebar-links" className="rail-main" aria-label={t("side.chatList")}>
       {searching && !visibleGroups.length && !visibleSessions.length && <p className="sidebar-search-empty" role="status">{t("side.noResults")}</p>}
       <section className="sidebar-projects" aria-label={t("side.projects")}>
@@ -217,6 +235,7 @@ export function Sidebar(props: SidebarProps) {
               <button className="sidebar-folder" aria-expanded={open} aria-controls={`project-${group.id}`} title={group.name} onClick={() => setClosed((old) => { const next = new Set(old); if (open) next.add(group.id); else next.delete(group.id); return next; })}>
                 {open ? <FolderOpen size={18} /> : <Folder size={18} />}<span className="sidebar-session-title">{group.name}</span><small>{chats.length}</small>
               </button>
+              <button className="sidebar-row-action" aria-label={t("side.newChatIn", { name: group.name })} title={t("side.newChatIn", { name: group.name })} disabled={busy} onClick={() => { onNew(group.id); expand(group.id); }}><Plus size={15} /></button>
               <button className="sidebar-row-action" aria-label={t("side.projectMenu", { name: group.name })} aria-haspopup="menu" aria-expanded={menu === group.id} onClick={(event) => menu === group.id ? setMenu(undefined) : openMenu("group", group.id, event, true)}><MoreHorizontal size={15} /></button>
             </div>}
             {confirmDelete("group", group.id)}
@@ -226,14 +245,28 @@ export function Sidebar(props: SidebarProps) {
       </section>
       <section className={`sidebar-recents${dropClass(UNGROUPED)}`} aria-label={t("side.recentChats")} data-drop-group={UNGROUPED}><div className="sidebar-section-heading"><h2>{t("side.recent")}</h2>{drag && <small className="drop-hint">{t("side.dropUnsorted")}</small>}</div>{dropTarget === UNGROUPED && drag && <div className="drop-slot" aria-hidden="true">{t("side.moveUnsorted", { title: drag.title })}</div>}{ungrouped.length ? ungrouped.map(sessionRow) : !searching ? <p className="sidebar-empty">{t("side.noChats")}</p> : null}</section>
     </nav>
-    <div className="sidebar-tools" role="group" aria-label={t("side.tools")}>
-      {props.onUsage && <button aria-label={t("side.usage")} title={t("side.usage")} onClick={props.onUsage}><BarChart3 size={18} /></button>}
-      {([[Wrench, "tools", t("header.tools")], [Settings2, "routing", t("side.settings")], [Bot, "bots", t("side.bots")], [WandSparkles, "skills", t("side.skills")], [CircleHelp, "help", t("side.help")]] as const).map(([Icon, key, label]) => <button key={key} aria-label={label} title={key === "tools" ? t("header.toolsTitle") : label} className={tab === key ? "active" : ""} aria-current={tab === key ? "page" : undefined} onClick={() => key === "skills" ? onSkills() : key === "help" ? onHelp() : onNavigate(key)}><Icon size={18} /></button>)}
+    <div className="sidebar-footer">
+      <button className={`sidebar-settings${managementTab ? " active" : ""}`} aria-haspopup="menu" aria-expanded={Boolean(footerMenu)} aria-current={managementTab ? "page" : undefined}
+        onClick={(event) => { if (footerMenu) { setFooterMenu(undefined); return; } const box = event.currentTarget.getBoundingClientRect(); setFooterMenu({ x: box.left, y: box.top - 6 }); }}>
+        <Settings2 size={16} aria-hidden="true" /><span>{t("side.settings")}</span>
+      </button>
+      <span className="rail-connection" role="status" title={connected && typeof window !== "undefined" && window.location?.hostname ? `${t("side.connected")} · ${window.location.hostname}` : undefined}>
+        <span className={`rail-status ${connected ? "online" : "offline"}`} aria-hidden="true" /><span>{connected ? t("side.connected") : t("side.reconnecting")}</span>
+      </span>
     </div>
-    <div className="rail-connection" role="status"><span className={`rail-status ${connected ? "online" : "offline"}`} aria-hidden="true" /><span>{connected ? t("side.connected") : t("side.reconnecting")}</span>{connected && typeof window !== "undefined" && window.location?.hostname && <span className="rail-host">· {window.location.hostname}</span>}</div>
+    {footerMenu && <ContextMenu x={footerMenu.x} y={footerMenu.y} placement="above" className="sidebar-footer-menu" label={t("side.tools")} items={footerItems} onClose={() => setFooterMenu(undefined)} />}
     {menuState && <ContextMenu x={menuState.x} y={menuState.y} label={t("side.chatMenu")} onClose={() => setMenuState(undefined)} items={menuItems(menuState)} />}
     {drag && createPortal(<div className="sidebar-drag-ghost" style={{ left: drag.x + 14, top: drag.y + 10 }} aria-hidden="true"><AgentMark agent={drag.agent} size="small" /><span>{drag.title}</span></div>, document.body)}
   </aside>;
+
+  /** "Move to workspace": one action for a single other workspace, otherwise a submenu listing them all. */
+  function moveItems(move: (target: WorkspaceId) => void, enabled: boolean): MenuItem[] {
+    const others = workspaces.filter((workspace) => workspace.id !== props.workspaceId);
+    if (!enabled || !props.workspaceId || !others.length) return [];
+    if (others.length === 1) return [{ kind: "action", label: t("workspace.moveToNamed", { name: workspaceName(workspaces, others[0].id) }), icon: <ArrowLeftRight size={15} />, disabled: busy, onSelect: () => move(others[0].id) }];
+    return [{ kind: "submenu", plain: true, label: t("workspace.moveToWorkspace"), icon: <ArrowLeftRight size={15} />, disabled: busy,
+      items: others.map((workspace) => ({ id: workspace.id, label: workspaceName(workspaces, workspace.id), depth: 0, checked: false })), onPick: (id) => { if (id) move(id); } }];
+  }
 
   function menuItems(state: MenuState): MenuItem[] {
     if (state.kind === "worker") {
@@ -252,7 +285,7 @@ export function Sidebar(props: SidebarProps) {
       return [
         { kind: "action", label: t("common.newChat"), icon: <Plus size={15} />, onSelect: () => { onNew(group.id); expand(group.id); } },
         { kind: "action", label: t("side.rename"), icon: <Pencil size={15} />, disabled: busy, onSelect: () => setEditor({ kind: "group", id: group.id, value: group.name }) },
-        ...(props.workspaceId && props.onMoveGroup ? [{ kind: "action" as const, label: workspaceTargetLabel(props.workspaceId), icon: <ArrowLeftRight size={15} />, disabled: busy, onSelect: () => void props.onMoveGroup!(group.id) }] : []),
+        ...moveItems((target) => void props.onMoveGroup?.(group.id, target), Boolean(props.onMoveGroup)),
         { kind: "separator" },
         { kind: "action", label: t("side.deleteProject"), icon: <Trash2 size={15} />, danger: true, disabled: busy, onSelect: () => setDeleting({ kind: "group", id: group.id, name: group.name }) },
       ];
@@ -262,7 +295,7 @@ export function Sidebar(props: SidebarProps) {
     return [
       { kind: "action", label: t("side.rename"), icon: <Pencil size={15} />, disabled: busy, onSelect: () => setEditor({ kind: "session", id: session.id, value: session.title }) },
       { kind: "submenu", label: t("side.moveToGroup"), icon: <FolderInput size={15} />, disabled: busy, items: moveTree(session), onPick: (id) => void props.onAssign(session.id, id).then((ok) => { if (ok && id) expand(id); }) },
-      ...(props.workspaceId && props.onMoveSession ? [{ kind: "action" as const, label: workspaceTargetLabel(props.workspaceId), icon: <ArrowLeftRight size={15} />, disabled: busy, onSelect: () => void props.onMoveSession!(session.id) }] : []),
+      ...moveItems((target) => void props.onMoveSession?.(session.id, target), Boolean(props.onMoveSession)),
       { kind: "separator" },
       { kind: "action", label: t("side.deleteChat"), icon: <Trash2 size={15} />, danger: true, disabled: busy || session.status === "running", title: session.status === "running" ? t("side.stopFirst") : undefined, onSelect: () => setDeleting({ kind: "session", id: session.id, name: session.title }) },
     ];

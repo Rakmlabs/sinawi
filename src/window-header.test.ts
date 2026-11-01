@@ -37,8 +37,8 @@ test("title bar: traffic-light gap only in Tauri, sidebar toggle first, breadcru
     assert.match(toggle, /aria-expanded="true"/);
     assert.match(toggle, /aria-controls="app-sidebar"/);
     assert.match(render({ sidebar: { ...sidebar, open: false } }), /aria-label="사이드바 펼치기"[^>]*aria-expanded="false"/);
-    const reload = first.match(/<button\b[^>]*aria-label="새로고침"[^>]*>/)?.[0];
-    assert.ok(reload, "desktop header includes a reload button");
+    // Reload lives on ⌘R and in the sidebar settings menu, not in the title bar.
+    assert.doesNotMatch(first, /aria-label="새로고침"/);
     // Interactive controls stay clickable; everything else drags the window. Bare drag regions only
     // respond to direct hits, so every non-interactive element needs one.
     const buttons = first.match(/<button\b[^>]*>/g) ?? [];
@@ -52,14 +52,16 @@ test("title bar: traffic-light gap only in Tauri, sidebar toggle first, breadcru
     const renamed = render({ title: "새 제목 <script>" });
     assert.match(renamed, /새 제목 &lt;script&gt;/);
     assert.doesNotMatch(renamed, /코드 검토/);
-    const workspace = render({ title: "코드 검토", workspaceId: "personal", onSwitchWorkspace: () => {}, otherRunning: 1 });
-    assert.match(workspace, /aria-label="개인 작업 공간, 회사로 전환"/);
-    assert.match(workspace, /회사에서 진행 중인 작업 1개/);
-    const tools = render({ title: "코드 검토", onTools: () => {}, toolsActive: true, onSettings: () => {} });
-    assert.match(tools, /aria-label="도구 관리"/);
-    assert.match(tools, /aria-current="page"/);
-    assert.match(tools, /도구 관리 \(⌘⇧T · F3\)/);
-    assert.match(tools, /aria-label="설정"/);
+    // Right side: workspace slot, terminal, browser, notifications, activity — no tools/settings duplicates.
+    const right = render({ title: "코드 검토", sidebar, workspace: createElement("span", { className: "ws-slot" }), onTerminal: () => {}, onBrowser: () => {},
+      activity: { open: true, controls: "activity-panel", onToggle: () => {} } });
+    assert.match(right, /ws-slot/);
+    assert.match(right, /aria-label="통합 터미널"/);
+    assert.match(right, /aria-label="브라우저"|aria-label="[^"]*브라우저[^"]*"/);
+    assert.match(right, /aria-label="실시간 활동"[^>]*aria-expanded="true" aria-controls="activity-panel"/);
+    assert.doesNotMatch(right, /aria-label="도구 관리"|aria-label="설정"/);
+    const icons = right.match(/class="header-icon-button[^"]*"/g) ?? [];
+    assert.equal(icons.length, 4, "sidebar toggle + terminal + browser + activity");
   } finally {
     if (previous) Object.defineProperty(globalThis, "window", previous);
     else Reflect.deleteProperty(globalThis, "window");
@@ -75,7 +77,12 @@ test("desktop capability permits dragging and maximizing while retaining the ove
   const config = read("../src-tauri/tauri.conf.json");
   assert.equal(config.app.windows[0].titleBarStyle, "Overlay");
   assert.equal(config.app.windows[0].hiddenTitle, true);
-  // Traffic lights centred in the 48px title bar, inside the 78px spacer the header reserves.
-  assert.deepEqual(config.app.windows[0].trafficLightPosition, { x: 16, y: 17 });
+  // tao insets the lights by growing the title-bar container to (button height + y) with the buttons
+  // keeping their bottom offset, so y = 25 centres them on y = 24 of the 48px header (the old y = 17
+  // measured 8px high). Lights span x 16 → ~70; the 74px spacer + 8px gap starts the toggle at 82.
+  assert.deepEqual(config.app.windows[0].trafficLightPosition, { x: 16, y: 25 });
+  const css = readFileSync(new URL("./window-header.css", import.meta.url), "utf8");
+  assert.match(css, /\.window-header-traffic \{\s*flex: 0 0 74px;/);
+  assert.match(readFileSync(new URL("./chat-layout.css", import.meta.url), "utf8"), /--window-header-height: 48px;/);
   assert.equal(config.app.windows[0].backgroundThrottling, "disabled");
 });

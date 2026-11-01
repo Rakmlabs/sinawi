@@ -169,7 +169,7 @@ export function AppModal(props: AppModalProps) {
             )}
             <label>
               {t("modal.agent")}
-              <GlassSelect label={t("modal.agent")} value={agent} disabled={busy} onChange={(value) => props.chooseAgent(value as AgentId)} options={(["codex", "claude", "grok"] as AgentId[]).map((id) => ({ value: id, label: names[id], icon: <><AgentMark agent={id} size="small" /><RemainingChip agent={id} /></>, disabled: !allowedAgents.includes(id), title: workspaceId === "company" && id === "codex" ? t("allowed.codexOffAtWork") : undefined }))} />
+              <GlassSelect label={t("modal.agent")} value={agent} disabled={busy} onChange={(value) => props.chooseAgent(value as AgentId)} options={(["codex", "claude", "grok"] as AgentId[]).map((id) => ({ value: id, label: names[id], icon: <><AgentMark agent={id} size="small" /><RemainingChip agent={id} /></>, disabled: !allowedAgents.includes(id) }))} />
             </label>
             <ModelChoice disabled={busy} label={t("modal.sessionModel")} value={{ agent, model, reasoningEffort }} settings={routingSettings} chooseAgent={false} onChange={(next) => props.onModelChange(next.model ?? "", next.reasoningEffort ?? "")} />
             {modal === "settings" && <label className="auto-switch-setting">
@@ -213,6 +213,10 @@ export function AppModal(props: AppModalProps) {
           <>
             <button className="button primary onboarding-reopen" onClick={() => reopenOnboarding(close)}>{t("modal.reopenOnboarding")}</button>
             <p>{t("modal.helpBody")}</p>
+            <h3 className="help-heading">{t("modal.shortcuts")}</h3>
+            <ul className="help-shortcuts">
+              {[`⌘N · ${t("common.newChat")}`, `⌘K · ${t("side.search")}`, `⌘R · ${t("common.reload")}`, ...t("comp.hints").split(" · ")].map((hint) => <li key={hint}>{hint}</li>)}
+            </ul>
             <div className="cli-status-list">
               {props.agents.map((a) => (
                 <div key={a.id}>

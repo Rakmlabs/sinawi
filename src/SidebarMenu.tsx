@@ -4,8 +4,9 @@ import { Check, ChevronRight, Folder, Inbox } from "lucide-react";
 import { t } from "./i18n";
 
 export type MenuItem =
-  | { kind: "action"; label: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; title?: string; onSelect: () => void }
-  | { kind: "submenu"; label: string; icon?: ReactNode; disabled?: boolean; items: TreeOption[]; onPick: (id: string | null) => void }
+  | { kind: "action"; label: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; title?: string; onSelect: () => void;
+      /** Trailing content (count, shortcut). */ meta?: ReactNode; /** Set to render a radio item. */ checked?: boolean }
+  | { kind: "submenu"; label: string; icon?: ReactNode; disabled?: boolean; items: TreeOption[]; onPick: (id: string | null) => void; /** Omit the "no projects" note. */ plain?: boolean }
   | { kind: "separator" };
 export type TreeOption = { id: string | null; label: string; depth: number; checked: boolean; folder?: boolean };
 
@@ -30,7 +31,8 @@ export function clampMenu(x: number, y: number, width: number, height: number, v
   return { left: Math.max(margin, Math.min(x, viewportW - width - margin)), top: Math.max(margin, Math.min(y, viewportH - height - margin)) };
 }
 
-export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: number; label: string; items: MenuItem[]; onClose: () => void }) {
+/** Fixed-position menu at (x, y); `placement: "above"` makes y the menu's bottom edge instead of its top. */
+export function ContextMenu({ x, y, label, items, onClose, placement = "below", className = "" }: { x: number; y: number; label: string; items: MenuItem[]; onClose: () => void; placement?: "below" | "above"; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const subRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
@@ -38,9 +40,9 @@ export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: num
   const [subPos, setSubPos] = useState<{ left: number; top: number }>();
   useLayoutEffect(() => {
     const box = ref.current?.getBoundingClientRect();
-    if (box) setPos(clampMenu(x, y, box.width, box.height, window.innerWidth, window.innerHeight));
-    ref.current?.querySelector<HTMLElement>("[role=menuitem]:not([disabled])")?.focus();
-  }, [x, y]);
+    if (box) setPos(clampMenu(x, placement === "above" ? y - box.height : y, box.width, box.height, window.innerWidth, window.innerHeight));
+    (ref.current?.querySelector<HTMLElement>("[aria-checked=true]:not([disabled])") ?? ref.current?.querySelector<HTMLElement>("[role=menuitem]:not([disabled]),[role=menuitemradio]:not([disabled])"))?.focus();
+  }, [x, y, placement]);
   useLayoutEffect(() => {
     if (sub === undefined || !ref.current) { setSubPos(undefined); return; }
     const anchor = ref.current.querySelectorAll<HTMLElement>("[data-index]")[sub]?.getBoundingClientRect();
@@ -73,15 +75,19 @@ export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: num
   const openSub = (index: number) => { setSub(index); requestAnimationFrame(() => requestAnimationFrame(() => subRef.current?.querySelector<HTMLElement>("[aria-checked=true],[role=menuitemradio]")?.focus())); };
   const submenu = sub !== undefined ? items[sub] : undefined;
   return createPortal(<>
-    <div ref={ref} className="ctx-menu" role="menu" aria-label={label} style={pos} onContextMenu={(event) => event.preventDefault()}
+    <div ref={ref} className={`ctx-menu${className ? ` ${className}` : ""}`} role="menu" aria-label={label} style={pos} onContextMenu={(event) => event.preventDefault()}
       onKeyDown={(event) => navigate(ref.current, event, () => { const i = Number((document.activeElement as HTMLElement)?.dataset.index); if (items[i]?.kind === "submenu") openSub(i); })}>
       {items.map((item, index) => item.kind === "separator" ? <div key={index} className="ctx-separator" role="separator" /> :
-        <button key={index} type="button" role="menuitem" data-index={index} disabled={item.disabled} title={item.kind === "action" ? item.title : undefined}
-          className={`ctx-item${item.kind === "action" && item.danger ? " danger" : ""}${sub === index ? " open" : ""}`}
+        <button key={index} type="button" role={item.kind === "action" && item.checked !== undefined ? "menuitemradio" : "menuitem"} aria-checked={item.kind === "action" ? item.checked : undefined}
+          data-index={index} disabled={item.disabled} title={item.kind === "action" ? item.title : undefined}
+          className={`ctx-item${item.kind === "action" && item.danger ? " danger" : ""}${item.kind === "action" && item.checked ? " checked" : ""}${sub === index ? " open" : ""}`}
           aria-haspopup={item.kind === "submenu" ? "menu" : undefined} aria-expanded={item.kind === "submenu" ? sub === index : undefined}
           onPointerEnter={() => setSub(item.kind === "submenu" ? index : undefined)}
           onClick={() => { if (item.kind === "submenu") openSub(index); else { item.onSelect(); onClose(); } }}>
-          <span className="ctx-icon">{item.icon}</span><span className="ctx-label">{item.label}</span>{item.kind === "submenu" && <ChevronRight size={14} className="ctx-chevron" />}
+          <span className="ctx-icon">{item.icon}</span><span className="ctx-label">{item.label}</span>
+          {item.kind === "action" && item.meta != null && <span className="ctx-meta">{item.meta}</span>}
+          {item.kind === "action" && item.checked !== undefined && <span className="ctx-check">{item.checked && <Check size={15} />}</span>}
+          {item.kind === "submenu" && <ChevronRight size={14} className="ctx-chevron" />}
         </button>)}
     </div>
     {submenu?.kind === "submenu" && <div ref={subRef} className="ctx-menu ctx-submenu" role="menu" aria-label={submenu.label} style={subPos ?? { left: -9999, top: -9999 }}
@@ -93,7 +99,7 @@ export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: num
         <span className="ctx-icon">{option.folder ? <Folder size={15} /> : <Inbox size={15} />}</span><span className="ctx-label">{option.label}</span>
         <span className="ctx-check">{option.checked && <Check size={15} />}</span>
       </button>)}
-      {submenu.items.length === 1 && <p className="ctx-empty">{t("sidebarMenu.noProjects")}</p>}
+      {submenu.items.length === 1 && !submenu.plain && <p className="ctx-empty">{t("sidebarMenu.noProjects")}</p>}
     </div>}
   </>, document.body);
 }

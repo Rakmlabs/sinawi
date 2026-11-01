@@ -1,33 +1,29 @@
-/* Workspace switch pill in the title bar ("개인 ⇄ 회사"). */
-.workspace-pill {
-  --workspace-accent: var(--accent);
+/* Workspace switcher in the title bar: "current ▾". */
+.workspace-switcher {
   position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  flex-shrink: 0;
+  flex-shrink: 1;
   min-width: 0;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--bg-raised);
+  max-width: 200px;
+  height: 32px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(13px * var(--font-scale));
   font-weight: 600;
-  line-height: 1;
   cursor: pointer;
   -webkit-app-region: no-drag;
 }
-
-.workspace-pill.company { --workspace-accent: var(--info); }
-.workspace-pill:hover:not(:disabled) { background: var(--bg-active); color: var(--text); }
-.workspace-pill:focus-visible { outline: 2px solid var(--workspace-accent); outline-offset: 2px; }
-.workspace-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--workspace-accent); }
-.workspace-pill-label { color: var(--text); }
-.workspace-pill-other { color: var(--text-muted); font-weight: 500; }
+.workspace-switcher svg { flex-shrink: 0; color: var(--icon); }
+.workspace-switcher:hover:not(:disabled),
+.workspace-switcher[aria-expanded="true"] { background: var(--bg-active); color: var(--text); }
+.workspace-switcher:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.workspace-switcher-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-running-badge {
   display: inline-grid;
   place-items: center;
@@ -35,14 +31,14 @@
   height: 16px;
   padding: 0 4px;
   border-radius: 8px;
-  background: var(--workspace-accent);
-  color: var(--on-status);
+  background: var(--accent);
+  color: var(--accent-text);
   font-size: calc(12px * var(--font-scale));
   font-variant-numeric: tabular-nums;
 }
 
 @media (pointer: coarse) {
-  .workspace-pill { height: 44px; }
+  .workspace-switcher { height: 44px; }
 }
 
 .workspace-error {
@@ -52,3 +48,46 @@
   z-index: 100;
   max-width: min(480px, calc(100vw - 32px));
 }
+
+/* Settings › Workspaces */
+.workspace-settings { gap: 14px; }
+.workspace-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.workspace-item { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.workspace-item.current { border-color: var(--accent-border); }
+.workspace-item-head { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 32px; }
+.workspace-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.workspace-item-spacer { flex: 1; }
+.workspace-item-key { color: var(--text-subtle); font-size: calc(12px * var(--font-scale)); }
+.workspace-tag { flex-shrink: 0; padding: 2px 8px; border-radius: 999px; background: var(--bg-active); color: var(--text-muted); font-size: calc(12px * var(--font-scale)); font-weight: 600; }
+.workspace-item.current .workspace-tag:not(.running) { background: var(--accent-tint); color: var(--accent-fg); }
+.workspace-tag.running { background: var(--warn-tint); color: var(--warn-fg); }
+.workspace-item .icon-button { width: 32px; height: 32px; padding: 0; border-radius: 8px; color: var(--icon); }
+.workspace-item .icon-button:hover:not(:disabled) { background: var(--bg-active); color: var(--text); }
+.workspace-item .icon-button.danger:hover:not(:disabled) { background: var(--danger-tint); color: var(--danger-fg); }
+.workspace-inline-form { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.workspace-inline-form input,
+.workspace-add input,
+.workspace-confirm select { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-raised); color: var(--text); font: inherit; }
+.workspace-inline-form input:focus-visible,
+.workspace-add input:focus-visible,
+.workspace-confirm select:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.workspace-defaults { display: grid; gap: 8px; margin: 0; }
+.workspace-defaults > div { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 12px; }
+.workspace-defaults dt { color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
+.workspace-defaults dd { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; margin: 0; }
+.workspace-agents small { color: var(--text-subtle); }
+.workspace-agent { display: inline-flex; align-items: center; gap: 6px; }
+.workspace-folder { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text-secondary); font-family: var(--font-mono); font-size: calc(12px * var(--font-scale)); }
+.workspace-folder span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-folder:hover { background: var(--bg-active); color: var(--text); }
+.workspace-confirm { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--danger-border); border-radius: 8px; background: var(--danger-tint); }
+.workspace-confirm label { display: flex; align-items: center; gap: 10px; color: var(--text-secondary); }
+.workspace-warning { color: var(--warn-fg); }
+.workspace-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.workspace-add { display: flex; gap: 8px; }
+@media (max-width: 640px) { .workspace-defaults > div { grid-template-columns: 1fr; gap: 4px; } }
+.button.danger { background: var(--danger); color: var(--on-status); }
+.button.danger:hover:not(:disabled) { filter: brightness(1.08); }
+.workspace-settings .button,
+.team-editor-actions .button { height: 32px; padding: 0 12px; border-radius: 8px; gap: 6px; font-size: calc(13px * var(--font-scale)); }
+.workspace-inline-form input, .workspace-add input, .workspace-confirm select { font-size: calc(13px * var(--font-scale)); }

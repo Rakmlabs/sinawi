@@ -1,13 +1,17 @@
-/* App title bar: full-width 48px row above the sidebar and main column. */
+/* App title bar: full-width 48px row above the sidebar and main column.
+ * Geometry (macOS, Tauri 2.12 / tao 0.37, titleBarStyle Overlay):
+ *   trafficLightPosition {x: 16, y: 25} centres the 3 lights on y = 24 = 48 / 2, the same line as the
+ *   32px toggle, brand and breadcrumb (all `align-items: center`). Lights span x 16 → ~70.
+ *   Spacer 74px + 8px gap puts the toggle box at x = 82: a 12px gap after the lights. */
 .window-header {
   grid-area: header;
   z-index: 90;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
   height: var(--window-header-height);
-  padding: 0 12px 0 10px;
+  padding: 0 12px 0 8px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-app);
   user-select: none;
@@ -15,19 +19,23 @@
   cursor: default;
 }
 
+.window-header.has-traffic-lights { padding-left: 0; }
+
 /* macOS traffic lights (titleBarStyle "Overlay") sit over this spacer. */
 .window-header-traffic {
-  flex: 0 0 68px;
+  flex: 0 0 74px;
   align-self: stretch;
 }
+
+.window-header-sidebar + .window-header-crumbs { margin-left: 2px; }
 
 .window-header-crumbs {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
-  font-size: calc(14px * var(--font-scale));
+  font-size: calc(13px * var(--font-scale));
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -41,9 +49,10 @@
 .window-header-brand {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   flex-shrink: 0;
   font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .window-header-separator {
@@ -95,19 +104,19 @@
   margin-left: auto;
 }
 
-.window-header-actions > .workspace-pill {
+.window-header-actions > .workspace-switcher {
   margin-right: 4px;
 }
 
-/* 36px ghost icon button shared by the title bar (also used by the notifications trigger). */
+/* 32px ghost icon button shared by the title bar (also used by the notifications trigger). */
 .header-icon-button {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: 0;
   border-radius: 8px;
@@ -116,7 +125,11 @@
   -webkit-app-region: no-drag;
 }
 
-.header-icon-button:hover:not(:disabled),
+.header-icon-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .header-icon-button[aria-expanded="true"]:not(.window-header-sidebar) {
   background: var(--bg-active);
   color: var(--text);

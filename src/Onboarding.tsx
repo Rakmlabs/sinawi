@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Bell, Briefcase, Check, ExternalLink, FolderOpen, Home, Keyboard, Monitor, MousePointerClick, Plug, RefreshCw, Sparkles, SquareTerminal, TriangleAlert, Wrench, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bell, Check, ExternalLink, FolderOpen, Keyboard, Layers, Monitor, MousePointerClick, Plug, RefreshCw, Sparkles, SquareTerminal, TriangleAlert, Wrench, X } from "lucide-react";
 import type { SetupTool, PermissionId, PermissionState } from "../server/setup";
 import type { WorkspaceId } from "../server/types";
 import { CopyButton } from "./CopyButton";
@@ -7,6 +7,8 @@ import { openTerminal } from "./terminal-events";
 import { permissionView, tauriInvoke, type PermState, loginStatus, saveProgress, SHORTCUTS, STEPS, toolsStatus, type AuthStatus, type OnboardingProgress, type StepStatus } from "./onboarding-state";
 import "./onboarding.css";
 import { t, tx } from "./i18n";
+import { useWorkspaces } from "./workspace-context";
+import { workspaceName } from "./workspaces";
 import { SinawiMark } from "./SinawiMark";
 
 export type SetupInfo = { platform: string; tools: SetupTool[]; permissions: Record<PermissionId, PermissionState> };
@@ -41,7 +43,8 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [newGroup, setNewGroup] = useState<{ name: string; workspaceId: WorkspaceId }>({ name: "", workspaceId: "personal" });
+  const { workspaces } = useWorkspaces();
+  const [newGroup, setNewGroup] = useState<{ name: string; workspaceId: WorkspaceId }>({ name: "", workspaceId });
   const [native, setNative] = useState<Partial<Record<PermissionId, PermState>>>({});
   const [requesting, setRequesting] = useState<PermissionId>();
   const [notification, setNotification] = useState<string>(() => typeof Notification === "undefined" ? "unknown" : Notification.permission);
@@ -158,16 +161,15 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
       case "workspaces": return <>
         <p className="ob-lead">{tx("ob.spaces.lead")}</p>
         <div className="ob-spaces">
-          {(["personal", "company"] as WorkspaceId[]).map((id) => <button key={id} className={`ob-space ${workspaceId === id ? "active" : ""}`} onClick={() => onSwitchWorkspace(id)}>
-            <div className="ob-row-head">{id === "personal" ? <Home size={18} /> : <Briefcase size={18} />}<strong>{id === "personal" ? t("workspace.personal") : t("workspace.company")}</strong><span className="ob-spacer" />{workspaceId === id && <Badge status="ok">{t("ob.inUse")}</Badge>}</div>
-            <p>{id === "personal" ? t("ob.spaces.personal") : t("ob.spaces.company")}</p>
-            <small>{t("ob.projectCount", { n: groups.filter((g) => (g.workspaceId ?? "personal") === id).length })}</small>
+          {workspaces.map(({ id }) => <button key={id} className={`ob-space ${workspaceId === id ? "active" : ""}`} onClick={() => onSwitchWorkspace(id)}>
+            <div className="ob-row-head"><Layers size={18} /><strong>{workspaceName(workspaces, id)}</strong><span className="ob-spacer" />{workspaceId === id && <Badge status="ok">{t("ob.inUse")}</Badge>}</div>
+            <small>{t("ob.projectCount", { n: groups.filter((g) => (g.workspaceId ?? workspaces[0]?.id) === id).length })}</small>
           </button>)}
         </div>
         <div className="ob-row"><div className="ob-row-head"><FolderOpen size={18} /><strong>{t("ob.createProject")}</strong><small>{t("ob.optional")}</small></div>
           <p className="ob-why">{t("ob.projectWhy")}</p>
           <div className="ob-actions"><input className="ob-input" placeholder={t("ob.projectPlaceholder")} value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) void createGroup(); }} />
-            <select className="ob-input small" value={newGroup.workspaceId} onChange={(e) => setNewGroup({ ...newGroup, workspaceId: e.target.value as WorkspaceId })}><option value="personal">{t("workspace.personal")}</option><option value="company">{t("workspace.company")}</option></select>
+            {workspaces.length > 1 && <select className="ob-input small" aria-label={t("usage.workspace")} value={newGroup.workspaceId} onChange={(e) => setNewGroup({ ...newGroup, workspaceId: e.target.value })}>{workspaces.map(({ id }) => <option key={id} value={id}>{workspaceName(workspaces, id)}</option>)}</select>}
             <button className="ob-btn primary" disabled={!newGroup.name.trim()} onClick={() => void createGroup()}>{t("ob.create")}</button></div>
         </div>
       </>;

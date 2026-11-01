@@ -3,6 +3,7 @@ import { GlassSelect } from "../GlassSelect";
 import { names } from "./labels";
 import type { AgentId, WorkspaceId } from "../../server/types";
 import { t } from "../i18n";
+import { useWorkspaceName } from "../workspace-context";
 
 export type AllowedAgentsSettingsProps = {
   workspaceId: WorkspaceId;
@@ -21,13 +22,14 @@ const fallbackCandidates = (source: AgentId): AgentId[] => source === "codex" ? 
 
 /** Settings tab: which agents this workspace may use, and quota-exhaustion fallback order. */
 export function AllowedAgentsSettings({ workspaceId, allowedAgents, busy, quotaFallback, setQuotaFallback, quotaThreshold, setQuotaThreshold, fallbackOrder, setFallbackOrder, onAllowedChange }: AllowedAgentsSettingsProps) {
+  const space = useWorkspaceName(workspaceId);
   return <section className="panel routing-settings" aria-label={t("allowed.label")}>
-    <h2>{t("allowed.title", { space: workspaceId === "company" ? t("workspace.company") : t("workspace.personal") })}</h2>
+    <h2>{t("allowed.title", { space })}</h2>
     <p className="muted">{t("allowed.body")}</p>
-    <div className="routing-skills">{(["codex", "claude", "grok"] as AgentId[]).map((id) => <label key={id} title={workspaceId === "company" && id === "codex" ? t("allowed.codexOffAtWork") : undefined}>
-      <input type="checkbox" checked={allowedAgents.includes(id)} disabled={busy || (workspaceId === "company" && id === "codex")} onChange={(event) => {
+    <div className="routing-skills">{(["codex", "claude", "grok"] as AgentId[]).map((id) => <label key={id}>
+      <input type="checkbox" checked={allowedAgents.includes(id)} disabled={busy} onChange={(event) => {
         onAllowedChange(event.target.checked ? [...allowedAgents, id] : allowedAgents.filter((item) => item !== id));
-      }} /><AgentMark agent={id} size="small" />{names[id]}{workspaceId === "company" && id === "codex" && <small>{t("allowed.codexOffAtWork")}</small>}
+      }} /><AgentMark agent={id} size="small" />{names[id]}
     </label>)}</div>
     <div className="quota-fallback-settings">
       <label className="auto-switch-setting"><span>{t("allowed.autoSwitch")}</span><input type="checkbox" checked={quotaFallback} disabled={busy} onChange={(event) => setQuotaFallback(event.target.checked)} /></label>

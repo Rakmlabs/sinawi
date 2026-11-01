@@ -1,74 +1,65 @@
-/* Team row under the title bar: team chips on the left, conversation controls on the right. */
-.team-bar {
-  flex: 0 0 auto;
-  min-width: 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.team-row {
+/* Team picker in the composer bottom bar ("Claude · model ▾ ●● +2"), editor as a popover above. */
+.team-picker {
+  position: static;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 49px;
-  padding: 8px 16px 8px 24px;
-}
-.team-chips {
-  display: flex;
-  align-items: center;
-  flex: 1 1 auto;
-  gap: 8px;
   min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
 }
-.team-caption {
-  flex-shrink: 0;
-  margin-right: 2px;
-  font-weight: 600;
-  letter-spacing: .02em;
-}
-.team-chip {
+.team-trigger {
   display: inline-flex;
   align-items: center;
-  flex-shrink: 0;
   gap: 6px;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-raised);
-  color: var(--text);
+  min-width: 0;
+  max-width: 340px;
+  height: 32px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: calc(13px * var(--font-scale));
   white-space: nowrap;
 }
-.team-chip strong { font-weight: 600; }
-.team-chip-meta { color: var(--text-muted); }
-.team-chip:hover:not(:disabled) { background: var(--bg-active); }
-.team-chip .remaining-chip { margin-left: 2px; }
-.team-arrow-icon { flex-shrink: 0; color: var(--text-disabled); }
-.team-edit {
-  flex-shrink: 0;
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 6px;
-  color: var(--text-muted);
-  font-size: calc(13px * var(--font-scale));
-}
-.team-edit:hover:not(:disabled),
-.team-edit[aria-expanded="true"] { background: var(--bg-active); color: var(--text); }
+.team-trigger strong { color: var(--text); font-weight: 600; }
+.team-trigger-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.team-trigger-meta::before { content: "·"; margin-right: 6px; color: var(--text-disabled); }
+.team-trigger-workers { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; padding-left: 8px; border-left: 1px solid var(--border); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.team-trigger-workers > span:last-child { margin-left: 3px; }
+.team-trigger-chevron { flex-shrink: 0; color: var(--icon); }
+.team-trigger .remaining-chip { margin-left: 2px; }
+.team-trigger:hover:not(:disabled),
+.team-trigger[aria-expanded="true"] { background: var(--bg-active); color: var(--text); }
+.team-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Agent identity dot (team chips, activity rows). */
 .agent-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
 .agent-dot.claude { background: var(--agent-claude); }
 .agent-dot.codex { background: var(--agent-codex); }
 .agent-dot.grok { background: var(--agent-grok); }
 .team-editor {
-  padding: 4px 24px 14px;
-  max-height: min(370px, 42dvh);
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  max-height: min(460px, 60dvh);
+  padding: 14px 16px 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-md);
+  animation: team-editor-in 140ms ease-out;
 }
+@keyframes team-editor-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.team-editor-heading { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.team-editor-heading strong { font-weight: 600; }
+.team-editor-heading small { color: var(--text-muted); }
 .team-editor > p { margin-bottom: 12px; color: var(--text-muted); }
 .team-editor .model-choice { flex: 1; min-width: 0; }
 .team-worker-editor { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
-.team-editor-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.team-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.team-editor-spacer { flex: 1; }
+@media (prefers-reduced-motion: reduce) { .team-editor { animation: none; } }
 .delegation-card {
   margin: 16px 0;
   padding: 14px 16px;
@@ -95,10 +86,9 @@
 .thread-empty { padding: 24px 16px; }
 .event { scroll-margin-top: 12px; }
 @media (max-width: 740px), (pointer: coarse) {
-  .team-row { padding: 6px 8px 6px 12px; }
-  .team-chip, .team-edit, .team-editor-actions .button, .team-worker-editor > button, .delegation-bottom .button { min-height: 44px; }
+  .team-trigger, .team-editor-actions .button, .team-worker-editor > button, .delegation-bottom .button { min-height: 44px; }
   .team-worker-editor > button { min-width: 44px; }
-  .team-editor { padding: 4px 12px 12px; }
+  .team-editor { padding: 12px; }
   .delegation-card { padding: 12px; }
   .delegation-heading { flex-wrap: wrap; }
 }
@@ -162,3 +152,4 @@
 @media (max-width: 740px), (pointer: coarse) {
   .worker-output summary { min-height: 44px; }
 }
+@media (max-width: 740px) { .team-trigger-meta { display: none; } .team-trigger { max-width: 220px; } }

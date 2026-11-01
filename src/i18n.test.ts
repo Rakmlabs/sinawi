@@ -50,7 +50,7 @@ test("desktop header renders the Sinawi wordmark and English labels", () => {
     const html = renderToStaticMarkup(createElement(WindowHeader, {}));
     assert.match(html, /<\/svg>Sinawi<\/span>/);
     assert.match(html, /New chat/);
-    assert.match(html, /aria-label="Reload"/);
+    assert.doesNotMatch(html, /aria-label="Reload"/);
     assert.doesNotMatch(html, /[가-힣]/);
   } finally {
     setLang(before);

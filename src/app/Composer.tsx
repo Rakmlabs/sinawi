@@ -1,4 +1,5 @@
-import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, Settings2, Square, WandSparkles, X } from "lucide-react";
+import type { ReactNode } from "react";
+import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, Square, WandSparkles, X } from "lucide-react";
 import { ComposerPopover } from "../ComposerPopover";
 import { composerAction, composerLocked, fileToken, handlesCompletionKey, historyEntries, historyStep, isUsageCommand, slashToken } from "../composer";
 import { kindFromName } from "../../server/media-kinds";
@@ -37,6 +38,8 @@ export type ComposerProps = {
   stopActive: () => void;
   openModal: (modal: string) => void;
   openViewer: (items: MediaRef[], index: number) => void;
+  /** Team/agent picker rendered in the bottom bar (TeamBarSlot). */
+  teamPicker?: ReactNode;
 };
 
 export function Composer(props: ComposerProps) {
@@ -145,6 +148,7 @@ export function Composer(props: ComposerProps) {
         onBlur={() => { setSlash(undefined); setFileCompletion(undefined); }}
         aria-activedescendant={slash && filteredSkills.length ? `slash-skill-${highlightedSkill}` : fileCompletion && fileSuggestions.length ? `file-suggestion-${fileIndex}` : undefined}
         aria-label={t("comp.inputLabel")}
+        title={t("comp.inputTitle")}
         placeholder={sessionRunning ? t("comp.placeholderRunning") : !active && mode === "auto" ? t("comp.placeholderAuto") : t("comp.placeholderAgent", { agent: active ? names[active.agent] : names[agent] })}
         value={prompt}
         onChange={(e) => {
@@ -229,6 +233,7 @@ export function Composer(props: ComposerProps) {
           className="directory-button"
           disabled={Boolean(active)}
           onClick={() => openModal("directory")}
+          aria-label={t("comp.folderLabel", { folder: shownCwd || t("comp.chooseFolder") })}
           title={
             active
               ? t("comp.folderLocked")
@@ -243,15 +248,18 @@ export function Composer(props: ComposerProps) {
           </span>
           <ChevronDown size={12} />
         </button>
+        {props.teamPicker}
         {!active && <div className="routing-mode" role="group" aria-label={t("comp.routingMode")}>
-          <button aria-pressed={mode === "auto"} disabled={busy} onClick={() => setMode("auto")}>{t("comp.auto")}</button>
-          <button aria-pressed={mode === "manual"} disabled={busy} onClick={() => setMode("manual")}>{t("comp.manual")}</button>
+          <button type="button" aria-pressed={mode === "auto"} disabled={busy} title={t("comp.autoTitle")} onClick={() => setMode("auto")}>{t("comp.auto")}</button>
+          <button type="button" aria-pressed={mode === "manual"} disabled={busy} title={t("comp.manualTitle")} onClick={() => setMode("manual")}>{t("comp.manual")}</button>
         </div>}
+        <span className="composer-bottom-spacer" />
         <input ref={fileInput} type="file" multiple hidden onChange={(event) => { attachFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-        <button type="button" className="icon-button" aria-label={t("comp.attachFile")} title={t("comp.attachFile")} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>
-        <button className="icon-button" aria-label={t("comp.settings")} onClick={() => openModal("settings")}><Settings2 size={16} /></button>
+        <button type="button" className="icon-button" aria-label={t("comp.attachFile")} title={t("comp.attachTitle")} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>
         <button
+          type="button"
           className="send-button"
+          title={action === "stop" ? t("comp.stopTitle") : t("comp.sendTitle")}
           aria-label={action === "stop" ? t("comp.stop") : routing ? t("comp.routing") : t("comp.send")}
           disabled={action === "stop" ? busy : !canSend && !isUsageCommand(prompt)}
           onClick={action === "stop" ? stopActive : () => void send()}
@@ -266,6 +274,5 @@ export function Composer(props: ComposerProps) {
         </button>
       </div>
     </div>
-    <div className="composer-hints">{t("comp.hints")}</div>
   </div>;
 }

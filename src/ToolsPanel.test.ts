@@ -54,13 +54,13 @@ test("tool shortcuts accept Cmd/Ctrl+Shift+T and unmodified F3 while preserving 
 test("tool updates use the workspace-aware PUT contract", () => {
   assert.deepEqual(toolUpdateRequest("company", "/company/app", "mcp", "bbanana", false, "codex"), {
     path: "/api/tools/mcp",
-    init: { method: "PUT", body: JSON.stringify({ name: "bbanana", enabled: false, workspace: "work", cwd: "/company/app", agent: "codex" }) },
+    init: { method: "PUT", body: JSON.stringify({ name: "bbanana", enabled: false, workspace: "company", cwd: "/company/app", agent: "codex" }) },
   });
   assert.deepEqual(toolUpdateRequest("personal", "/personal/app", "skill", "review", true), {
     path: "/api/tools/skill",
     init: { method: "PUT", body: JSON.stringify({ name: "review", enabled: true, workspace: "personal", cwd: "/personal/app" }) },
   });
-  assert.equal(toolsListPath("company", "/회사 작업/app"), "/api/tools?workspace=work&cwd=%2F%ED%9A%8C%EC%82%AC%20%EC%9E%91%EC%97%85%2Fapp");
+  assert.equal(toolsListPath("company", "/회사 작업/app"), "/api/tools?workspace=company&cwd=%2F%ED%9A%8C%EC%82%AC%20%EC%9E%91%EC%97%85%2Fapp");
 });
 
 test("request generations reject stale completions", () => {

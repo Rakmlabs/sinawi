@@ -40,7 +40,7 @@ export function ModelChoice<T extends AgentSelection>({ value, settings, onChang
           label: names[id],
           icon: <><AgentMark agent={id} size="small" /><RemainingChip agent={id} /></>,
           disabled: excludedAgents.includes(id) || Boolean(availableAgents && !availableAgents.includes(id)) || Boolean(policy && !policy.allowedAgents.includes(id)),
-          title: policy?.workspaceId === "company" && id === "codex" ? t("allowed.codexOffAtWork") : policy && !policy.allowedAgents.includes(id) ? t("rt.notInSpace") : undefined,
+          title: policy && !policy.allowedAgents.includes(id) ? t("rt.notInSpace") : undefined,
         }))}
         onChange={(agent) => onChange({ ...value, agent: agent as AgentId, model: undefined, reasoningEffort: undefined })}
       /> : <strong className="agent-label"><AgentMark agent={value.agent} size="small" />{names[value.agent]}<RemainingChip agent={value.agent} /></strong>}

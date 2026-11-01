@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentId } from "../server/types";
 import { aggregateUsage, filterUsageRuns, usageBarWidth, type UsagePeriod, type UsageRow, type UsageRunRecord, type UsageWorkspace } from "./usage-data";
 import "./usage.css";
+import { useWorkspaces } from "./workspace-context";
+import { workspaceName } from "./workspaces";
 import { getLang, t, translatedMap } from "./i18n";
 
 export type { UsagePeriod, UsageRow, UsageRunRecord, UsageWorkspace } from "./usage-data";
@@ -12,7 +14,6 @@ const numberFormats = { ko: new Intl.NumberFormat("ko-KR"), en: new Intl.NumberF
 const number = { format: (value: number) => numberFormats[getLang()].format(value) };
 const agentNames: Record<AgentId, string> = { codex: "Codex", claude: "Claude", grok: "Grok Build" };
 const periodLabels = translatedMap<UsagePeriod>({ today: "usage.today", "7d": "usage.7d", "30d": "usage.30d" });
-const workspaceLabels = translatedMap<UsageWorkspace>({ all: "usage.all", personal: "workspace.personal", company: "workspace.company" });
 
 function formatDuration(milliseconds: number): string {
   const seconds = Math.round(milliseconds / 1_000);
@@ -38,6 +39,7 @@ function UsageRows({ title, rows, agentRows = false }: { title: string; rows: Us
 
 export function UsagePanel({ initialWorkspace = "all" }: { initialWorkspace?: UsageWorkspace }) {
   const quotas = useQuotas();
+  const { workspaces } = useWorkspaces();
   const [view, setView] = useState<"remaining" | "history">("remaining");
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(timer); }, []);
@@ -77,7 +79,7 @@ export function UsagePanel({ initialWorkspace = "all" }: { initialWorkspace?: Us
     </div> : <>
     <div className="usage-controls">
       <div className="usage-segment" aria-label={t("usage.period")}>{(["today", "7d", "30d"] as const).map((value) => <button key={value} aria-pressed={period === value} onClick={() => setPeriod(value)}>{periodLabels[value]}</button>)}</div>
-      <div className="usage-segment" aria-label={t("usage.workspace")}>{(["all", "personal", "company"] as const).map((value) => <button key={value} aria-pressed={workspace === value} onClick={() => setWorkspace(value)}>{workspaceLabels[value]}</button>)}</div>
+      {workspaces.length > 1 && <div className="usage-segment" aria-label={t("usage.workspace")}>{(["all", ...workspaces.map((item) => item.id)] as UsageWorkspace[]).map((value) => <button key={value} aria-pressed={workspace === value} onClick={() => setWorkspace(value)}>{value === "all" ? t("usage.all") : workspaceName(workspaces, value)}</button>)}</div>}
     </div>
     {loading ? <p className="usage-state" role="status">{t("usage.loading")}</p> : error ? <div className="usage-state" role="alert"><p>{error}</p><button onClick={() => void load()}>{t("common.retry")}</button></div> : !filtered.length ? <p className="usage-state">{t("usage.empty")}</p> : <>
       <dl className="usage-totals">
