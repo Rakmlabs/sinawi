@@ -8,9 +8,9 @@ use std::{
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const LABEL: &str = "kr.rakm.agentorchestra.server";
@@ -95,7 +95,47 @@ fn install_files(layout: &Layout, version: &str) -> std::io::Result<()> {
 
 fn xml(text: &str) -> String { text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;") }
 
+/// Resolve (node binary, PATH) once from the user's login shell, so launchd can start node directly
+/// without a login shell on every (re)start. Falls back to common install locations.
+fn resolve_node_env() -> (String, String) {
+    let mut shell_out = String::new();
+    if let Ok(mut child) = Command::new("/bin/zsh").args(["-lc", "printf '__AO_PATH__%s\\n__AO_NODE__%s\\n' \"$PATH\" \"$(command -v node)\""])
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
+    {
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if started.elapsed() < Duration::from_secs(8) => thread::sleep(Duration::from_millis(50)),
+                _ => { let _ = child.kill(); break; }
+            }
+        }
+        if let Some(mut out) = child.stdout.take() { let _ = out.read_to_string(&mut shell_out); }
+        let _ = child.wait();
+    }
+    let field = |tag: &str| shell_out.lines().find_map(|l| l.strip_prefix(tag)).unwrap_or("").trim().to_string();
+    let mut dirs: Vec<String> = field("__AO_PATH__").split(':').filter(|d| !d.is_empty()).map(String::from).collect();
+    let home = std::env::var("HOME").unwrap_or_default();
+    for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(String::from)
+        .into_iter().chain([format!("{home}/.local/bin"), format!("{home}/.bun/bin")])
+    {
+        if !dirs.contains(&extra) { dirs.push(extra); }
+    }
+    let path = dirs.join(":");
+    let mut node = field("__AO_NODE__");
+    if !Path::new(&node).is_file() {
+        node = dirs.iter().map(|d| format!("{d}/node")).find(|c| Path::new(c).is_file()).unwrap_or_else(|| "/usr/local/bin/node".into());
+    }
+    (node, path)
+}
+
+/// True when the installed plist predates the direct-node launch (still goes through a login shell).
+fn plist_outdated(layout: &Layout) -> bool {
+    fs::read_to_string(&layout.plist).map(|c| c.contains("/bin/zsh") || !c.contains("<key>PATH</key>")).unwrap_or(true)
+}
+
 fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
+    let (node, path_env) = resolve_node_env();
     fs::create_dir_all(&layout.log_dir)?;
     fs::create_dir_all(&layout.data_dir)?;
     if let Some(parent) = layout.plist.parent() { fs::create_dir_all(parent)?; }
@@ -108,11 +148,12 @@ fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
   <key>Label</key><string>{LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string><string>-lc</string><string>exec node "$1" start</string>
-    <string>agent-orchestra-server</string><string>{server}</string>
+    <string>{node}</string><string>{server}</string><string>start</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>PATH</key><string>{path_env}</string>
+    <key>HOME</key><string>{home}</string>
     <key>AGENT_ORCHESTRA_PORT</key><string>3001</string>
     <key>AGENT_ORCHESTRA_STATIC_DIR</key><string>{dist}</string>
     <key>AGENT_ORCHESTRA_DATA_DIR</key><string>{data}</string>
@@ -129,7 +170,8 @@ fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
 </plist>
 "#,
         server = s(&layout.server_dir.join("server.cjs")), dist = s(&layout.server_dir.join("dist")),
-        data = s(&layout.data_dir), cwd = s(&layout.server_dir), version = xml(version));
+        data = s(&layout.data_dir), cwd = s(&layout.server_dir), version = xml(version),
+        node = xml(&node), path_env = xml(&path_env), home = xml(&std::env::var("HOME").unwrap_or_default()));
     fs::write(&layout.plist, plist)
 }
 
@@ -165,13 +207,14 @@ pub fn ensure(layout: Layout) -> Result<(), String> {
         log(&format!("bootstrapped {LABEL} version {}", installed_version(&layout)));
         return Ok(());
     }
-    if installed_version(&layout) == version { return Ok(()); }
+    if installed_version(&layout) == version && !plist_outdated(&layout) { return Ok(()); }
     // Newer server bundled: swap only while idle, so running sessions are never cut.
     thread::spawn(move || loop {
         match health_body().as_deref().and_then(running_sessions) {
             Some(0) => {
                 bootout();
-                let result = install_files(&layout, &version).and_then(|_| write_plist(&layout, &version));
+                let result = (if installed_version(&layout) == version { Ok(()) } else { install_files(&layout, &version) })
+                    .and_then(|_| write_plist(&layout, &version));
                 bootstrap(&layout);
                 log(&format!("updated server to {version}: {result:?}"));
                 return;

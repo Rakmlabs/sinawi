@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dev",
+  "description": "Dev-only capability (vite dev server). Enabled by tauri.dev.conf.json; not part of release builds.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:5188/*"
+    ]
+  }
+}

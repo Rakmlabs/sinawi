@@ -56,6 +56,23 @@ fn port_is_in_use() -> bool {
         .is_some()
 }
 
+/// Native error dialog (osascript). Returns true when the user picked "로그 열기".
+fn show_error_dialog(message: &str, can_continue: bool) -> bool {
+    let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
+    let buttons = if can_continue { "{\"로그 열기\", \"계속 대기\"}" } else { "{\"로그 열기\", \"종료\"}" };
+    let script = format!("display dialog \"{escaped}\" with title \"Agent Orchestra\" with icon caution buttons {buttons} default button 2");
+    let out = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).output();
+    let open_log = out.map(|o| String::from_utf8_lossy(&o.stdout).contains("로그 열기")).unwrap_or(false);
+    if open_log {
+        if let Some(home) = std::env::var_os("HOME") {
+            let _ = std::process::Command::new("/usr/bin/open").arg(std::path::Path::new(&home).join("Library/Logs/Agent Orchestra")).status();
+        }
+    }
+    open_log
+}
+
+const LOG_HINT: &str = "로그: ~/Library/Logs/Agent Orchestra/server.log";
+
 fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let resources = app.path().resolve("server.cjs", BaseDirectory::Resource)?
         .parent().ok_or("resource dir")?.to_path_buf();
@@ -69,7 +86,8 @@ fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::
         plist: home.join("Library/LaunchAgents").join(format!("{}.plist", server_agent::LABEL)),
     };
     if !production_server_is_ready() && port_is_in_use() {
-        return Err("port 3001 is already used by a process that is not the Agent Orchestra production server".into());
+        show_error_dialog(&format!("포트 3001을 다른 프로그램이 사용 중이라 Agent Orchestra 서버를 시작할 수 없습니다.\n해당 프로그램을 종료한 뒤 앱을 다시 실행하세요.\n\n{LOG_HINT}"), false);
+        std::process::exit(1);
     }
     // The server is owned by launchd, not by this app: quitting/replacing the app never stops it.
     server_agent::ensure(layout)?;
@@ -77,6 +95,7 @@ fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::
     let window = app.get_webview_window("main").ok_or("main window was not created")?;
     thread::spawn(move || {
         let started_at = Instant::now();
+        let mut warned = false;
         loop {
             if production_server_is_ready() {
                 let url = SERVER_URL.parse().expect("constant server URL must be valid");
@@ -101,8 +120,17 @@ fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::
                     }
                 }
             }
-            if started_at.elapsed() > STARTUP_TIMEOUT {
+            if !warned && started_at.elapsed() > STARTUP_TIMEOUT {
+                warned = true;
                 eprintln!("Agent Orchestra server is not ready yet; still waiting (launchd keeps it alive)");
+                let reason = if port_is_in_use() {
+                    "포트 3001을 다른 프로그램이 사용 중이거나 서버가 정상 응답하지 않습니다."
+                } else {
+                    "서버가 시작되지 않았습니다 (node를 찾지 못했거나 서버가 즉시 종료됨)."
+                };
+                let message = format!("Agent Orchestra 서버가 {}초 안에 준비되지 않았습니다.\n{reason}\n\n{LOG_HINT}", STARTUP_TIMEOUT.as_secs());
+                // Dialog blocks only this watcher thread; if the server comes up later the window still loads.
+                show_error_dialog(&message, true);
             }
             thread::sleep(Duration::from_millis(200));
         }
