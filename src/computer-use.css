@@ -1,0 +1,44 @@
+/* Computer use: approval dialog, active banner/indicator, chat trail. Colours come from tokens.css. */
+
+.cu-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 0 var(--warn); animation: cu-pulse 1.6s infinite; }
+@keyframes cu-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 70%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .cu-dot { animation: none; } }
+.cu-spacer { flex: 1 1 auto; }
+
+.cu-banner { /* above every app overlay (menus 10000, onboarding 400) */
+  position: fixed; z-index: 10400; top: 52px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; max-width: min(860px, calc(100vw - 32px));
+  padding: 7px 8px 7px 14px; border-radius: 999px; border: 1px solid var(--warn);
+  background: var(--warn-tint); color: var(--text); font-size: calc(13px * var(--font-scale, 1));
+  box-shadow: var(--shadow-md);
+}
+.cu-banner.stopped { padding-right: 14px; border-color: var(--border-strong); background: var(--bg-overlay); }
+.cu-banner strong { font-weight: 600; white-space: nowrap; }
+.cu-banner-sessions { display: flex; gap: 6px; min-width: 0; overflow: hidden; }
+.cu-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 220px; padding: 2px 4px 2px 8px; border-radius: 999px; background: var(--bg-raised); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: calc(12px * var(--font-scale, 1)); }
+.cu-chip button { display: inline-flex; padding: 2px; border-radius: 50%; color: var(--text-muted); }
+.cu-chip button:hover { background: var(--bg-hover); color: var(--text); }
+.cu-hint { padding: 3px 7px; border-radius: 6px; background: var(--bg-raised); color: var(--text-muted); font: 500 calc(11px * var(--font-scale, 1)) / 1 ui-monospace, Menlo, monospace; white-space: nowrap; }
+.cu-stop { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 999px; background: var(--danger); color: var(--on-status); font-weight: 600; white-space: nowrap; }
+.cu-stop:hover { filter: brightness(1.08); }
+
+.cu-indicator {
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border-radius: 999px;
+  border: 1px solid var(--warn); background: var(--warn-tint); color: var(--warn-fg);
+  font-size: calc(12px * var(--font-scale, 1)); font-weight: 600; white-space: nowrap;
+}
+.cu-indicator:hover { background: var(--danger-tint); border-color: var(--danger); color: var(--danger-fg); }
+
+.cu-stop:focus-visible, .cu-indicator:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+
+.cu-trail { margin: 2px 0 10px 40px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border-subtle); background: var(--bg-surface); font-size: calc(12.5px * var(--font-scale, 1)); color: var(--text-secondary); }
+.cu-trail header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--text-muted); font-weight: 600; }
+.cu-trail ol { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.cu-entry { display: grid; grid-template-columns: auto 1fr auto; align-items: center; column-gap: 7px; row-gap: 6px; color: var(--icon); }
+.cu-entry-text { min-width: 0; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cu-entry.failed .cu-entry-text em { color: var(--danger-fg); font-style: normal; }
+.cu-entry time { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+.cu-thumb { grid-column: 2 / 4; justify-self: start; padding: 0; border-radius: 8px; border: 1px solid var(--border); overflow: hidden; background: var(--media-bg); cursor: zoom-in; }
+.cu-thumb img { display: block; max-width: 220px; max-height: 140px; object-fit: contain; }
+.cu-thumb.open { cursor: zoom-out; }
+.cu-thumb.open img { max-width: min(100%, 900px); max-height: 70vh; }

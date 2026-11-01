@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sinawi 컴퓨터 조작 중</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1c1917; cursor: default; user-select: none; -webkit-user-select: none; }
+  body { display: flex; align-items: center; justify-content: center; gap: 10px; font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; color: #fafaf9; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #f97316; box-shadow: 0 0 0 0 rgba(249, 115, 22, .7); animation: pulse 1.6s infinite; }
+  kbd { font: 600 11px/1 ui-monospace, Menlo, monospace; padding: 3px 6px; border-radius: 5px; background: #44403c; color: #fafaf9; }
+  .muted { color: #d6d3d1; font-weight: 500; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, .7); } 70% { box-shadow: 0 0 0 8px rgba(249, 115, 22, 0); } 100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+</style>
+</head>
+<body>
+  <span class="dot" aria-hidden="true"></span>
+  <span id="label">Sinawi가 컴퓨터를 조작 중</span>
+  <span class="muted" id="stop">중지 <kbd>Esc</kbd> 길게 · <kbd>⌃⌥⌘.</kbd></span>
+  <script>
+    if (!/^ko\b/i.test(navigator.language || "")) {
+      document.documentElement.lang = "en";
+      document.getElementById("label").textContent = "Sinawi is controlling your computer";
+      document.getElementById("stop").innerHTML = "Stop: hold <kbd>Esc</kbd> · <kbd>⌃⌥⌘.</kbd>";
+    }
+  </script>
+</body>
+</html>

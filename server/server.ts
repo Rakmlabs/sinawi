@@ -1,6 +1,9 @@
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes } from "./setup.js";
 import { BrowserBridge, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
+import { ComputerBridge, registerComputerRoutes, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
+import { isComputerUseAllowed } from "./workspace-policy.js";
+import { computerContextForToken, pruneComputerTokens } from "./computer-tokens.js";
 import { envVar } from "./runtime.js";
 import { createServer as createHttpServer } from "node:http";
 import { homedir } from "node:os";
@@ -10,15 +13,14 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { WebSocketServer, WebSocket } from "ws";
 import { NotificationStore } from "./notifications.js";
 import { mcpAuthTitle, mcpDisplayName } from "./tools.js";
-const watchedMcp = /^bbanana$/i;
 import { authNotification, sessionNotifications } from "./notification-sources.js";
 import type { NotificationInput, NotificationType } from "./notification-types.js";
 import { createTerminalService } from "./terminal.js";
 import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
-import { companyMediaUnavailableMessage, mediaRouteRequired, mediaUnavailableMessage } from "./media-routing.js";
-import { allowedAgentsForWorkspace } from "./workspace-policy.js";
+import { mediaRouteRequired, mediaUnavailableMessage } from "./media-routing.js";
+import { allowedAgentsForWorkspace, assertMediaAllowed, blockedToolMessage, defaultWorkspacePolicy, isToolLocked, lockedToolsFor, normalizeWorkspacePolicy, policyDenyPatterns, WorkspacePolicyError, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { loadUsage } from "./usage.js";
 import { loadProviderQuotas } from "./quota.js";
 import { exhaustionFromQuota } from "./quota-fallback.js";
@@ -33,6 +35,8 @@ import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSetti
 import { randomUUID } from "node:crypto";
 import { registerSessionFileRoutes } from "./session-files.js";
 import { registerLinkPreviewRoute } from "./link-preview.js";
+import { registerWorktreeRoutes } from "./worktree-routes.js";
+import { cleanupSessionWorktrees } from "./worktrees.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -246,7 +250,9 @@ function teamInput(body: any): UpdateTeamInput {
 }
 
 function errorResponse(res: Response, error: unknown, status = 400) {
-  res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
+  // Policy errors carry a code so the client can link to the workspace's settings.
+  const code = error instanceof WorkspacePolicyError ? { code: error.code } : {};
+  res.status(status).json({ error: error instanceof Error ? error.message : String(error), ...code });
 }
 
 function routeParam(value: string | string[]): string {
@@ -257,20 +263,26 @@ export function routingInput(body: any): { prompt: string; cwd: string; skills: 
   return { prompt: string(body?.prompt, 20_000), cwd: resolve(string(body?.cwd, 4_096)), skills: ids(body?.skills) };
 }
 
-/** Applies the selected attempt agent's workspace MCP policy to every planner run. */
-export function withWorkspaceMcpBlocks(runner: PlannerRunner, dataDir?: string): PlannerRunner {
+/** Applies the selected attempt agent's workspace MCP policy (disabled and locked tools) to every planner run. */
+export function withWorkspaceMcpBlocks(runner: PlannerRunner, dataDir?: string, policyFor?: WorkspacePolicyResolver): PlannerRunner {
   return async (options) => {
-    const workspaceId = options.usageContext?.workspaceId ?? "personal";
-    const disabled = workspaceToolSettings(await loadToolSettings(dataDir), workspaceId).disabledMcp;
+    const workspaceId = options.usageContext?.workspaceId;
+    const disabled = workspaceId ? workspaceToolSettings(await loadToolSettings(dataDir), workspaceId).disabledMcp : [];
+    const policy = workspaceId ? policyFor?.(workspaceId) : undefined;
     const prefix = `${options.agent}:`;
     const blockedMcp = disabled
       .filter((key) => key.startsWith(prefix) && key.length > prefix.length)
       .map((key) => `mcp__${key.slice(prefix.length)}__*`);
-    return runner({ ...options, blockedMcp: [...new Set([...(options.blockedMcp ?? []), ...blockedMcp])] });
+    const locked = lockedToolsFor(policy, options.agent);
+    return runner({
+      ...options,
+      blockedMcp: [...new Set([...(options.blockedMcp ?? []), ...blockedMcp, ...policyDenyPatterns(policy, options.agent)])],
+      ...(locked.length ? { lockedMcp: [...new Set([...(options.lockedMcp ?? []), ...locked])] } : {}),
+    });
   };
 }
 
-export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean } = {}) {
+export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean } = {}) {
   const app = express();
   app.disable("x-powered-by");
   const smallJson = express.json({ limit: "1mb" });
@@ -337,7 +349,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const persistSessions = (sessions: Session[]) => sessionWriter.flush({ sessions, changed: new Set() });
   const persistAllSessions = (sessions: Session[]) => sessionWriter.flush({ sessions });
   const scheduleSessions = (sessions: Session[], changedIds: string[]) => sessionWriter.schedule({ sessions, changed: new Set(changedIds) });
-  let workspaceState: WorkspaceState = { currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: {} };
+  let workspaceState: WorkspaceState = { currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: {}, settings: {} };
   const currentWorkspace = () => workspaceState.currentWorkspaceId;
   const workspace: WorkspaceResolver = (value, fallback) => {
     if (value == null && fallback) return fallback;
@@ -346,8 +358,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     return id;
   };
   const queryWorkspace = (value: unknown) => value == null ? undefined : workspace(value);
-  // "work" is the legacy alias the tools panel used for the company workspace.
-  const toolsWorkspace = (value: unknown) => workspace(value === "work" ? "company" : value, currentWorkspace());
+  const toolsWorkspace = (value: unknown) => workspace(value, currentWorkspace());
   const runningByWorkspace = () => {
     const counts: Record<string, number> = Object.fromEntries(workspaceState.workspaces.map((item) => [item.id, 0]));
     for (const session of orchestra.list()) if (session.status === "running") counts[session.workspaceId] = (counts[session.workspaceId] ?? 0) + 1;
@@ -356,6 +367,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   /** Workspace route responses: the persisted state plus running-session counts per workspace. */
   const workspacesPayload = () => ({ ...workspaceState, runningByWorkspace: runningByWorkspace() });
   const allowedFor = (id: WorkspaceId) => allowedAgentsForWorkspace(id, workspaceState.defaults[id]?.allowedAgents);
+  const policyFor: WorkspacePolicyResolver = (id) => workspaceState.settings?.[id] ?? defaultWorkspacePolicy();
   const quotaAwareAgents = async (agents: AgentId[], workspaceId: WorkspaceId) => {
     const defaults = workspaceState.defaults[workspaceId] ?? {};
     if (defaults.quotaFallback === false) return agents;
@@ -373,14 +385,16 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       order: defaults.fallbackOrder, quotas: await loadProviderQuotas(options.dataDir, options.modelHomeDir),
       authenticated, authenticatedAgents: authenticated, allowedAgents: allowedFor(workspaceId) };
   };
-  const routingRunner = createQuotaFallbackRunner(withWorkspaceMcpBlocks(options.routingRunner ?? runCli, options.dataDir), fallbackContext);
+  const routingRunner = createQuotaFallbackRunner(withWorkspaceMcpBlocks(options.routingRunner ?? runCli, options.dataDir, policyFor), fallbackContext);
   const orchestra = new Orchestra(broadcast, undefined, scheduleSessions, broadcastRemoval, async (session, prompt, signal) => {
     await modelsReady;
     const settings = await routing.loadSettings();
     const candidates = (await getAvailableAgents()).filter((id) => allowedFor(session.workspaceId).includes(id));
-    return recommendAutoSwitch(prompt, session.cwd, settings, await quotaAwareAgents(candidates, session.workspaceId), routingRunner, signal, { workspaceId: session.workspaceId, sessionId: session.id, role: "router", dataDir: options.dataDir });
+    return recommendAutoSwitch(prompt, session.cwd, settings, await quotaAwareAgents(candidates, session.workspaceId), routingRunner, signal, { workspaceId: session.workspaceId, sessionId: session.id, role: "router", dataDir: options.dataDir }, undefined, policyFor(session.workspaceId).mediaGeneration);
   }, allowedFor, options.dataDir, (session) => fallbackContext(session.workspaceId),
-  (prompt) => routing.loadSettings().then((settings) => mediaRouteRequired(prompt, settings.rules)), options.inactivityTimeoutMs);
+  (prompt) => routing.loadSettings().then((settings) => mediaRouteRequired(prompt, settings.rules)), options.inactivityTimeoutMs, policyFor);
+  // Per-worker git worktrees (server/worktrees.ts). Opt-in so tests and embedders never create branches.
+  if (options.worktrees) orchestra.worktreeDataDir = options.dataDir ?? join(homedir(), ".sinawi");
   const routing = new RoutingService({ dataDir: options.dataDir, runner: routingRunner, skillLoader: options.routingSkillLoader, modelRunner: options.modelRunner, homeDir: options.modelHomeDir, authDiscovery: options.authDiscovery });
   const getAvailableAgents = async () => {
     if (Array.isArray(options.availableAgents)) return [...new Set(options.availableAgents)];
@@ -422,7 +436,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     await modelsReady;
     const settings = await routing.loadSettings();
     if (!mediaRouteRequired(prompt, settings.rules)) return;
-    if (workspaceId === "company") throw new Error(companyMediaUnavailableMessage);
+    assertMediaAllowed(policyFor(workspaceId));
     const available = await quotaAwareAgents(await getAvailableAgents(), workspaceId);
     if (!available.includes("grok") || !allowedFor(workspaceId).includes("grok") || settings.modelOptions.grok.authStatus === "unauthenticated") {
       throw new Error(mediaUnavailableMessage);
@@ -438,8 +452,10 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         timer = setTimeout(() => { controller.abort(); resolve(undefined); }, 15_000);
         timer.unref();
       });
+      const limitsPolicy = policyFor(currentWorkspace());
       const invocation = Promise.resolve().then(() => (options.limitsRunner ?? runCli)({
         agent: "claude", prompt: ".", model: "haiku", cwd: process.cwd(), signal: controller.signal,
+        blockedMcp: policyDenyPatterns(limitsPolicy, "claude"), lockedMcp: lockedToolsFor(limitsPolicy, "claude"),
         usageContext: { workspaceId: currentWorkspace(), sessionId: randomUUID(), role: "router", dataDir: options.dataDir },
         onLine: () => undefined,
       }));
@@ -467,6 +483,29 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   }) : undefined);
   registerBrowserRoutes(app, browserBridge);
   if (options.browserQueue) { const stop = watchQueue(browserBridge); httpServer.once("close", stop); }
+  // Computer use: same relay as the browser bridge, gated by the workspace setting `computerUse`.
+  const openClients = () => [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN);
+  // The caller is identified only by its per-run token (issued by runCli); client-sent ids are ignored.
+  const computerContext = (hint: ComputerHint) => computerContextForToken(hint.token, orchestra.list(), (id) => workspaceState.workspaces.find((item) => item.id === id)?.name);
+  const tokenPrune = setInterval(() => pruneComputerTokens((id) => orchestra.list().some((item) => item.id === id && item.status === "running")), 60_000);
+  tokenPrune.unref();
+  httpServer.once("close", () => clearInterval(tokenPrune));
+  const computerBridge = new ComputerBridge({
+    // Each connection gets its own nonce; /api/computer/result accepts only a nonce sent with that command.
+    send: (command, nonce) => { const clients = openClients(); for (const client of clients) client.send(JSON.stringify({ ...command, nonce: nonce() })); return clients.length; },
+    broadcast: (payload) => { const message = JSON.stringify(payload); for (const client of openClients()) client.send(message); },
+    windows: () => openClients().length,
+    isAllowed: (workspaceId) => isComputerUseAllowed(workspaceState, workspaceId),
+    resolveContext: computerContext,
+    keyAlive: (key) => !key.startsWith("session:") || orchestra.list().some((item) => item.id === key.slice("session:".length)),
+    launchApp: options.browserQueue && process.platform === "darwin" ? () => new Promise<boolean>((done) => {
+      execFile("open", ["-g", "-b", envVar("BUNDLE_ID") ?? "dev.sinawi.app"], (error) => done(!error));
+    }) : undefined,
+    logFile: envVar("COMPUTER_LOG"),
+  });
+  httpServer.once("close", () => computerBridge.dispose());
+  registerComputerRoutes(app, computerBridge);
+  if (options.browserQueue) { const stop = watchComputerQueue(computerBridge); httpServer.once("close", stop); }
   app.use("/api", async (_req, _res, next) => { await ready; next(); });
 
   terminal.registerRoutes(app);
@@ -535,10 +574,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const skills = await skillLoader(cwd);
     const disabled = new Set(settings.disabledSkills.map((name) => name.toLocaleLowerCase()));
     return {
-      mcp: await discoverMcpTools(workspaceId, { runner: options.toolRunner, disabledMcp: settings.disabledMcp }).then(async (tools) => {
+      mcp: await discoverMcpTools(workspaceId, { runner: options.toolRunner, disabledMcp: settings.disabledMcp, policy: policyFor(workspaceId) }).then(async (tools) => {
         // Optional/unused MCPs only show a status in 도구 관리. Notify (grouped) only for MCPs the user relies on.
         await notifications.resolveWhere(workspaceId, (key) => key.startsWith("mcp:"));
-        const pending = tools.filter((tool) => tool.needsAuth && tool.appEnabled && allowedFor(workspaceId).includes(tool.agent) && watchedMcp.test(tool.name));
+        const watched = new Set(policyFor(workspaceId).authAlertTools.map((name) => name.toLocaleLowerCase()));
+        const pending = tools.filter((tool) => tool.needsAuth && tool.appEnabled && allowedFor(workspaceId).includes(tool.agent) && watched.has(tool.name.toLocaleLowerCase()));
         if (pending.length) {
           const first = pending[0];
           const title = pending.length === 1 ? mcpAuthTitle(first.agent, [first.name])
@@ -568,7 +608,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const id = agent(req.body?.agent);
       const name = string(req.body?.name, 200);
       if (typeof req.body?.enabled !== "boolean") throw new Error("도구 사용 설정이 올바르지 않습니다.");
-      if (workspaceId === "company" && name.toLocaleLowerCase() === "bbanana") throw new Error("회사 공간에서는 bbanana를 사용할 수 없습니다.");
+      if (isToolLocked(policyFor(workspaceId), id, name)) throw new WorkspacePolicyError(blockedToolMessage(name));
       await updateMcpTool({ agent: id, name, enabled: req.body.enabled }, { runner: options.toolRunner, codexConfigPath: options.codexConfigPath });
       await mutateToolSettings((settings) => {
         const key = `${id}:${name}`;
@@ -622,7 +662,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       await assertMediaAvailable(input.prompt, workspaceId);
       const permitted = (await getAvailableAgents()).filter((id) => allowedFor(workspaceId).includes(id));
       const available = await quotaAwareAgents(permitted, workspaceId);
-      res.json(await routing.recommend(input.prompt, input.cwd, input.skills, available, { workspaceId, sessionId: randomUUID(), role: "router", dataDir: options.dataDir }, allowedFor(workspaceId)));
+      res.json(await routing.recommend(input.prompt, input.cwd, input.skills, available, { workspaceId, sessionId: randomUUID(), role: "router", dataDir: options.dataDir }, allowedFor(workspaceId), policyFor(workspaceId)));
     } catch (error) { errorResponse(res, error); }
   });
 
@@ -670,27 +710,36 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         defaultsByWorkspace = {};
         for (const [id, value] of Object.entries(input)) defaultsByWorkspace[workspace(id)] = workspaceDefaults(value);
       }
-      const singleWorkspaceId = req.body?.defaults == null ? undefined : workspace(req.body?.workspaceId);
+      const singleWorkspaceId = req.body?.defaults == null && req.body?.settings == null ? undefined : workspace(req.body?.workspaceId);
       const singleDefaults = req.body?.defaults == null ? undefined : workspaceDefaults(req.body.defaults);
+      // Validate before touching the state; merged onto the stored policy below.
+      if (req.body?.settings != null) normalizeWorkspacePolicy(req.body.settings, true);
       workspaceState = await mutateWorkspaceState((state) => {
         const known = new Set(state.workspaces.map((item) => item.id));
         for (const id of [currentWorkspaceId, singleWorkspaceId, ...Object.keys(defaultsByWorkspace ?? {})]) if (id && !known.has(id)) throw new Error("워크스페이스를 찾을 수 없습니다.");
         if (currentWorkspaceId) state.currentWorkspaceId = currentWorkspaceId;
         if (defaultsByWorkspace) Object.assign(state.defaults, defaultsByWorkspace);
         if (singleWorkspaceId && singleDefaults) state.defaults[singleWorkspaceId] = singleDefaults;
+        if (singleWorkspaceId && req.body?.settings != null) (state.settings ??= {})[singleWorkspaceId] = normalizeWorkspacePolicy(req.body.settings, true, state.settings[singleWorkspaceId]);
         return state;
       }, options.dataDir);
+      // Turning computer use off stops already-approved sessions now, not at their next approval.
+      // Turning it on is possible through this API too (an agent can call it): that is not the
+      // boundary. Every session still has to pass the native approval alert in the app.
+      if (singleWorkspaceId && req.body?.settings != null && !isComputerUseAllowed(workspaceState, singleWorkspaceId)) computerBridge.revokeWorkspace(singleWorkspaceId);
       res.json(workspacesPayload());
     } catch (error) { errorResponse(res, error, workspaceNotFound(error) ? 404 : 400); }
   });
   app.post("/api/workspaces", async (req, res) => {
     try {
       const name = workspaceName(req.body?.name);
+      if (req.body?.settings != null) normalizeWorkspacePolicy(req.body.settings, true);
       workspaceState = await mutateWorkspaceState((state) => {
         const id = newWorkspaceId(name, new Set(state.workspaces.map((item) => item.id)));
         state.workspaces.push({ id, name });
-        // A new workspace starts from the current one's defaults (folder, allowed agents, team, ...).
+        // A new workspace starts from the current one's defaults (folder, allowed agents, team, ...) and settings.
         state.defaults[id] = structuredClone(state.defaults[state.currentWorkspaceId] ?? {});
+        (state.settings ??= {})[id] = normalizeWorkspacePolicy(req.body?.settings, true, state.settings[state.currentWorkspaceId]);
         return state;
       }, options.dataDir);
       res.status(201).json(workspacesPayload());
@@ -699,13 +748,18 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.patch("/api/workspaces/:id", async (req, res) => {
     try {
       const id = workspaceIdFormat(routeParam(req.params.id));
-      const name = workspaceName(req.body?.name);
+      const hasSettings = req.body?.settings != null;
+      // Rename, update settings (merged onto the stored ones), or both.
+      const name = req.body?.name == null && hasSettings ? undefined : workspaceName(req.body?.name);
+      if (hasSettings) normalizeWorkspacePolicy(req.body.settings, true);
       workspaceState = await mutateWorkspaceState((state) => {
         const found = state.workspaces.find((item) => item.id === id);
         if (!found) throw new Error("워크스페이스를 찾을 수 없습니다.");
-        found.name = name;
+        if (name) found.name = name;
+        if (hasSettings) (state.settings ??= {})[id] = normalizeWorkspacePolicy(req.body.settings, true, state.settings[id]);
         return state;
       }, options.dataDir);
+      if (hasSettings && !isComputerUseAllowed(workspaceState, id)) computerBridge.revokeWorkspace(id);
       res.json(workspacesPayload());
     } catch (error) { errorResponse(res, error, workspaceNotFound(error) ? 404 : 400); }
   });
@@ -729,6 +783,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         await persistSessions(orchestra.list());
         state.workspaces = remaining;
         delete state.defaults[id];
+        delete state.settings?.[id];
         if (state.currentWorkspaceId === id) state.currentWorkspaceId = moveTo;
         return state;
       }, options.dataDir);
@@ -759,6 +814,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     cacheDir: () => join(options.dataDir ?? join(homedir(), ".sinawi"), "file-previews"),
   });
   registerLinkPreviewRoute(app);
+  registerWorktreeRoutes(app, { orchestra, persist: () => persistSessions(orchestra.list()) });
   app.post("/api/sessions/:id/messages", async (req, res) => {
     try {
       const id = routeParam(req.params.id);
@@ -811,9 +867,14 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   app.delete("/api/sessions/:id", async (req, res) => {
     try {
+      // Worktrees are kept unless asked; cleanup never drops uncommitted changes or branches with commits.
+      const target = orchestra.get(routeParam(req.params.id));
+      if (target?.status === "running") throw new Error("실행 중인 세션은 삭제할 수 없습니다.");
+      const cleanup = req.query.worktrees === "remove" && target?.worktrees?.length ? await cleanupSessionWorktrees(target.worktrees) : undefined;
       orchestra.remove(routeParam(req.params.id));
       await persistSessions(orchestra.list());
-      res.status(204).end();
+      if (cleanup) res.json(cleanup);
+      else res.status(204).end();
     } catch (error) {
       const status = error instanceof Error && error.message === "세션을 찾을 수 없습니다."
         ? 404

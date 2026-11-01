@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod computer;
+mod native_browser;
 mod permissions;
 mod server_agent;
 
@@ -197,6 +199,9 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .on_page_load(|webview, payload| {
+            if webview.label() == native_browser::MAIN_LABEL && payload.event() == PageLoadEvent::Started {
+                native_browser::reset(webview);
+            }
             let is_production_page = payload.url().scheme() == "http"
                 && payload.url().host_str() == Some("127.0.0.1")
                 && payload.url().port_or_known_default() == Some(3001);
@@ -225,7 +230,29 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![open_devtools, server_version_status, permissions::permission_status, permissions::request_permission])
+        .invoke_handler(tauri::generate_handler![
+            open_devtools,
+            server_version_status,
+            permissions::permission_status,
+            permissions::request_permission,
+            computer::computer_exec,
+            computer::computer_revoke,
+            computer::computer_stop,
+            native_browser::native_browser_supported,
+            native_browser::native_browser_open,
+            native_browser::native_browser_layout,
+            native_browser::native_browser_close,
+            native_browser::native_browser_history,
+            native_browser::native_browser_emulate,
+            native_browser::native_browser_devtools,
+            native_browser::native_browser_call,
+            native_browser::native_browser_poll,
+            native_browser::native_browser_screenshot,
+            native_browser::native_browser_dialog,
+            native_browser::native_browser_events,
+            native_browser::native_browser_downloads,
+            native_browser::native_browser_input,
+        ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             if let Some(menu) = app.menu() {
@@ -277,15 +304,17 @@ fn main() {
                             let _ = window.eval("window.__orchestraOpenOnboarding && window.__orchestraOpenOnboarding()");
                         }
                     }
+                    // A native browser tab with keyboard focus counts as "focus in the browser panel".
+                    let native_focus = || serde_json::to_string(&native_browser::focused_tab()).unwrap_or_else(|_| "null".into());
                     if event.id().as_ref() == "close-tab" {
                         if let Some(window) = focused_window(app) {
-                            let _ = window.eval("window.__orchestraMenuCloseTab && window.__orchestraMenuCloseTab()");
+                            let _ = window.eval(format!("window.__orchestraNativeFocus = {}; window.__orchestraMenuCloseTab && window.__orchestraMenuCloseTab()", native_focus()));
                         }
                     }
                     if event.id().as_ref() == "reload-page" {
                         if let Some(window) = focused_window(app) {
                             // The page decides: reload the focused in-app browser tab, or the app.
-                            if let Err(error) = window.eval("(window.__orchestraMenuReload || (() => location.reload()))()") {
+                            if let Err(error) = window.eval(format!("window.__orchestraNativeFocus = {}; (window.__orchestraMenuReload || (() => location.reload()))()", native_focus())) {
                                 eprintln!("failed to reload Sinawi: {error}");
                             }
                         }

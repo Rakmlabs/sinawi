@@ -13,6 +13,8 @@ serde = { version = "1", features = ["derive"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde_json = "1"
+base64 = "0.23"
+tokio = { version = "1", features = ["sync", "time"] }
 
 [features]
 default = ["custom-protocol"]
@@ -23,5 +25,7 @@ custom-protocol = ["tauri/custom-protocol"]
 core-foundation = "0.10"
 objc2 = "0.6"
 block2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSError", "NSString", "NSBundle"] }
+objc2-foundation = { version = "0.3", features = ["NSError", "NSString", "NSBundle", "NSURL", "NSURLRequest", "NSDictionary", "NSValue", "NSData", "NSGeometry", "NSArray", "NSProgress", "NSURLResponse", "NSRange", "NSDate", "NSProcessInfo", "NSObjCRuntime"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "block2", "NSApplication", "NSEvent", "NSGraphicsContext", "NSPanel", "NSSavePanel", "NSOpenPanel", "NSTextInputClient"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKUserContentController", "WKUserScript", "WKSnapshotConfiguration", "WKContentWorld", "WKFrameInfo", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKUIDelegate", "WKNavigationDelegate", "WKNavigationAction", "WKNavigationResponse", "WKDownload", "WKDownloadDelegate", "WKOpenPanelParameters", "WKWindowFeatures", "WKSecurityOrigin"] }
 objc2-user-notifications = { version = "0.3", features = ["UNUserNotificationCenter", "UNNotificationSettings", "block2"] }

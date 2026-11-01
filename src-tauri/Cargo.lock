@@ -3076,17 +3076,21 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 name = "sinawi"
 version = "1.0.0"
 dependencies = [
+ "base64 0.23.1",
  "block2",
  "core-foundation 0.10.1",
  "objc2",
+ "objc2-app-kit",
  "objc2-foundation",
  "objc2-user-notifications",
+ "objc2-web-kit",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "tokio",
 ]
 
 [[package]]
