@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rename, mkdir, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rename, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -148,6 +148,7 @@ test("file queue survives its directory vanishing before the response is written
 
 test("CLI prints usage and parses refs vs selectors via the http route", async () => {
   const dir = await mkdtemp(join(tmpdir(), "aobc-"));
+  for (const a of [".codex", ".claude", ".grok"]) await mkdir(join(dir, a), { recursive: true });
   await installBrowserTooling(dir);
   const cli = join(dir, ".local", "bin", "ao-browser");
   assert.equal(await readFile(cli, "utf8"), CLI_SOURCE);
@@ -225,3 +226,24 @@ test("agents may run ao-browser", () => {
   assert.ok(grok.includes("Bash(ao-browser:*)"));
 });
 
+
+test("skill folders are created only for CLIs that are installed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aobs-"));
+  const savedPath = process.env.PATH;
+  process.env.PATH = "";
+  try {
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await installBrowserTooling(dir);
+    assert.equal(await readFile(join(dir, ".claude", "skills", "orchestra-browser", "SKILL.md"), "utf8"), SKILL_MD);
+    await assert.rejects(stat(join(dir, ".codex")));
+    await assert.rejects(stat(join(dir, ".grok")));
+    // A binary on PATH counts too.
+    const bin = join(dir, "pathbin");
+    await mkdir(bin);
+    await writeFile(join(bin, "grok"), "");
+    process.env.PATH = bin;
+    await installBrowserTooling(dir);
+    assert.equal(await readFile(join(dir, ".grok", "skills", "orchestra-browser", "SKILL.md"), "utf8"), SKILL_MD);
+    await assert.rejects(stat(join(dir, ".codex")));
+  } finally { process.env.PATH = savedPath; }
+});

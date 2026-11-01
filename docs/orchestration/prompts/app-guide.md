@@ -97,7 +97,7 @@ outerHTML: <button class="primary">저장</button>
 
 결과물, 목업, 디자인 시안, UI 확인은 ao-browser로만 연다. 총괄의 읽기 전용 확인은 `snapshot`, `text`, `console`, `screenshot`까지다. `click`, `fill`, `type`은 워커가 하고, 그 순서는 브리프의 검증에 적는다.
 
-조작되는 주소는 http의 localhost, 127.0.0.1, ::1, `*.localhost`뿐이다. 정적 파일은 로컬 서버로 띄운다. 순서, 창이 없을 때의 재시도, 첨부 selector를 ref로 바꾸는 법은 [in-app-browser.md](./in-app-browser.md)에 있다. 같은 실패가 세 번째면 막힘으로 보고한다.
+데스크톱 앱에서는 외부 https 사이트를 포함한 http/https 페이지가 모두 조작된다. 개발 모드(iframe)에서는 http의 localhost, 127.0.0.1, ::1, `*.localhost`뿐이다. `file://`는 열지 않으니 정적 파일은 로컬 서버로 띄운다. 순서, 창이 없을 때의 재시도, 첨부 selector를 ref로 바꾸는 법은 [in-app-browser.md](./in-app-browser.md)에 있다. 같은 실패가 세 번째면 막힘으로 보고한다.
 
 ## 그대로 두는 것
 

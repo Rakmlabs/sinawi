@@ -10,9 +10,11 @@ export function isOwnAppUrl(raw: string | undefined, appPort = 3001): boolean {
 }
 
 /** Why the active tab cannot take AI commands, or undefined when it can. */
-export function agentCommandError(tab: { frameUrl?: string; proxied?: boolean; url?: string } | undefined): string | undefined {
-  if (!tab?.frameUrl) return "열린 페이지가 없습니다. 먼저 `ao-browser goto <포트 또는 localhost 주소>` 로 여세요.";
+export function agentCommandError(tab: { frameUrl?: string; proxied?: boolean; native?: boolean; url?: string } | undefined): string | undefined {
+  if (!tab?.frameUrl) return "열린 페이지가 없습니다. 먼저 `ao-browser goto <주소 또는 포트>` 로 여세요.";
   if (isOwnAppUrl(tab.url) || isOwnAppUrl(tab.frameUrl)) return OWN_APP_ERROR;
+  // Native (desktop app) tabs control any http/https page; the iframe fallback only proxied localhost.
+  if (tab.native) return undefined;
   if (!tab.proxied) return `외부 사이트(${tab.url ?? "https"})는 AI가 조작할 수 없습니다. localhost 개발 서버 페이지만 조작할 수 있어요.`;
   return undefined;
 }

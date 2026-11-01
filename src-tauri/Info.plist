@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>LSFileQuarantineEnabled</key>
+  <true/>
   <key>NSScreenCaptureUsageDescription</key>
   <string>에이전트가 화면 스크린샷을 찍어 작업 결과를 확인할 때 사용합니다.</string>
   <key>NSAppleEventsUsageDescription</key>

@@ -3,13 +3,15 @@ import { accessSync } from "node:fs";
 import { resolve } from "node:path";
 import { envVar, runtimeOptions } from "./runtime.js";
 import { installBrowserTooling } from "./browser-bridge.js";
+import { installComputerTooling } from "./computer-bridge.js";
 import { killCliProcessGroups } from "./cli.js";
 
 const port = Number(envVar("PORT") ?? 3001);
 const options = runtimeOptions();
 if (options.staticDir) accessSync(resolve(options.staticDir, "index.html"));
-const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: true });
+const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: true, worktrees: true });
 void installBrowserTooling().catch((error) => console.error("ao-browser 설치 실패:", error.message));
+void installComputerTooling().catch((error) => console.error("ao-computer 설치 실패:", error.message));
 
 httpServer.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") console.error(`포트 ${port}이 이미 사용 중입니다.`);

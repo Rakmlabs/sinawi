@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { basename, delimiter, extname, join } from "node:path";
 import type { Express } from "express";
 import { envVar } from "./runtime.js";
 
 /** Actions an agent may run against the user's visible in-app browser tab. */
-export const BROWSER_ACTIONS = ["goto", "snapshot", "click", "type", "fill", "press", "scroll", "wait", "text", "console", "screenshot", "back", "forward", "reload", "tabs", "status", "viewport", "network", "dialog", "upload", "hover", "keyboard", "tab", "select"] as const;
+export const BROWSER_ACTIONS = ["goto", "snapshot", "click", "type", "fill", "press", "scroll", "wait", "text", "console", "screenshot", "back", "forward", "reload", "tabs", "status", "viewport", "network", "dialog", "upload", "hover", "keyboard", "tab", "select", "downloads"] as const;
 export type BrowserAction = (typeof BROWSER_ACTIONS)[number];
 export const isBrowserAction = (value: string): value is BrowserAction => (BROWSER_ACTIONS as readonly string[]).includes(value);
 
@@ -24,7 +24,7 @@ export function isOwnAppUrl(raw: string, appPort = Number(envVar("PORT") || 3001
 
 export function defaultTimeout(action: BrowserAction, args: Record<string, unknown>): number {
   const requested = Number(args.timeout);
-  const base = action === "goto" || action === "wait" ? 45_000 : action === "screenshot" ? 15_000 : 10_000;
+  const base = action === "goto" || action === "wait" ? 45_000 : action === "screenshot" ? (args.full ? 30_000 : 15_000) : 10_000;
   return Math.min(60_000, Math.max(1_000, Number.isFinite(requested) && requested > 0 ? requested + 3_000 : base));
 }
 
@@ -49,7 +49,7 @@ export class BrowserBridge {
   }
 
   request(action: BrowserAction, args: Record<string, unknown> = {}, timeoutMs = defaultTimeout(action, args)): Promise<BrowserResult> {
-    if ((action === "goto" || (action === "tab" && String(args.op ?? "") === "new")) && isOwnAppUrl(String(args.url ?? ""))) return Promise.resolve({ ok: false, error: "Sinawi 자체 주소는 열 수 없습니다. localhost 개발 서버 페이지를 여세요." });
+    if ((action === "goto" || (action === "tab" && String(args.op ?? "") === "new")) && isOwnAppUrl(String(args.url ?? ""))) return Promise.resolve({ ok: false, error: "Sinawi 자체 주소는 열 수 없습니다. 개발 서버나 다른 사이트 주소를 여세요." });
     const id = randomUUID();
     return new Promise((resolve) => {
       const command: BrowserCommand = { type: "browser-command", id, action, args };
@@ -178,9 +178,9 @@ const port = process.env.SINAWI_PORT || process.env.AGENT_ORCHESTRA_PORT || "300
 const QUEUE = path.join(os.tmpdir(), "sinawi-browser");
 const QUEUES = [...new Set([QUEUE, "/tmp/sinawi-browser", path.join(process.env.TMPDIR || "/tmp", "sinawi-browser")])];
 const usage = "사용법: ao-browser <명령> [인자]\n" +
-  "  goto <url|포트>               페이지 열기 (탭이 없으면 패널을 염). 로딩과 네트워크 idle을 기다림\n" +
+  "  goto <url|포트>               페이지 열기 (https 외부 사이트도 가능, 탭이 없으면 패널을 염). 로딩과 네트워크 idle을 기다림\n" +
   "  snapshot                      ref가 붙은 접근성 트리\n" +
-  "  click <ref|selector>          클릭. 바뀐 snapshot을 돌려줌\n" +
+  "  click <ref|selector> [--trusted]  클릭. 바뀐 snapshot을 돌려줌 (--trusted: 실제 마우스 이벤트, isTrusted=true)\n" +
   "  fill <ref|selector> <텍스트>  입력칸 값 바꾸기 (type은 이어서 타이핑)\n" +
   "  press <키> [ref]              예: Enter, Tab, Escape, Control+A\n" +
   "  keyboard <키|글자> [ref]      키 조합 또는 글자 입력\n" +
@@ -193,12 +193,20 @@ const usage = "사용법: ao-browser <명령> [인자]\n" +
   "  text [ref|selector]           보이는 텍스트\n" +
   "  console                       콘솔 오류/경고와 네트워크 오류\n" +
   "  network [all]                 네트워크 오류 (all은 최근 요청)\n" +
-  "  screenshot [ref]              뷰포트 또는 요소 PNG\n" +
+  "  screenshot [ref] [--full]     뷰포트 또는 요소 PNG (--full: 페이지 전체, 최대 16000px)\n" +
+  "  downloads [cancel <id>]       다운로드 목록·진행률 (~/Downloads)\n" +
   "  viewport <iphone|tablet|desktop|WxH>\n" +
   "  tab <new|select|close> [url|번호]\n" +
   "  back | forward | reload | tabs | status";
 function parse(argv) {
-  const [action, ...rest] = argv;
+  const flags = { full: argv.includes("--full"), trusted: argv.includes("--trusted") };
+  const [action, ...rest] = argv.filter((v) => v !== "--full" && v !== "--trusted");
+  const out = parseAction(action, rest);
+  if (out[0] === "screenshot" && flags.full) out[1].full = true;
+  if (flags.trusted && ["click", "fill", "type", "press"].includes(out[0])) out[1].trusted = true;
+  return out;
+}
+function parseAction(action, rest) {
   const target = (v) => (v && /^e\d+$/.test(v) ? { ref: v } : v ? { selector: v } : {});
   switch (action) {
     case "goto": case "open": case "navigate": return ["goto", { url: rest[0] }];
@@ -237,6 +245,7 @@ function parse(argv) {
       if (op === "select" || op === "close") return ["tab", { op, index: Number(rest[1]) }];
       return ["tabs", {}];
     }
+    case "downloads": case "download": return ["downloads", rest[0] === "cancel" && rest[1] ? { cancel: rest[1] } : {}];
     case "snapshot": case "console": case "back": case "forward": case "reload": case "tabs": case "status": return [action, {}];
     default: return [undefined, {}];
   }
@@ -294,7 +303,7 @@ function print(out) {
 
 export const SKILL_MD = `---
 name: orchestra-browser
-description: Sinawi 앱 안 브라우저 탭(사용자가 보고 있는 화면)을 직접 조작한다. localhost 개발 서버 페이지를 열고, 요소를 클릭/입력하고, 스냅샷·스크린샷·콘솔 오류로 UI 작업 결과를 확인할 때 사용.
+description: Sinawi 앱 안 브라우저 탭(사용자가 보고 있는 화면)을 직접 조작한다. localhost 개발 서버나 외부 https 페이지를 열고, 요소를 클릭/입력하고, 스냅샷·스크린샷·콘솔 오류로 UI 작업 결과를 확인할 때 사용.
 ---
 
 # orchestra-browser
@@ -307,13 +316,13 @@ description: Sinawi 앱 안 브라우저 탭(사용자가 보고 있는 화면)�
 - **snapshot 먼저.** goto와 click/fill/press 등은 ref가 붙은 접근성 트리 snapshot을 돌려준다. 거기 나온 ref(e12 등)로만 조작한다. 화면이 바뀌면 다시 snapshot. 증거는 \`ao-browser screenshot e12\`(요소) 또는 \`ao-browser screenshot\`(뷰포트).
 - CSS 선택자를 짐작해서 여러 개 연달아 시도하지 않는다. "요소를 찾을 수 없습니다"가 나오면 선택자를 바꾸지 말고 snapshot을 다시 본다. 같은 오류 3번이면 멈추고 막힘으로 보고한다.
 - 사용자가 \`orchestra-attachments\`로 보낸 selector는 ref가 아니다. 메모가 요청이고, 소스(file:line)가 고칠 파일이다. snapshot에서 같은 글자를 찾거나, 그 selector를 한 번만 쓴다.
-- localhost http만 조작된다. 정적 파일은 \`python3 -m http.server 8765 --directory <상대 경로>\` 로 띄운 뒤 \`ao-browser goto 8765\` 또는 \`ao-browser goto localhost:8765/index.html\`. file:// 는 조작되지 않는다. 포트 3100, 3101, 3001은 쓰지 않고, 띄운 서버를 kill 하지 않는다.
+- 데스크톱 앱에서는 http/https 페이지가 모두 조작된다(localhost 개발 서버와 외부 https 사이트). 정적 파일은 \`python3 -m http.server 8765 --directory <상대 경로>\` 로 띄운 뒤 \`ao-browser goto 8765\` 또는 \`ao-browser goto localhost:8765/index.html\`. file:// 는 열지 않는다. 포트 3100, 3101, 3001은 쓰지 않고, 띄운 서버를 kill 하지 않는다.
 - "앱 창이 열려 있지 않습니다"면 같은 명령을 한 번만 다시 보낸다. 서버가 앱을 띄우고 최대 15초 기다린다. 그래도 같거나 사용자가 중지했으면 막힘으로 보고한다.
 - 속성(data-*, src) 확인이 필요하면 \`ao-browser text\`로 보이는 글자를, 스크린샷으로 화면을 확인하고, 구조는 소스 파일을 읽어 확인한다. screenshot PNG는 임시 폴더라 채팅 뷰어가 열지 못한다. 보여 줄 그림은 작업 폴더에 두고 마크다운 경로로 보고한다.
 - 명령 전문은 작업 폴더가 이 저장소일 때 \`docs/orchestration/prompts/in-app-browser.md\`. \`ao-browser --help\` 로도 사용법이 출력된다.
 
 ## 기본 흐름
-1. \`ao-browser goto 5173\` — 포트 번호나 http://localhost:... 주소. 탭이 없으면 패널이 자동으로 열린다.
+1. \`ao-browser goto 5173\` — 포트 번호, http://localhost:... 또는 https://... 주소. 탭이 없으면 패널이 자동으로 열린다.
 2. \`ao-browser snapshot\` — 클릭 가능한 요소가 \`[e12] button "저장"\` 처럼 나온다.
 3. \`ao-browser click e12\`, \`ao-browser fill e3 "hello"\`, \`ao-browser press Enter\`
 4. 화면이 바뀌면 다시 \`snapshot\` (ref는 같은 요소면 유지되지만 새 요소는 새 번호).
@@ -325,15 +334,33 @@ description: Sinawi 앱 안 브라우저 탭(사용자가 보고 있는 화면)�
 - \`keyboard Enter\`, \`keyboard "Control+A"\`, \`keyboard e3 "안녕"\`. \`press\`도 같은 키 조합을 받는다.
 - \`hover e4\`, \`select e5 "서울"\`, \`upload e6 /절대/경로.png\`, \`dialog accept\` 또는 \`dialog dismiss\` (confirm/prompt를 띄우기 전에)
 - \`network\`, \`console\` (콘솔 뒤에 네트워크 오류가 있으면 같이 나온다), \`tab new\`, \`tab select 2\`, \`tab close 2\`
+- 페이지의 alert/confirm/prompt는 앱 화면에 대화상자 막대로 뜨고, 그동안 페이지는 멈춘다. 명령 결과에 "대화상자가 열려 있습니다"가 나오면 \`dialog accept [문구]\` 또는 \`dialog dismiss\`로 답한다. 미리 \`dialog accept\`를 해 두면 다음 대화상자에 자동으로 답한다.
+- 링크·버튼이 새 창(target=_blank, window.open)을 열면 새 탭으로 열린다(OAuth 팝업의 window.opener 유지). \`tabs\`로 확인하고 \`tab select\`로 옮긴다.
+- 파일 다운로드는 ~/Downloads에 저장된다. \`downloads\`로 이름·진행률·경로를 본다. \`downloads cancel d3\`로 취소.
+- snapshot에는 같은 출처 iframe 안의 요소도 ref로 나오고 그대로 click/fill 된다. 교차 출처 iframe은 url만 나온다.
+- \`screenshot --full\`은 페이지 전체(최대 16000px)를 찍는다. \`click e3 --trusted\`, \`fill e4 "값" --trusted\`, \`press Enter --trusted\`는 실제 마우스·키 이벤트(isTrusted)로 보낸다. 기본 DOM 방식이 안 먹힐 때만 쓴다.
 - \`viewport iphone\`, \`viewport tablet\`, \`viewport desktop\`, \`viewport 390x844\`. iphone·tablet과 그 크기 이하는 모바일 user-agent와 터치를 켠다.
 - \`type e3 "abc"\` (기존 값 뒤에 이어 입력), \`back\`, \`forward\`, \`reload\`, \`tabs\`, \`status\`
 - ref 대신 CSS 선택자도 된다: \`click "button.primary"\`
 
 ## 규칙
-- localhost 개발 서버 페이지만 조작된다. 외부 https는 \`controllable: false\`로 표시만 된다. Playwright로 우회하지 말고 그 사실을 보고한다.
+- 응답이나 \`ao-browser tabs\`에 \`controllable: false\`가 나오면(브라우저 개발 모드의 외부 사이트) 그 탭은 조작되지 않는다. Playwright로 우회하지 말고 그 사실을 보고한다.
+- screenshot은 데스크톱 앱에서 WebKit이 그린 실제 픽셀이다(canvas·video·WebGL 포함). 브라우저 패널이 보일 때 찍힌다.
+- 외부 사이트에서 로그인·글쓰기·구매처럼 사용자 계정에 남는 동작은 사용자 확인 없이 하지 않는다.
 - 사용자가 Esc 또는 "중지"를 누르면 이후 명령이 "사용자가 AI 조작을 중지했습니다"로 실패하고 약 1분 동안 막힌다. 멈추고 막힘으로 보고한다.
 - 결제·삭제·외부 전송 같은 되돌릴 수 없는 버튼은 사용자 확인 없이 누르지 마라.
 `;
+
+async function pathExists(path: string) {
+  try { await access(path); return true; } catch { return false; }
+}
+
+async function onPath(binary: string) {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir && await pathExists(join(dir, binary))) return true;
+  }
+  return false;
+}
 
 /** Installs the CLI to ~/.local/bin and the skill into Codex/Claude/Grok skill folders. */
 export async function installBrowserTooling(home = homedir()) {
@@ -342,6 +369,8 @@ export async function installBrowserTooling(home = homedir()) {
   await writeFile(join(bin, "ao-browser"), CLI_SOURCE);
   await chmod(join(bin, "ao-browser"), 0o755);
   for (const agent of [".codex", ".claude", ".grok"]) {
+    // Only for CLIs that are actually installed: a config dir exists or the binary is on PATH.
+    if (!(await pathExists(join(home, agent))) && !(await onPath(agent.slice(1)))) continue;
     const dir = join(home, agent, "skills", "orchestra-browser");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), SKILL_MD);

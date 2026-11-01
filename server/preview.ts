@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { Express, Request, Response } from "express";
-import { pickerScript } from "./preview-picker.js";
+import { nativePageBridge, pickerScript } from "./preview-picker.js";
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"]);
 
@@ -63,6 +63,23 @@ export function injectPicker(html: string): string {
   const htmlTag = html.match(/<html[^>]*>/i);
   if (htmlTag?.index !== undefined) return html.slice(0, htmlTag.index + htmlTag[0].length) + tag + html.slice(htmlTag.index + htmlTag[0].length);
   return tag + html;
+}
+
+/**
+ * Address for a native (WKWebView) tab: any http(s) page loads directly, no proxy. Errors for the app
+ * server itself and for schemes a web view must not load (file:, javascript:, data:, …).
+ */
+export function nativeOpenTarget(raw: string, appPort = 3001, ownPorts: ReadonlySet<number> = new Set()): { url: string } | { error: string } {
+  const address = normalizeAddress(raw);
+  let url: URL;
+  try { url = new URL(address); } catch { return { error: `주소를 해석할 수 없습니다: ${raw}` }; }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { error: `http/https 주소만 열 수 있습니다: ${url.protocol}` };
+  const loopback = isLoopbackTarget(address);
+  if (loopback) {
+    const port = Number(loopback.port || 80);
+    if (port === appPort || ownPorts.has(port)) return { error: "Sinawi 자체 주소는 열 수 없습니다." };
+  }
+  return { url: url.href };
 }
 
 type Proxy = { target: URL; server: Server; port: number; origin: string };
@@ -222,6 +239,12 @@ export function registerPreviewRoutes(app: Express, options: { dataDir?: string;
   app.post("/api/preview/open", async (req: Request, res: Response) => {
     try {
       const raw = typeof req.body?.url === "string" ? req.body.url.slice(0, 4096) : "";
+      if (req.body?.native === true) {
+        const native = nativeOpenTarget(raw, options.appPort ?? 3001, proxies.ownPorts());
+        if ("error" in native) throw new Error(native.error);
+        res.json({ url: native.url, frameUrl: native.url, proxied: false, native: true });
+        return;
+      }
       const address = normalizeAddress(raw);
       const target = isLoopbackTarget(address);
       if (!target) { res.json({ url: address, frameUrl: address, proxied: false }); return; }
@@ -229,6 +252,14 @@ export function registerPreviewRoutes(app: Express, options: { dataDir?: string;
       const proxy = await proxies.open(target);
       res.json({ url: target.href, frameUrl: proxy.origin + target.pathname + target.search + target.hash, proxied: true, proxyOrigin: proxy.origin, targetOrigin: target.origin });
     } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  // Automation script for native browser tabs; the app hands it to WebKit as a document-start user script.
+  app.get("/api/preview/native-script", (_req: Request, res: Response) => {
+    res.type("text/javascript; charset=utf-8").set("cache-control", "no-store").send(pickerScript({ native: true }));
+  });
+  // Its page-world half (console/network reporting, navigator emulation); the automation itself is isolated.
+  app.get("/api/preview/native-page-script", (_req: Request, res: Response) => {
+    res.type("text/javascript; charset=utf-8").set("cache-control", "no-store").send(nativePageBridge());
   });
   app.get("/api/preview/ports", async (_req: Request, res: Response) => {
     const exclude = new Set([options.appPort ?? 3001, 5188, ...proxies.ownPorts()]);

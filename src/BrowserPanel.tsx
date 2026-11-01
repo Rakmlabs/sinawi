@@ -1,6 +1,6 @@
 import { canGo, emptyHistory, recordLocation, traverse, type TabHistory } from "./tab-history";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Bot, ChevronDown, Globe, Monitor, MousePointerClick, Plus, RefreshCw, RotateCw, Server, Smartphone, Square, SquareCode, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, ChevronDown, Download, Globe, Monitor, MousePointerClick, Plus, RefreshCw, RotateCw, Server, Smartphone, Square, SquareCode, X } from "lucide-react";
 import { pushRecent, RECENT_STORE, type RecentSite } from "./browser-surface";
 import { emulationOf, emulationPayload, fitDevice, isViewportError, parseViewportArg, readViewport, serializeViewport, toggleViewport, VIEWPORT_STORE, viewportLabel, type ViewportChoice } from "./browser-viewport";
 import { browserRegistry } from "./browser-registry";
@@ -10,13 +10,18 @@ import { attachmentLabel, displayUrl, type ComposerAttachment, type ElementCaptu
 import { toggleTerminal } from "./terminal-events";
 import { IFRAME_SANDBOX, previewTargetOrigin, trustedPreviewSender } from "./browser-messages";
 import { t } from "./i18n";
+import { captureRect, dialogLines, downloadProgress, downloadsText, formatBytes, FULL_PAGE_MAX_HEIGHT, isCovered, layoutKey, nativeBrowser, nativeBrowserAvailable, nativeFocusedTab, parseEvents, slotBounds, type DialogInfo, type DownloadInfo, type HostEvent, type NativeRect, type NativeResult } from "./native-browser";
 
 type Tab = {
   id: string; input: string; url: string; title: string; frameUrl?: string; proxied?: boolean;
   proxyOrigin?: string; targetOrigin?: string; loading?: boolean; error?: string; nonce: number;
+  /** Native WKWebView tab (desktop app): any http/https page, real history and screenshots. */
+  native?: boolean; canBack?: boolean; canForward?: boolean;
+  /** Native tab blocked on a page alert/confirm/prompt (answered from the dialog bar or by ao-browser dialog). */
+  dialog?: DialogInfo;
 };
 type Port = { port: number; command: string; url: string };
-type OpenResult = { url: string; frameUrl: string; proxied: boolean; proxyOrigin?: string; targetOrigin?: string };
+type OpenResult = { url: string; frameUrl: string; proxied: boolean; native?: boolean; proxyOrigin?: string; targetOrigin?: string };
 
 const BASE_STORE = "orchestra.browser.tabs";
 const newId = () => Math.random().toString(36).slice(2, 10);
@@ -47,7 +52,16 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   useLayoutEffect(() => browserRegistry.mount(instanceId), [instanceId]);
   const isActive = () => browserRegistry.isActive(instanceId);
   // ⌘W etc. apply when focus is in this browser, or its desktop window was the last thing clicked.
-  const ownsFocus = () => browserOwnsFocus() || browserRegistry.desktopFocused();
+  const ownsNativeFocus = () => { const id = nativeFocusedTab(); return Boolean(id && tabsRef.current.some((tab) => tab.id === id)); };
+  const ownsFocus = () => browserOwnsFocus() || browserRegistry.desktopFocused() || ownsNativeFocus();
+  // Desktop app on macOS: tabs are native WKWebViews laid over `slot`; otherwise iframes through the proxy.
+  const [native] = useState(() => nativeBrowserAvailable());
+  const slot = useRef<HTMLDivElement | null>(null);
+  const shownTab = useRef<string | undefined>(undefined);
+  const [frozen, setFrozen] = useState<{ id: string; image: string }>();
+  const [downloads, setDownloads] = useState<DownloadInfo[]>([]);
+  const [downloadsHidden, setDownloadsHidden] = useState<string[]>([]);
+  const [dialogText, setDialogText] = useState("");
   const [recent, setRecent] = useState<RecentSite[]>(() => { try { const list = JSON.parse(localStorage.getItem(RECENT_STORE) ?? "[]"); return Array.isArray(list) ? list : []; } catch { return []; } });
   const [tabs, setTabs] = useState<Tab[]>(() => {
     try {
@@ -88,6 +102,17 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const navigate = useCallback(async (id: string, address: string): Promise<OpenResult | undefined> => {
     if (!address.trim()) return;
     patch(id, { loading: true, error: undefined, input: address });
+    if (native) {
+      try {
+        const result = await post<OpenResult>("/preview/open", { url: address, native: true });
+        await nativeBrowser.open(id, result.url, emulationOf(viewportRef.current).userAgent);
+        patch(id, { url: result.url, input: result.url, frameUrl: result.url, native: true, proxied: false, proxyOrigin: undefined, targetOrigin: undefined, title: result.url.replace(/^https?:\/\//, ""), loading: true });
+        return { ...result, native: true };
+      } catch (error) {
+        patch(id, { loading: false, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    }
     try {
       const result = await post<OpenResult>("/preview/open", { url: address });
       patch(id, { url: result.url, input: result.url, frameUrl: result.frameUrl, proxied: result.proxied, proxyOrigin: result.proxyOrigin, targetOrigin: result.targetOrigin, title: result.url.replace(/^https?:\/\//, ""), loading: true });
@@ -99,7 +124,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       patch(id, { loading: false, error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
-  }, [patch]);
+  }, [patch, native]);
 
   // Restore saved tabs lazily (only the visible one loads immediately).
   useEffect(() => {
@@ -114,6 +139,13 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   useEffect(() => { if (open) refreshPorts(); }, [open, refreshPorts]);
 
   const send = useCallback((id: string, message: Record<string, unknown>) => {
+    const tab = tabsRef.current.find((item) => item.id === id);
+    if (tab?.native) {
+      if (message.type === "reload") void nativeBrowser.history(id, "reload").catch(() => undefined);
+      else if (message.type === "devtools") void nativeBrowser.devtools(id).catch(() => undefined);
+      else if (message.type !== "go") void nativeBrowser.send(id, message);
+      return;
+    }
     // Only the proxied page (same proxy origin) may receive commands; after it navigates elsewhere, drop them.
     const targetOrigin = previewTargetOrigin(tabsRef.current.find((tab) => tab.id === id));
     if (targetOrigin) frames.current.get(id)?.contentWindow?.postMessage({ source: "orchestra-parent", ...message }, targetOrigin);
@@ -126,6 +158,14 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     try { localStorage.setItem(VIEWPORT_STORE, serializeViewport(choice)); } catch { /* ignore */ }
     const reload = previous.userAgent !== next.userAgent || previous.touch !== next.touch;
     for (const tab of tabsRef.current) {
+      if (tab.native && tab.frameUrl) {
+        const id = tab.id;
+        void nativeBrowser.emulate(id, next.userAgent).then((changed) => {
+          void nativeBrowser.send(id, { type: "emulate", ...next, persist: true });
+          if (changed || reload) { void nativeBrowser.history(id, "reload").catch(() => undefined); patch(id, { loading: true }); }
+        }).catch(() => undefined);
+        continue;
+      }
       if (!tab.proxied || !tab.frameUrl) continue;
       send(tab.id, { type: "emulate", ...next, persist: true });
       if (reload) { emuBoot.current.add(`${tab.id}:${tab.frameUrl}`); send(tab.id, { type: "reload" }); patch(tab.id, { loading: true }); }
@@ -133,6 +173,14 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   }, [patch, send]);
   /** Back/forward only inside the tab: replace the iframe location with the tracked entry. */
   const go = useCallback((id: string, delta: -1 | 1) => {
+    const tab = tabsRef.current.find((item) => item.id === id);
+    if (tab?.native) {
+      // Real WebKit history of that tab's own view (never the app window's).
+      if (!(delta < 0 ? tab.canBack : tab.canForward)) return false;
+      patch(id, { loading: true });
+      void nativeBrowser.history(id, delta < 0 ? "back" : "forward").catch(() => undefined);
+      return true;
+    }
     const step = traverse(histories.current.get(id) ?? emptyHistory(), delta);
     if (!step) return false;
     histories.current.set(id, step.history);
@@ -157,6 +205,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     const tab = list[index];
     if (tab.url) setClosed((old) => [...old.slice(-19), tab.url]);
     frames.current.delete(id);
+    if (tab.native) void nativeBrowser.close(id).catch(() => undefined);
     if (list.length === 1 && onLastTabClosed) { onLastTabClosed(); return; }
     if (list.length === 1) { const fresh = blankTab(); setTabs([fresh]); setActiveId(fresh.id); return; }
     const next = list.filter((item) => item.id !== id);
@@ -175,7 +224,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const reload = useCallback(() => {
     const tab = tabsRef.current.find((item) => item.id === activeRef.current);
     if (!tab?.frameUrl) return;
-    if (tab.proxied) send(tab.id, { type: "reload" });
+    if (tab.proxied || tab.native) send(tab.id, { type: "reload" });
     else patch(tab.id, { nonce: tab.nonce + 1 });
     patch(tab.id, { loading: true });
   }, [patch, send]);
@@ -184,15 +233,18 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     onOpenChange(true);
     const tab = tabsRef.current.find((item) => item.id === activeRef.current);
     if (!tab?.frameUrl) { setStatus(t("br.openPageFirst")); return; }
-    if (!tab.proxied) { setStatus(t("br.pickLocalOnly")); return; }
+    if (!tab.proxied && !tab.native) { setStatus(t("br.pickLocalOnly")); return; }
     const on = force ?? !picking.on;
     send(tab.id, { type: "pick", on });
-    frames.current.get(tab.id)?.focus();
+    if (tab.native) void nativeBrowser.history(tab.id, "focus").catch(() => undefined);
+    else frames.current.get(tab.id)?.focus();
   }, [onOpenChange, picking.on, send]);
 
   const openDevtools = useCallback((native: boolean) => {
     const tab = tabsRef.current.find((item) => item.id === activeRef.current);
     const internals = (window as unknown as { __TAURI_INTERNALS__?: { invoke: (cmd: string) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    // Native tab: WebKit's own Web Inspector for that page (⇧ still opens the app's inspector).
+    if (!native && tab?.native) { void nativeBrowser.devtools(tab.id).catch((error: unknown) => setStatus(String(error))); return; }
     if (native || !tab?.proxied) {
       if (internals) void internals.invoke("open_devtools").catch(() => undefined);
       else setStatus(t("br.inspectorDesktopOnly"));
@@ -251,7 +303,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     const w = window as unknown as { __orchestraMenuReload?: () => void; __orchestraMenuCloseTab?: () => void };
     return browserRegistry.handlers(instanceId, {
       reload: () => {
-        if (open && browserOwnsFocus()) perform({ type: "reload" });
+        if (open && (browserOwnsFocus() || ownsNativeFocus())) perform({ type: "reload" });
         else if (Date.now() - (lastAction.current.reload ?? 0) > 500) window.location.reload();
       },
       closeTab: () => { if (open && ownsFocus()) perform({ type: "close-tab" }); },
@@ -275,6 +327,13 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     onNotice?.(t("br.attachedShort", { n: attachments.length }));
   }, [onAttach, onNotice]);
 
+  /** Native tab picks: real WebKit pixels for the viewport and each picked element. */
+  const nativeCaptures = useCallback(async (id: string, items: ElementCapture[]) => {
+    const viewportShot = await nativeBrowser.screenshot(id).catch(() => undefined);
+    const shots = await Promise.all(items.map((item) => item.rect ? nativeBrowser.screenshot(id, captureRect(item.rect, item.viewport)).catch(() => undefined) : Promise.resolve(undefined)));
+    await uploadCaptures(items.map((item, index) => ({ ...item, screenshot: shots[index] ?? item.screenshot })), viewportShot);
+  }, [uploadCaptures]);
+
   const stopAgentRef = useRef<() => void>(() => undefined);
   // ---- AI agent control (ao-browser) ----
   const [agentTab, setAgentTab] = useState<string>();
@@ -282,6 +341,13 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const stoppedUntil = useRef(0);
   const agentIdle = useRef<ReturnType<typeof setTimeout>>(undefined);
   const callFrame = useCallback((id: string, action: string, args: Record<string, unknown>, timeout = 9000) => new Promise<{ ok: boolean; result?: unknown; error?: string }>((resolve) => {
+    if (tabsRef.current.find((item) => item.id === id)?.native) {
+      // Settles through agentPending too, so the user's Stop (Esc) cancels native calls as well.
+      const callId = newId();
+      agentPending.current.set(callId, (value) => { agentPending.current.delete(callId); resolve(value); });
+      void nativeBrowser.run(id, action, args, timeout).then((value) => agentPending.current.get(callId)?.(value));
+      return;
+    }
     const callId = newId();
     const timer = setTimeout(() => { agentPending.current.delete(callId); resolve({ ok: false, error: "페이지가 응답하지 않습니다 (로딩 중이거나 picker 스크립트가 없음)." }); }, timeout);
     agentPending.current.set(callId, (value) => { clearTimeout(timer); agentPending.current.delete(callId); resolve(value); });
@@ -292,7 +358,14 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     await new Promise((r) => setTimeout(r, 300));
     while (Date.now() < until) {
       const tab = tabsRef.current.find((item) => item.id === id);
-      if (tab && !tab.loading && tab.frameUrl) {
+      if (tab?.native) {
+        // Ask WebKit directly: the tab state is only refreshed by the poll loop.
+        const state = await nativeBrowser.poll(id).catch(() => undefined);
+        if (state?.exists && !state.loading && state.url && state.url !== "about:blank") {
+          const res = await callFrame(id, "status", {}, 1500);
+          if (res.ok && (res.result as { ready?: string })?.ready !== "loading") return res;
+        }
+      } else if (tab && !tab.loading && tab.frameUrl) {
         const res = await callFrame(id, "status", {}, 1000);
         if (res.ok && (res.result as { ready?: string })?.ready !== "loading") return res;
       }
@@ -308,7 +381,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     setAgentTab(undefined);
     setStatus(t("br.agentStopped"));
   }, [agentTab, send]);
-  const tabSummary = useCallback((activeTabId: string) => tabsRef.current.map((item, index) => ({ index: index + 1, active: item.id === activeTabId, url: item.url, title: item.title, controllable: Boolean(item.proxied) })), []);
+  const tabSummary = useCallback((activeTabId: string) => tabsRef.current.map((item, index) => ({ index: index + 1, active: item.id === activeTabId, url: item.url, title: item.title, controllable: Boolean(item.proxied || item.native) })), []);
   const pagePicture = useCallback(async (id: string) => {
     const ready = await waitReady(id);
     if (!ready.ok) return ready;
@@ -318,6 +391,32 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     const shot = snap.ok ? snap.result as { snapshot?: string; title?: string } : undefined;
     return { ok: true as const, result: { url: (ready.result as { url?: string })?.url, title: (ready.result as { title?: string })?.title ?? shot?.title, networkIdle: idleResult ? idleResult.idle !== false : undefined, pending: idleResult?.pending, snapshot: shot?.snapshot } };
   }, [waitReady, callFrame]);
+  /** Real NSEvents (isTrusted) for click/fill/type/press. Undefined means "use the DOM path instead". */
+  const trustedInput = useCallback(async (id: string, action: string, args: Record<string, unknown>): Promise<NativeResult | undefined> => {
+    const target = { ref: args.ref, selector: args.selector };
+    try {
+      if (action === "click") {
+        const point = await callFrame(id, "point", target, 6000);
+        if (!point.ok) return point;
+        const at = point.result as { x: number; y: number };
+        await nativeBrowser.input(id, "click", { x: at.x, y: at.y });
+      } else if (action === "fill" || action === "type") {
+        const focus = await callFrame(id, "focus", { ...target, append: action === "type" }, 6000);
+        if (!focus.ok) return focus;
+        const text = String(args.text ?? "");
+        if (text) await nativeBrowser.input(id, "text", { text });
+      } else {
+        if (args.ref || args.selector) { const focus = await callFrame(id, "focus", { ...target, append: true }, 6000); if (!focus.ok) return focus; }
+        await nativeBrowser.input(id, "key", { text: String(args.key ?? "Enter") });
+      }
+    } catch { return undefined; }
+    await new Promise((r) => setTimeout(r, 300));
+    const value = action === "fill" || action === "type" ? await callFrame(id, "value", target, 3000) : undefined;
+    const snap = await callFrame(id, "snapshot", {}, 8000);
+    const picture = snap.result as { snapshot?: string; url?: string; navigated?: boolean } | undefined;
+    const key = action === "click" ? "clicked" : action === "press" ? "pressed" : "filled";
+    return { ok: true, result: { [key]: action === "press" ? String(args.key ?? "Enter") : String(args.ref ?? args.selector ?? ""), value: (value?.result as { value?: string } | undefined)?.value, trusted: true, snapshot: picture?.snapshot, url: picture?.url, navigated: picture?.navigated } };
+  }, [callFrame]);
   const runAgentCommand = useCallback(async (command: AgentCommand) => {
     if (Date.now() < stoppedUntil.current) return { ok: false, error: "사용자가 AI 조작을 중지했습니다. 계속하려면 사용자에게 확인하세요." };
     if (command.action === "viewport") {
@@ -332,6 +431,14 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     const list = tabsRef.current;
     const tab = list.find((item) => item.id === activeRef.current) ?? list[0];
     if (command.action === "tabs") return { ok: true, result: { tabs: tab ? tabSummary(tab.id) : [] } };
+    if (command.action === "downloads") {
+      if (!native) return { ok: false, error: "다운로드 추적은 데스크톱 앱에서만 됩니다." };
+      try {
+        const list = await nativeBrowser.downloads(command.args.cancel ? String(command.args.cancel) : undefined);
+        setDownloads(list);
+        return { ok: true, result: { count: list.length, downloads: list, text: downloadsText(list) } };
+      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+    }
     if (!tab) return { ok: false, error: "열린 페이지가 없습니다. 먼저 `ao-browser goto <포트 또는 localhost 주소>` 로 여세요." };
     if (command.action === "tab") {
       const op = String(command.args.op ?? "list");
@@ -343,7 +450,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
         if (!url) return { ok: true, result: { created: true, index: list.length + 1, title: "새 탭" } };
         let opened: OpenResult | undefined;
         try { opened = await navigate(created.id, url); } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
-        if (!opened?.proxied) return { ok: true, result: { created: true, index: list.length + 1, url: opened?.url, controllable: false, note: "외부 사이트라 표시만 되고 AI 조작은 안 됩니다. localhost 개발 서버만 조작할 수 있습니다." } };
+        if (!opened?.proxied && !opened?.native) return { ok: true, result: { created: true, index: list.length + 1, url: opened?.url, controllable: false, note: "외부 사이트라 표시만 되고 AI 조작은 안 됩니다. localhost 개발 서버만 조작할 수 있습니다." } };
         const picture = await pagePicture(created.id);
         if (!picture.ok) return picture;
         const swapped = withTargetUrls(picture, opened.proxyOrigin, opened.targetOrigin);
@@ -360,7 +467,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       if (op !== "select") return { ok: false, error: "탭 명령은 new, select, close 입니다. 예: ao-browser tab select 2" };
       setActiveId(picked.id);
       if (picked.url && !picked.frameUrl) { try { await navigate(picked.id, picked.url); } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; } }
-      if (picked.proxied && picked.frameUrl) {
+      if ((picked.proxied || picked.native) && picked.frameUrl) {
         const snap = await callFrame(picked.id, "snapshot", {}, 8000);
         const picture = snap.ok ? withTargetUrls(snap, picked.proxyOrigin, picked.targetOrigin) : snap;
         return { ok: true, result: { selected: index, url: picked.url, title: picked.title, snapshot: (picture.result as { snapshot?: string } | undefined)?.snapshot } };
@@ -376,7 +483,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       setStatus(t("br.aiOpening", { url }));
       let opened: OpenResult | undefined;
       try { opened = await navigate(tab.id, url); } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
-      if (!opened?.proxied) return { ok: true, result: { url: opened?.url, controllable: false, note: "외부 사이트라 표시만 되고 AI 조작은 안 됩니다. localhost 개발 서버만 조작할 수 있습니다." } };
+      if (!opened?.proxied && !opened?.native) return { ok: true, result: { url: opened?.url, controllable: false, note: "외부 사이트라 표시만 되고 AI 조작은 안 됩니다. localhost 개발 서버만 조작할 수 있습니다." } };
       const picture = await pagePicture(tab.id);
       setStatus("");
       if (!picture.ok) return picture;
@@ -391,14 +498,73 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       return withTargetUrls(picture, tab.proxyOrigin, tab.targetOrigin);
     }
     if (command.action === "reload") { send(tab.id, { type: "reload" }); patch(tab.id, { loading: true }); return withTargetUrls(await pagePicture(tab.id), tab.proxyOrigin, tab.targetOrigin); }
+    if (tab.native && command.action === "dialog") {
+      // WKUIDelegate dialogs live in Rust: answer the open one, or arm the next one.
+      const args = command.args as { accept?: boolean; promptText?: string; invalid?: string };
+      if (args.invalid) return { ok: false, error: "대화상자 명령은 accept 또는 dismiss 입니다. 예: ao-browser dialog accept" };
+      try {
+        const state = await nativeBrowser.dialog(tab.id, "status");
+        if (args.accept === undefined) {
+          const info = state.dialog ?? state.lastDialog;
+          if (!info) return { ok: true, result: { note: "열린 대화상자 없음", armed: state.armed ?? undefined } };
+          return { ok: true, result: { dialog: info.kind, open: Boolean(state.dialog), message: info.message, origin: info.origin, accept: info.accepted, note: dialogLines(state).join("\n") } };
+        }
+        const text = args.promptText ? String(args.promptText) : undefined;
+        if (state.dialog) {
+          const after = await nativeBrowser.dialog(tab.id, "answer", args.accept !== false, text, "agent");
+          patch(tab.id, { dialog: undefined });
+          await new Promise((r) => setTimeout(r, 300));
+          const snap = await callFrame(tab.id, "snapshot", {}, 8000);
+          return { ok: true, result: { answered: after.lastDialog?.kind, accept: args.accept !== false, note: `${after.lastDialog?.kind ?? "대화상자"}에 ${args.accept !== false ? "accept" : "dismiss"}로 답했습니다`, snapshot: (snap.result as { snapshot?: string } | undefined)?.snapshot, url: tab.url } };
+        }
+        await nativeBrowser.dialog(tab.id, "arm", args.accept !== false, text);
+        return { ok: true, result: { armed: args.accept !== false ? "accept" : "dismiss", promptText: text ?? "", note: `다음 alert/confirm/prompt는 ${args.accept !== false ? "accept" : "dismiss"}` } };
+      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+    }
+    if (tab.native && command.args.trusted && (command.action === "click" || command.action === "fill" || command.action === "type" || command.action === "press")) {
+      const trusted = await trustedInput(tab.id, command.action, command.args);
+      if (trusted) return trusted;
+      // Real events failed (view hidden, unsupported key…): fall through to the DOM path.
+    }
+    if (tab.native && command.action === "screenshot" && command.args.full) {
+      const until = Date.now() + 2000;
+      while (shownTab.current !== tab.id && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+      const page = await callFrame(tab.id, "fullpage", {}, 6000);
+      if (!page.ok) return page;
+      const info = page.result as { width: number; height: number; scrollX: number; scrollY: number; url?: string };
+      try {
+        const image = await nativeBrowser.screenshot(tab.id, { x: 0, y: 0, width: info.width, height: info.height }, true);
+        const height = Math.min(info.height, FULL_PAGE_MAX_HEIGHT);
+        return { ok: true, result: { image, url: info.url, width: Math.round(info.width), height: Math.round(height), fullPage: true, truncated: info.height > FULL_PAGE_MAX_HEIGHT || undefined, native: true } };
+      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+      finally { void callFrame(tab.id, "fullpage", { restore: true, scrollX: info.scrollX, scrollY: info.scrollY }, 3000); }
+    }
+    if (tab.native && command.action === "screenshot") {
+      // Real pixels from WebKit (canvas, video, WebGL, cross-origin images included).
+      const until = Date.now() + 2000;
+      while (shownTab.current !== tab.id && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+      const box = await callFrame(tab.id, "rect", command.args, 9000);
+      if (!box.ok) return box;
+      const info = box.result as { rect: NativeRect; url?: string; innerWidth?: number; innerHeight?: number };
+      const targeted = Boolean(command.args.ref || command.args.selector);
+      try {
+        const image = await nativeBrowser.screenshot(tab.id, targeted ? info.rect : undefined);
+        return { ok: true, result: { image, url: info.url, width: Math.round(targeted ? info.rect.width : info.innerWidth ?? 0), height: Math.round(targeted ? info.rect.height : info.innerHeight ?? 0), native: true } };
+      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+    }
     const timeout = Math.min(58_000, (Number(command.args.timeout) || 0) + (command.action === "wait" ? 16_000 : command.action === "screenshot" ? 14_000 : command.action === "upload" ? 20_000 : 9_000));
     const result = await callFrame(tab.id, command.action, command.args, timeout);
+    if (tab.native && command.action === "status" && result.ok && result.result && typeof result.result === "object") {
+      const state = await nativeBrowser.poll(tab.id).catch(() => undefined);
+      const list = await nativeBrowser.downloads().catch(() => [] as DownloadInfo[]);
+      result.result = { ...(result.result as object), dialog: state?.dialog ?? undefined, downloads: list.length ? downloadsText(list.slice(-5)) : undefined };
+    }
     if ((result.result as { navigated?: boolean } | undefined)?.navigated) {
       const picture = await pagePicture(tab.id);
       if (picture.ok) result.result = { ...(result.result as object), ...(picture.result as object) };
     }
     return withTargetUrls(result, tab.proxyOrigin, tab.targetOrigin);
-  }, [onOpenChange, navigate, waitReady, callFrame, send, patch, go, applyViewport, pagePicture, tabSummary, closeTab]);
+  }, [onOpenChange, navigate, waitReady, callFrame, send, patch, go, applyViewport, pagePicture, tabSummary, closeTab, trustedInput, native]);
   stopAgentRef.current = stopAgent;
   useEffect(() => {
     const el = viewportBox.current;
@@ -450,22 +616,25 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     return () => window.removeEventListener("orchestra:browser-command", handle);
   }, []);
 
-  // Messages from the injected page script.
-  useEffect(() => {
-    const handle = (event: MessageEvent) => {
-      // Trust only our own preview iframes, from their proxy origin (see browser-messages.ts).
-      const id = trustedPreviewSender(event, frames.current, tabsRef.current);
-      if (!id) return;
-      const data = event.data;
-      if (data.type === "agent-result") { agentPending.current.get(String(data.id))?.({ ok: Boolean(data.ok), result: data.result, error: data.error }); return; }
+  // Messages from the injected page script: postMessage from proxied iframes, or drained from native tabs.
+  const onPageMessage = useCallback((id: string, data: Record<string, unknown>) => {
+      if (data.type === "agent-result") { agentPending.current.get(String(data.id))?.({ ok: Boolean(data.ok), result: data.result, error: data.error as string | undefined }); return; }
       if (data.type === "agent-stop") { stopAgentRef.current(); return; }
       const tab = tabsRef.current.find((item) => item.id === id);
       if (data.type === "location" && tab) {
-        histories.current.set(id, recordLocation(histories.current.get(id) ?? emptyHistory(), data.href));
-        setHistoryVersion((v) => v + 1);
+        if (!tab.native) {
+          histories.current.set(id, recordLocation(histories.current.get(id) ?? emptyHistory(), String(data.href)));
+          setHistoryVersion((v) => v + 1);
+        }
         const url = displayUrl(String(data.href), tab.proxyOrigin, tab.targetOrigin);
-        if (!/^about:/.test(url)) setRecent((old) => { const next = pushRecent(old, url, String(data.title || "")); localStorage.setItem(RECENT_STORE, JSON.stringify(next)); return next; });
-        patch(id, { url, input: document.activeElement === urlInput.current && id === activeRef.current ? tab.input : url, title: String(data.title || url.replace(/^https?:\/\//, "")), loading: false, error: undefined });
+        if (!/^https?:/.test(url)) return;
+        if (url !== tab.url) setRecent((old) => { const next = pushRecent(old, url, String(data.title || "")); localStorage.setItem(RECENT_STORE, JSON.stringify(next)); return next; });
+        // Native tabs: loading comes from WebKit (poll), not from the page script.
+        patch(id, { url, input: document.activeElement === urlInput.current && id === activeRef.current ? tab.input : url, title: String(data.title || url.replace(/^https?:\/\//, "")), ...(tab.native ? {} : { loading: false }), error: undefined });
+      } else if (data.type === "open-tab" && typeof data.href === "string" && /^https?:\/\//.test(data.href)) {
+        addTab(data.href);
+      } else if (data.type === "focus") {
+        browserRegistry.activate(instanceId);
       } else if (data.type === "shortcut") {
         const key = { key: String(data.key), code: String(data.code), metaKey: Boolean(data.metaKey), ctrlKey: Boolean(data.ctrlKey), shiftKey: Boolean(data.shiftKey), altKey: Boolean(data.altKey) };
         if (key.ctrlKey && !key.metaKey && (key.code === "Backquote" || key.key === "`")) { perform({ type: "toggle-terminal" }); return; }
@@ -476,11 +645,156 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
         if (id === activeRef.current) setPicking({ on: Boolean(data.on), count: Number(data.count) || 0 });
       } else if (data.type === "progress") setStatus(String(data.text));
       else if (data.type === "error") setStatus(t("br.error", { text: String(data.text) }));
-      else if (data.type === "attachments" && Array.isArray(data.items)) void uploadCaptures(data.items as ElementCapture[], typeof data.viewportShot === "string" ? data.viewportShot : undefined);
+      else if (data.type === "attachments" && Array.isArray(data.items)) {
+        if (tab?.native) void nativeCaptures(id, data.items as ElementCapture[]);
+        else void uploadCaptures(data.items as ElementCapture[], typeof data.viewportShot === "string" ? data.viewportShot : undefined);
+      }
+  }, [patch, perform, uploadCaptures, nativeCaptures, addTab, instanceId]);
+  const pageMessageRef = useRef(onPageMessage);
+  pageMessageRef.current = onPageMessage;
+  useEffect(() => {
+    const handle = (event: MessageEvent) => {
+      // Trust only our own preview iframes, from their proxy origin (see browser-messages.ts).
+      const id = trustedPreviewSender(event, frames.current, tabsRef.current);
+      if (id) pageMessageRef.current(id, event.data);
     };
     window.addEventListener("message", handle);
     return () => window.removeEventListener("message", handle);
-  }, [patch, perform, uploadCaptures]);
+  }, []);
+
+  // ---- native tabs: keep each WKWebView exactly over the slot, hidden whenever app UI covers it ----
+  const openRef = useRef(open); openRef.current = open;
+  useEffect(() => {
+    if (!native) return;
+    let lastKey = "";
+    const shown = new Set<string>();
+    const reopening = new Set<string>();
+    let freezing = false;
+    const apply = (id: string, rect: NativeRect | undefined, show: boolean, zoom: number) => {
+      if (show) shown.add(id); else shown.delete(id);
+      void nativeBrowser.layout(id, rect, show, zoom).then((exists) => {
+        const tab = tabsRef.current.find((item) => item.id === id);
+        // The view is gone (app reload, StrictMode remount): load the tab's page again.
+        if (!exists && show && tab?.url && !reopening.has(id)) { reopening.add(id); void navigate(id, tab.url).catch(() => undefined).finally(() => reopening.delete(id)); lastKey = ""; }
+      }).catch(() => undefined);
+    };
+    const sync = () => {
+      if (freezing) return;
+      const list = tabsRef.current;
+      const tab = list.find((item) => item.id === activeRef.current);
+      const el = slot.current;
+      // No document.hidden check: an occluded window reports hidden, and agents still need the view laid out.
+      const box = openRef.current && tab?.native && el?.isConnected ? el.getBoundingClientRect() : undefined;
+      const rect = box ? slotBounds(box, window.innerWidth, window.innerHeight) : undefined;
+      const covered = Boolean(rect && isCovered(rect, (x, y) => document.elementFromPoint(x, y), el));
+      const visible = Boolean(rect && !covered);
+      const choice = viewportRef.current;
+      const zoom = choice.mode === "device" && box ? box.width / choice.width : 1;
+      const key = `${layoutKey(tab?.id, rect, visible, zoom)}|${list.filter((item) => item.native).map((item) => item.id).join(",")}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      if (covered && tab && shown.has(tab.id)) {
+        // Keep a still frame under the menu/dialog instead of a blank hole.
+        freezing = true;
+        const id = tab.id;
+        void nativeBrowser.screenshot(id).then((image) => setFrozen({ id, image })).catch(() => undefined).finally(() => { freezing = false; apply(id, undefined, false, zoom); shownTab.current = undefined; lastKey = ""; });
+        return;
+      }
+      for (const item of list) {
+        if (!item.native) continue;
+        const show = visible && item.id === tab?.id;
+        if (!show && !shown.has(item.id)) continue;
+        apply(item.id, show ? rect : undefined, show, zoom);
+      }
+      shownTab.current = visible ? tab?.id : undefined;
+      if (visible) setFrozen((old) => (old ? undefined : old));
+    };
+    const timer = setInterval(sync, 120);
+    const observer = new ResizeObserver(sync);
+    if (panel.current) observer.observe(panel.current);
+    window.addEventListener("resize", sync);
+    document.addEventListener("visibilitychange", sync);
+    sync();
+    return () => {
+      clearInterval(timer); observer.disconnect();
+      window.removeEventListener("resize", sync);
+      document.removeEventListener("visibilitychange", sync);
+      for (const id of shown) void nativeBrowser.layout(id, undefined, false).catch(() => undefined);
+    };
+  }, [native, navigate]);
+  // ---- native host events: popups become tabs, popups that close themselves go away, downloads ----
+  const downloadsActive = useRef(false);
+  const refreshDownloads = useCallback(async () => {
+    const list = await nativeBrowser.downloads().catch(() => undefined);
+    if (!list) return;
+    const wasActive = downloadsActive.current;
+    downloadsActive.current = list.some((item) => item.state === "starting" || item.state === "downloading");
+    setDownloads((old) => {
+      for (const item of list) {
+        const previous = old.find((entry) => entry.id === item.id);
+        if (item.state === "done" && previous && previous.state !== "done") setStatus(t("br.downloadSaved", { name: item.filename ?? item.url }));
+      }
+      return list;
+    });
+    if (wasActive && !downloadsActive.current) setDownloadsHidden([]);
+  }, []);
+  const onHostEvent = useCallback((event: HostEvent) => {
+    if (event.type === "popup") {
+      // WebKit already created and is loading this view (window.opener intact); just give it a tab.
+      const url = /^https?:/.test(event.url) ? event.url : "";
+      const tab: Tab = { ...blankTab(), id: event.tab, input: url, url, title: url.replace(/^https?:\/\//, "") || t("br.newTab"), frameUrl: url || "about:blank", native: true, loading: true };
+      setTabs((old) => old.some((item) => item.id === tab.id) ? old : [...old, tab]);
+      setActiveId(event.tab);
+    } else if (event.type === "closed") {
+      if (tabsRef.current.some((item) => item.id === event.tab)) closeTab(event.tab);
+    } else if (event.type === "download") {
+      downloadsActive.current = true;
+      setDownloadsHidden([]);
+      void refreshDownloads();
+    }
+  }, [closeTab, refreshDownloads]);
+  const hostEventRef = useRef(onHostEvent);
+  hostEventRef.current = onHostEvent;
+  const answerDialog = useCallback((id: string, accept: boolean) => {
+    const text = dialogText;
+    patch(id, { dialog: undefined });
+    void nativeBrowser.dialog(id, "answer", accept, accept ? text : undefined, "user").catch((error: unknown) => setStatus(String(error)));
+    void nativeBrowser.history(id, "focus").catch(() => undefined);
+  }, [dialogText, patch]);
+  // Poll the visible native tab: WebKit state (url, title, loading, history) plus queued page events.
+  useEffect(() => {
+    if (!native || !open) return;
+    let busy = false;
+    const loadingBefore = new Map<string, boolean>();
+    const tick = async () => {
+      const tab = tabsRef.current.find((item) => item.id === activeRef.current);
+      if (busy || !tab?.native || !tab.frameUrl) return;
+      busy = true;
+      try {
+        const owned = tabsRef.current.filter((item) => item.native).map((item) => item.id);
+        if (owned.length) for (const event of await nativeBrowser.events(owned).catch(() => [] as HostEvent[])) hostEventRef.current(event);
+        if (downloadsActive.current) void refreshDownloads();
+        const state = await nativeBrowser.poll(tab.id, true).catch(() => undefined);
+        if (!state?.exists) return;
+        const dialog = state.dialog ?? undefined;
+        const before = tabsRef.current.find((item) => item.id === tab.id)?.dialog;
+        if (JSON.stringify(before ?? null) !== JSON.stringify(dialog ?? null)) { patch(tab.id, { dialog }); setDialogText(dialog?.defaultText ?? ""); }
+        for (const event of parseEvents(state.events)) pageMessageRef.current(tab.id, event);
+        const current = tabsRef.current.find((item) => item.id === tab.id);
+        if (!current) return;
+        if (state.url && /^https?:/.test(state.url) && (state.url !== current.url || (state.title && state.title !== current.title))) pageMessageRef.current(tab.id, { type: "location", href: state.url, title: state.title });
+        if (current.loading !== state.loading || current.canBack !== state.canGoBack || current.canForward !== state.canGoForward) patch(tab.id, { loading: state.loading, canBack: state.canGoBack, canForward: state.canGoForward });
+        // A new document lost the page-side emulation (touch, viewport lock): send it again.
+        if (loadingBefore.get(tab.id) && !state.loading && viewportRef.current.mode === "device") void nativeBrowser.send(tab.id, { type: "emulate", ...emulationPayload(viewportRef.current), persist: true });
+        loadingBefore.set(tab.id, state.loading);
+      } finally { busy = false; }
+    };
+    const timer = setInterval(() => void tick(), 300);
+    void tick();
+    return () => clearInterval(timer);
+  }, [native, open, patch, refreshDownloads]);
+  // Native views live outside React: close them when this panel goes away (desktop window closed).
+  useEffect(() => () => { for (const tab of tabsRef.current) if (tab.native) void nativeBrowser.close(tab.id).catch(() => undefined); }, []);
 
   useEffect(() => { setPicking({ on: false, count: 0 }); }, [activeId]);
   useEffect(() => { if (!status) return; const timer = setTimeout(() => setStatus(""), 5000); return () => clearTimeout(timer); }, [status]);
@@ -502,9 +816,9 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
         <button type="button" className="browser-icon" aria-label={t("br.newTabShortcut")} title={t("br.newTabShortcut")} onClick={() => addTab()}><Plus size={16} /></button>
         <span className="browser-tabs-spacer" />
       </div>
-      <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); void navigate(active.id, active.input).catch(() => undefined); frames.current.get(active.id)?.focus(); }}>
-        <button type="button" className="browser-icon" aria-label={t("br.back")} title={t("br.back")} disabled={!active.proxied || !canGo(histories.current.get(active.id), -1)} onClick={() => go(active.id, -1)}><ArrowLeft size={17} /></button>
-        <button type="button" className="browser-icon" aria-label={t("br.forward")} title={t("br.forward")} disabled={!active.proxied || !canGo(histories.current.get(active.id), 1)} onClick={() => go(active.id, 1)}><ArrowRight size={17} /></button>
+      <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); const id = active.id; void navigate(id, active.input).then((opened) => { if (opened?.native) void nativeBrowser.history(id, "focus").catch(() => undefined); }).catch(() => undefined); frames.current.get(id)?.focus(); }}>
+        <button type="button" className="browser-icon" aria-label={t("br.back")} title={t("br.back")} disabled={active.native ? !active.canBack : !active.proxied || !canGo(histories.current.get(active.id), -1)} onClick={() => go(active.id, -1)}><ArrowLeft size={17} /></button>
+        <button type="button" className="browser-icon" aria-label={t("br.forward")} title={t("br.forward")} disabled={active.native ? !active.canForward : !active.proxied || !canGo(histories.current.get(active.id), 1)} onClick={() => go(active.id, 1)}><ArrowRight size={17} /></button>
         <button type="button" className="browser-icon" aria-label={t("br.reload")} title={t("br.reload")} disabled={!active.frameUrl} onClick={reload}><RotateCw size={16} /></button>
         <input ref={urlInput} className="browser-url" aria-label={t("br.address")} value={active.input} spellCheck={false} placeholder={t("br.addressPlaceholder")}
           onChange={(event) => patch(active.id, { input: event.target.value })}
@@ -556,8 +870,42 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       </form>
       {agentTab && <div className="browser-ai-bar" role="status"><Bot size={15} /><span>{t("br.aiBar")}</span><button type="button" onClick={stopAgent}><Square size={12} />{t("br.stopEsc")}</button></div>}
       {status && <div className="browser-status" role="status">{status}</div>}
+      {active.native && active.dialog && (
+        <form className="browser-dialog" role="alertdialog" aria-label={t("br.dialogFrom", { origin: active.dialog.origin })}
+          onSubmit={(event) => { event.preventDefault(); answerDialog(active.id, true); }}
+          onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); answerDialog(active.id, false); } }}>
+          <div className="browser-dialog-text"><small>{t("br.dialogFrom", { origin: active.dialog.origin })}</small><p>{active.dialog.message}</p></div>
+          {active.dialog.kind === "prompt" && <input autoFocus aria-label={t("br.dialogInput")} value={dialogText} onChange={(event) => setDialogText(event.target.value)} />}
+          <div className="browser-dialog-actions">
+            {active.dialog.kind !== "alert" && <button type="button" onClick={() => answerDialog(active.id, false)}>{t("br.dialogCancel")}</button>}
+            <button type="submit" className="primary" autoFocus={active.dialog.kind !== "prompt"}>{t("br.dialogOk")}</button>
+          </div>
+        </form>
+      )}
+      {native && downloads.some((item) => !downloadsHidden.includes(item.id)) && (
+        <div className="browser-downloads" role="status" aria-label={t("br.downloads")}>
+          {downloads.filter((item) => !downloadsHidden.includes(item.id)).slice(-3).map((item) => {
+            const progress = downloadProgress(item);
+            const busy = item.state === "starting" || item.state === "downloading";
+            return (
+              <div key={item.id} className={`browser-download ${item.state}`} title={item.path ?? item.url}>
+                <Download size={14} />
+                <span className="browser-download-name">{item.filename ?? item.url}</span>
+                <span className="browser-download-meta">{busy ? `${progress != null ? `${Math.round(progress * 100)}% · ` : ""}${formatBytes(item.received)}` : item.state === "done" ? `${item.needsReview ? t("br.downloadReview") : t("br.downloadDone")} · ${formatBytes(item.total || item.received)}` : item.state === "canceled" ? t("br.downloadCanceled") : t("br.downloadFailed")}</span>
+                {busy && <progress max={1} value={progress ?? undefined} />}
+                {busy && <button type="button" className="browser-icon" aria-label={t("br.downloadCancel")} title={t("br.downloadCancel")} onClick={() => void nativeBrowser.downloads(item.id).then(setDownloads).catch(() => undefined)}><X size={13} /></button>}
+              </div>
+            );
+          })}
+          <button type="button" className="browser-icon" aria-label={t("br.downloadsHide")} title={t("br.downloadsHide")} onClick={() => setDownloadsHidden(downloads.map((item) => item.id))}><X size={14} /></button>
+        </div>
+      )}
       <div ref={viewportBox} className={`browser-viewport${viewport.mode === "device" && active.frameUrl ? " framed" : ""}`} style={viewport.mode === "device" ? { "--ao-w": `${viewport.width}px`, "--ao-h": `${viewport.height}px`, "--ao-zoom": String(fitDevice(viewport.width, viewport.height, panelBox.w, panelBox.h).scale) } as CSSProperties : undefined}>
-        {tabs.map((tab) => tab.frameUrl ? (
+        {tabs.map((tab) => tab.native && tab.frameUrl ? (tab.id === active.id ? (
+          // The native WKWebView is positioned over this slot; it shows a still frame while app UI covers it.
+          <div key={`${tab.id}:native`} ref={slot} className="browser-frame browser-native-slot" aria-label={tab.title}
+            style={frozen?.id === tab.id ? { backgroundImage: `url(${frozen.image})`, backgroundSize: "100% 100%" } : undefined} />
+        ) : null) : tab.frameUrl ? (
           <iframe key={`${tab.id}:${tab.nonce}:${tab.frameUrl}`} ref={(el) => { if (el) frames.current.set(tab.id, el); }} className="browser-frame" hidden={tab.id !== active.id}
             src={tab.frameUrl} title={tab.title} onLoad={() => {
               const payload = emulationPayload(viewportRef.current);
@@ -593,7 +941,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
             <p className="browser-help">{t("br.help")}</p>
           </div>
         )}
-        {active.frameUrl && !active.proxied && <div className="browser-external-note">{t("br.externalNote")}</div>}
+        {active.frameUrl && !active.proxied && !active.native && <div className="browser-external-note">{t("br.externalNote")}</div>}
       </div>
     </aside>
   );

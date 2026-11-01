@@ -1,7 +1,50 @@
 import { accessibleRole, formatNode } from "./browser-snapshot.js";
 import { cssSelectorFor, trimOuterHtml } from "./preview-selector.js";
 
+/** React component lookup for an element (fiber expandos, data-* source hints). Runs in the page's own world. */
+const REACT_INFO = String.raw`function reactInfo(el) {
+    var out = null;
+    try {
+      var key = Object.keys(el).find(function (k) { return k.indexOf("__reactFiber$") === 0 || k.indexOf("__reactInternalInstance$") === 0; });
+      var fiber = key ? el[key] : null, names = [], source = null, stackHint = null, guard = 0;
+      while (fiber && guard++ < 60) {
+        var t = fiber.type;
+        if (t && typeof t !== "string") {
+          var name = t.displayName || t.name || (t.render && (t.render.displayName || t.render.name));
+          if (name && names.length < 4 && names.indexOf(name) < 0) names.push(name);
+          if (!source && fiber._debugSource) source = fiber._debugSource.fileName + ":" + fiber._debugSource.lineNumber + (fiber._debugSource.columnNumber ? ":" + fiber._debugSource.columnNumber : "");
+          if (!stackHint && fiber._debugStack && fiber._debugStack.stack) {
+            var line = String(fiber._debugStack.stack).split("\n").slice(1).find(function (l) { return !/node_modules|react-dom|react\.development|jsx-dev-runtime/.test(l); });
+            if (line) stackHint = line.trim().replace(/^at\s+/, "");
+          }
+        }
+        if (names.length >= 4 && source) break;
+        fiber = fiber.return;
+      }
+      if (names.length || source) out = { name: names[0], chain: names, source: source || undefined, stack: stackHint || undefined };
+    } catch (e) {}
+    var n = el, guard2 = 0;
+    while (n && n.nodeType === 1 && guard2++ < 10) {
+      var file = n.getAttribute("data-inspector-relative-path") || n.getAttribute("data-source") || n.getAttribute("data-file") || n.getAttribute("data-component-path");
+      var comp = n.getAttribute("data-component") || n.getAttribute("data-component-name");
+      if (file || comp) {
+        out = out || {};
+        if (comp && !out.name) out.name = comp;
+        if (file && !out.source) out.source = file + (n.getAttribute("data-inspector-line") ? ":" + n.getAttribute("data-inspector-line") : "");
+        break;
+      }
+      n = n.parentElement;
+    }
+    return out;
+  }`;
+
 // Injected into every proxied HTML page. Talks to the Sinawi window via postMessage.
+// Native mode (Tauri WKWebView tab): injected as a document-start user script instead, in its own WebKit
+// content world ("sinawi"): it shares the DOM with the page but not JS globals, so the page can neither see
+// window.__aoNative nor patch what snapshot/click use. There is no parent window; the app polls queued events
+// and calls window.__aoNative.run() through WebKit, never via IPC. Page-world hooks (console, fetch/XHR,
+// navigator emulation, React fiber lookups) live in a small bridge script (nativePageBridge) that talks to
+// this world through DOM CustomEvents carrying JSON strings.
 const body = String.raw`
 (function () {
   if (window.__orchestraPicker) return;
@@ -10,9 +53,19 @@ const body = String.raw`
   var trimOuterHtml = __TRIM__;
   var accessibleRole = __ROLE__;
   var formatNode = __NODE__;
+  var NATIVE = __NATIVE__;
   var parentWin = window.parent;
-  if (!parentWin || parentWin === window) return;
-  function post(msg) { msg.source = "orchestra-preview"; try { parentWin.postMessage(msg, "*"); } catch (e) {} }
+  if (NATIVE ? window.top !== window : (!parentWin || parentWin === window)) return;
+  var nativeQueue = [], nativeWaiters = {}, nativeSeq = 0;
+  function post(msg) {
+    msg.source = "orchestra-preview";
+    if (NATIVE) {
+      if (msg.type === "agent-result") { var waiter = nativeWaiters[msg.id]; delete nativeWaiters[msg.id]; if (waiter) waiter(msg); return; }
+      nativeQueue.push(msg); if (nativeQueue.length > 200) nativeQueue.shift();
+      return;
+    }
+    try { parentWin.postMessage(msg, "*"); } catch (e) {}
+  }
 
   // ---- location reporting ----
   var lastHref = "";
@@ -40,6 +93,7 @@ const body = String.raw`
 
   // ---- shortcut forwarding (keys never reach the app while the iframe has focus) ----
   addEventListener("keydown", function (e) {
+    if (!e.isTrusted) return;
     var k = (e.key || "").toLowerCase();
     var meta = e.metaKey && !e.altKey;
     var forward = (meta && !e.ctrlKey && (/^[1-9]$/.test(k) || ["t", "w", "l", "r", "["," ]".trim(), "]"].indexOf(k) >= 0 || (e.shiftKey && (k === "c" || k === "b" || k === "t"))))
@@ -183,40 +237,18 @@ const body = String.raw`
   }
 
   // ---- element data ----
+  // Page JS expandos (__reactFiber$…) are invisible from an isolated world: ask the page bridge.
+  var reactInfoHere = __REACT__;
+  var probeResult = null;
+  if (NATIVE) document.addEventListener("sinawi:react-info", function (e) { probeResult = typeof e.detail === "string" ? e.detail : null; }, true);
   function reactInfo(el) {
+    if (!NATIVE) return reactInfoHere(el);
+    probeResult = null;
+    try { el.dispatchEvent(new CustomEvent("sinawi:react-probe", { bubbles: true, composed: true })); } catch (e) {}
     var out = null;
-    try {
-      var key = Object.keys(el).find(function (k) { return k.indexOf("__reactFiber$") === 0 || k.indexOf("__reactInternalInstance$") === 0; });
-      var fiber = key ? el[key] : null, names = [], source = null, stackHint = null, guard = 0;
-      while (fiber && guard++ < 60) {
-        var t = fiber.type;
-        if (t && typeof t !== "string") {
-          var name = t.displayName || t.name || (t.render && (t.render.displayName || t.render.name));
-          if (name && names.length < 4 && names.indexOf(name) < 0) names.push(name);
-          if (!source && fiber._debugSource) source = fiber._debugSource.fileName + ":" + fiber._debugSource.lineNumber + (fiber._debugSource.columnNumber ? ":" + fiber._debugSource.columnNumber : "");
-          if (!stackHint && fiber._debugStack && fiber._debugStack.stack) {
-            var line = String(fiber._debugStack.stack).split("\n").slice(1).find(function (l) { return !/node_modules|react-dom|react\.development|jsx-dev-runtime/.test(l); });
-            if (line) stackHint = line.trim().replace(/^at\s+/, "");
-          }
-        }
-        if (names.length >= 4 && source) break;
-        fiber = fiber.return;
-      }
-      if (names.length || source) out = { name: names[0], chain: names, source: source || undefined, stack: stackHint || undefined };
-    } catch (e) {}
-    var n = el, guard2 = 0;
-    while (n && n.nodeType === 1 && guard2++ < 10) {
-      var file = n.getAttribute("data-inspector-relative-path") || n.getAttribute("data-source") || n.getAttribute("data-file") || n.getAttribute("data-component-path");
-      var comp = n.getAttribute("data-component") || n.getAttribute("data-component-name");
-      if (file || comp) {
-        out = out || {};
-        if (comp && !out.name) out.name = comp;
-        if (file && !out.source) out.source = file + (n.getAttribute("data-inspector-line") ? ":" + n.getAttribute("data-inspector-line") : "");
-        break;
-      }
-      n = n.parentElement;
-    }
-    return out;
+    try { out = probeResult ? JSON.parse(probeResult) : null; } catch (e) {}
+    probeResult = null;
+    return out && typeof out === "object" ? out : null;
   }
   var STYLE_KEYS = ["display","position","width","height","margin","padding","color","background-color","background-image","font-family","font-size","font-weight","line-height","text-align","border","border-radius","box-shadow","gap","flex-direction","justify-content","align-items","grid-template-columns","overflow","opacity","z-index"];
   function styles(el) {
@@ -226,6 +258,8 @@ const body = String.raw`
   }
   function withTimeout(p, ms) { return Promise.race([p, new Promise(function (r) { setTimeout(function () { r(null); }, ms); })]); }
   function loadH2i() {
+    // Native tabs take real WebKit snapshots in the app instead.
+    if (NATIVE) return Promise.resolve(null);
     if (window.htmlToImage) return Promise.resolve(window.htmlToImage);
     return new Promise(function (resolve) {
       var s = document.createElement("script"); s.src = "/__orchestra/h2i.js";
@@ -279,13 +313,14 @@ const body = String.raw`
   function pushLog(level, args) {
     try { logs.push({ level: level, text: Array.prototype.map.call(args, function (a) { try { return a instanceof Error ? (a.stack || a.message) : typeof a === "object" ? JSON.stringify(a) : String(a); } catch (e) { return String(a); } }).join(" ").slice(0, 2000), at: Date.now() }); if (logs.length > 200) logs.shift(); } catch (e) {}
   }
-  ["error", "warn"].forEach(function (level) { var orig = console[level]; console[level] = function () { pushLog(level, arguments); return orig.apply(console, arguments); }; });
+  // Native: console and script errors belong to the page's world; the bridge reports them (see below).
+  if (!NATIVE) ["error", "warn"].forEach(function (level) { var orig = console[level]; console[level] = function () { pushLog(level, arguments); return orig.apply(console, arguments); }; });
   addEventListener("error", function (e) {
     var target = e.target;
     if (target && target !== window && (target.src || target.href)) { netRecord(target.src || target.href, 0); return; }
-    pushLog("error", [e.message + (e.filename ? " (" + e.filename + ":" + e.lineno + ")" : "")]);
+    if (!NATIVE) pushLog("error", [e.message + (e.filename ? " (" + e.filename + ":" + e.lineno + ")" : "")]);
   }, true);
-  addEventListener("unhandledrejection", function (e) { pushLog("error", ["Unhandled rejection: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason)]); });
+  if (!NATIVE) addEventListener("unhandledrejection", function (e) { pushLog("error", ["Unhandled rejection: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason)]); });
 
   var netInflight = 0, netErrors = [], netAll = [];
   function netRecord(url, status) {
@@ -295,7 +330,18 @@ const body = String.raw`
   }
   function netStart(url) { netInflight++; return url; }
   function netFinish(url, status) { netInflight = Math.max(0, netInflight - 1); netRecord(url, status); }
-  if (window.fetch) {
+  if (NATIVE) {
+    // Bridge events: JSON strings only (objects do not cross content worlds). A page can fake these, but
+    // only logs and the pending-request count; snapshot, refs and actions never read page-world state.
+    document.addEventListener("sinawi:page", function (e) {
+      var d; try { d = JSON.parse(String(e.detail)); } catch (x) { return; }
+      if (!d || typeof d !== "object") return;
+      if (d.k === "log") pushLog(d.level === "warn" ? "warn" : "error", [String(d.text || "")]);
+      else if (d.k === "net-start") netStart(d.url);
+      else if (d.k === "net-end") netFinish(d.url, d.status);
+    }, true);
+  }
+  if (!NATIVE && window.fetch) {
     var origFetch = window.fetch;
     window.fetch = function (input, init) {
       var url = typeof input === "string" ? input : (input && input.url) || "";
@@ -303,14 +349,16 @@ const body = String.raw`
       return Promise.resolve(origFetch.apply(this, arguments)).then(function (res) { netFinish(url, res.status); return res; }, function (err) { netFinish(url, 0); throw err; });
     };
   }
-  var origOpen = XMLHttpRequest.prototype.open, origSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url) { this.__aoUrl = url; return origOpen.apply(this, arguments); };
-  XMLHttpRequest.prototype.send = function () {
-    var xhr = this, url = xhr.__aoUrl;
-    netStart(url);
-    xhr.addEventListener("loadend", function () { netFinish(url, xhr.status); });
-    return origSend.apply(this, arguments);
-  };
+  if (!NATIVE) {
+    var origOpen = XMLHttpRequest.prototype.open, origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) { this.__aoUrl = url; return origOpen.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function () {
+      var xhr = this, url = xhr.__aoUrl;
+      netStart(url);
+      xhr.addEventListener("loadend", function () { netFinish(url, xhr.status); });
+      return origSend.apply(this, arguments);
+    };
+  }
   function waitIdle(timeout) {
     var until = Date.now() + Math.min(20000, Number(timeout) || 5000), quiet = 0;
     return new Promise(function (res) {
@@ -329,14 +377,17 @@ const body = String.raw`
     nextDialog = { set: false, accept: true, promptText: "" };
     return lastDialog;
   }
-  window.alert = function (message) { rememberDialog("alert", message, true); };
-  window.confirm = function (message) { var accept = nextDialog.set ? nextDialog.accept : false; rememberDialog("confirm", message, accept); return accept; };
-  window.prompt = function (message, def) {
-    var accept = nextDialog.set ? nextDialog.accept : false;
-    var text = nextDialog.promptText || (def == null ? "" : String(def));
-    rememberDialog("prompt", message, accept);
-    return accept ? text : null;
-  };
+  // Native tabs answer page dialogs in the app (WKUIDelegate): shown to the user, or armed by ao-browser dialog.
+  if (!NATIVE) {
+    window.alert = function (message) { rememberDialog("alert", message, true); };
+    window.confirm = function (message) { var accept = nextDialog.set ? nextDialog.accept : false; rememberDialog("confirm", message, accept); return accept; };
+    window.prompt = function (message, def) {
+      var accept = nextDialog.set ? nextDialog.accept : false;
+      var text = nextDialog.promptText || (def == null ? "" : String(def));
+      rememberDialog("prompt", message, accept);
+      return accept ? text : null;
+    };
+  }
 
   var navOrig = null;
   var viewportWatch = null;
@@ -392,6 +443,8 @@ const body = String.raw`
     window.__aoViewportWidth = frameWidth >= 200 && frameWidth <= 4000 ? Math.round(frameWidth) : 0;
     lockViewport(window.__aoViewportWidth);
     window.__aoEmulation = d || {};
+    // navigator and matchMedia are page-world objects: the bridge applies the same emulation there.
+    if (NATIVE) { try { document.dispatchEvent(new CustomEvent("sinawi:emulate", { detail: JSON.stringify({ mobile: !!mobile, touch: !!(d && d.touch), userAgent: mobile ? d.userAgent : "", platform: mobile ? (d.platform || "iPhone") : "" }) })); } catch (e) {} }
     if (!d || !d.persist) return;
     try {
       var encoded = JSON.stringify({ mobile: !!mobile, touch: !!(d && d.touch), userAgent: mobile ? d.userAgent : "", platform: mobile ? (d.platform || "iPhone") : "", width: window.__aoViewportWidth || 0 });
@@ -434,27 +487,58 @@ const body = String.raw`
   function showAi() { ensureAi(); aiBadge.style.display = "flex"; aiDot.style.display = "block"; clearTimeout(aiHideTimer); aiHideTimer = setTimeout(hideAi, 4000); }
   function hideAi() { if (!aiHost) return; aiBadge.style.display = "none"; aiDot.style.display = "none"; aiRing.style.display = "none"; }
   addEventListener("keydown", function (e) { if (e.key === "Escape" && aiBadge && aiBadge.style.display === "flex") { post({ type: "agent-stop" }); hideAi(); } }, true);
+  // ---- frames: same-origin iframes are walked and driven from here; cross-origin ones are listed ----
+  function viewOf(el) { return (el && el.ownerDocument && el.ownerDocument.defaultView) || window; }
+  function cssOf(el) { return viewOf(el).getComputedStyle(el); }
+  function frameDoc(el) { try { var d = el.contentDocument; return d && d.documentElement ? d : null; } catch (e) { return null; } }
+  function frameOffset(el) {
+    var x = 0, y = 0, win = viewOf(el), guard = 0;
+    while (win !== window && guard++ < 10) {
+      var fe = null; try { fe = win.frameElement; } catch (e) {}
+      if (!fe) break;
+      var r = fe.getBoundingClientRect(), cs = cssOf(fe);
+      x += r.left + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0);
+      y += r.top + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0);
+      win = viewOf(fe);
+    }
+    return { x: x, y: y };
+  }
+  /** Element box in top-level viewport coordinates (iframe content offset by its frame). */
+  function topRect(el) { var r = el.getBoundingClientRect(), o = frameOffset(el); return { left: r.left + o.x, top: r.top + o.y, width: r.width, height: r.height, right: r.right + o.x, bottom: r.bottom + o.y }; }
+  function deepQuery(sel, doc, depth) {
+    var el = doc.querySelector(sel);
+    if (el || depth > 5) return el;
+    var frames = doc.querySelectorAll("iframe,frame");
+    for (var i = 0; i < frames.length; i++) { var d = frameDoc(frames[i]); if (!d) continue; try { el = deepQuery(sel, d, depth + 1); } catch (e) { el = null; } if (el) return el; }
+    return null;
+  }
+  function deepActive() {
+    var el = document.activeElement || document.body, guard = 0;
+    while (el && (el.tagName === "IFRAME" || el.tagName === "FRAME") && guard++ < 5) { var d = frameDoc(el); if (!d || !d.activeElement) break; el = d.activeElement; }
+    return el;
+  }
   function pointAt(el) {
     showAi();
-    var r = el.getBoundingClientRect();
+    var r = topRect(el);
     aiRing.style.display = "block"; place(aiRing, { left: r.left - 3, top: r.top - 3, width: r.width + 6, height: r.height + 6 });
     aiDot.style.left = (r.left + r.width / 2) + "px"; aiDot.style.top = (r.top + r.height / 2) + "px";
     return new Promise(function (res) { setTimeout(res, 380); });
   }
   function visible(el) {
     var r = el.getBoundingClientRect(); if (r.width < 1 || r.height < 1) return false;
-    var cs = getComputedStyle(el); return cs.visibility !== "hidden" && cs.display !== "none" && cs.opacity !== "0";
+    var cs = cssOf(el); return cs.visibility !== "hidden" && cs.display !== "none" && cs.opacity !== "0";
   }
   var INTERACTIVE = "a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=switch],[role=option],[role=combobox],[role=textbox],[contenteditable=''],[contenteditable=true],[onclick],[tabindex]:not([tabindex='-1'])";
   function refOf(el) { var r = el.getAttribute("data-ao-ref"); if (!r) { r = "e" + (++refSeq); el.setAttribute("data-ao-ref", r); } return r; }
   function labelledBy(el) {
     var id = el.getAttribute("aria-labelledby"); if (!id) return "";
-    return id.split(/\s+/).map(function (part) { var n = document.getElementById(part); return n ? (n.innerText || n.textContent || "") : ""; }).join(" ").replace(/\s+/g, " ").trim().slice(0, 80);
+    var doc = el.ownerDocument || document;
+    return id.split(/\s+/).map(function (part) { var n = doc.getElementById(part); return n ? (n.innerText || n.textContent || "") : ""; }).join(" ").replace(/\s+/g, " ").trim().slice(0, 80);
   }
   function nameOf(el) {
     var n = el.getAttribute("aria-label") || el.getAttribute("title") || "";
     if (!n) n = labelledBy(el);
-    if (!n && el.id) { var l = document.querySelector("label[for='" + (window.CSS && CSS.escape ? CSS.escape(el.id) : el.id) + "']"); if (l) n = l.innerText; }
+    if (!n && el.id) { var l = (el.ownerDocument || document).querySelector("label[for='" + (window.CSS && CSS.escape ? CSS.escape(el.id) : el.id) + "']"); if (l) n = l.innerText; }
     if (!n && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) n = el.getAttribute("placeholder") || el.getAttribute("name") || "";
     if (!n) n = el.innerText || el.textContent || "";
     if (!n && el.tagName === "IMG") n = el.alt || "";
@@ -480,8 +564,9 @@ const body = String.raw`
       if (truncated || !el || el.nodeType !== 1 || skip[el.tagName]) return;
       if ((aiHost && (el === aiHost || aiHost.contains(el))) || (host && (el === host || host.contains(el)))) return;
       if (el.getAttribute("aria-hidden") === "true" || el.hasAttribute("hidden")) return;
-      var cs; try { cs = getComputedStyle(el); } catch (e) { cs = null; }
+      var cs; try { cs = cssOf(el); } catch (e) { cs = null; }
       if (cs && (cs.display === "none" || cs.visibility === "hidden")) return;
+      if (el.tagName === "IFRAME" || el.tagName === "FRAME") { walkFrame(el, depth); return; }
       var info = nodeRole(el);
       var role = info.role;
       var emit = false;
@@ -504,8 +589,8 @@ const body = String.raw`
           if (el.getAttribute("aria-selected") === "true") states.push("selected");
           if (el.required || el.getAttribute("aria-required") === "true") states.push("required");
           if (el.tagName === "A" && el.getAttribute("href")) states.push("href=" + el.getAttribute("href").slice(0, 80));
-          if (document.activeElement === el) states.push("active");
-          var rect = el.getBoundingClientRect();
+          if ((el.ownerDocument || document).activeElement === el) states.push("active");
+          var rect = topRect(el);
           if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) states.push("(화면 밖)");
           var giveRef = info.interactive || role === "img" || role === "heading" || role === "dialog";
           lines.push(formatNode(depth, role, nameFor(el, role), giveRef ? refOf(el) : undefined, states));
@@ -516,6 +601,19 @@ const body = String.raw`
       for (var i = 0; i < kids.length; i++) walk(kids[i], next);
       if (el.shadowRoot) { var shadowKids = el.shadowRoot.children; for (var s = 0; s < shadowKids.length; s++) walk(shadowKids[s], next); }
     }
+    function walkFrame(el, depth) {
+      if (count >= 300) { truncated = true; return; }
+      var r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return;
+      var doc = frameDoc(el), url = "";
+      try { url = doc ? String(doc.location.href) : String(el.src || el.getAttribute("src") || ""); } catch (e) { url = String(el.getAttribute("src") || ""); }
+      var states = [];
+      if (url) states.push("url=" + url.slice(0, 160));
+      if (!doc) states.push("(교차 출처: 안쪽 요소는 snapshot/조작 불가, screenshot은 가능)");
+      count++;
+      lines.push(formatNode(depth, "iframe", (el.getAttribute("title") || el.getAttribute("name") || el.getAttribute("aria-label") || "").slice(0, 80), refOf(el), states));
+      if (doc && doc.body) walk(doc.body, depth + 1);
+    }
     if (document.body) walk(document.body, 0);
     var head = "# " + (document.title || "문서") + "  " + location.href;
     if (nextDialog.set) head += "\n(다음 대화상자: " + (nextDialog.accept ? "accept" : "dismiss") + (nextDialog.promptText ? " " + JSON.stringify(nextDialog.promptText) : "") + ")";
@@ -524,12 +622,12 @@ const body = String.raw`
   }
   function find(args) {
     var el = null;
-    if (args.ref) el = document.querySelector("[data-ao-ref='" + String(args.ref).replace(/'/g, "") + "']");
-    else if (args.selector) { try { el = document.querySelector(String(args.selector)); } catch (e) { throw new Error("잘못된 선택자: " + args.selector + ". snapshot의 ref를 쓰세요."); } }
+    if (args.ref) el = deepQuery("[data-ao-ref='" + String(args.ref).replace(/[^\w-]/g, "") + "']", document, 0);
+    else if (args.selector) { try { el = deepQuery(String(args.selector), document, 0); } catch (e) { throw new Error("잘못된 선택자: " + args.selector + ". snapshot의 ref를 쓰세요."); } }
     if (!el) throw new Error("요소를 찾을 수 없습니다: " + (args.ref || args.selector || "(대상 없음)") + " — snapshot 을 다시 찍으세요.");
     return el;
   }
-  function center(el) { var r = el.getBoundingClientRect(); return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true, composed: true, view: window }; }
+  function center(el) { var r = el.getBoundingClientRect(); return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true, composed: true, view: viewOf(el) }; }
   function setValue(el, value) {
     var proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : el.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
     var desc = Object.getOwnPropertyDescriptor(proto, "value");
@@ -645,7 +743,7 @@ const body = String.raw`
       return pointAt(el).then(function () { return { uploaded: a.ref || a.selector, name: blob.name, size: blob.size }; });
     },
     press: function (a) {
-      var el = a.ref || a.selector ? find(a) : (document.activeElement || document.body);
+      var el = a.ref || a.selector ? find(a) : deepActive();
       var key = String(a.key || "Enter");
       if (!key) throw new Error("키가 필요합니다. 예: ao-browser press Enter 또는 ao-browser press Control+A");
       var init = keyEventInit(key);
@@ -662,7 +760,7 @@ const body = String.raw`
       var key = String(a.key || a.text || "");
       if (!key) throw new Error("키가 필요합니다. 예: ao-browser keyboard Enter 또는 ao-browser keyboard \"안녕하세요\"");
       if (key.indexOf("+") >= 0 || /^(Enter|Tab|Escape|Esc|Backspace|Delete|Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Space)$/i.test(key)) return agentActions.press(Object.assign({}, a, { key: key }));
-      var el = a.ref || a.selector ? find(a) : (document.activeElement || document.body);
+      var el = a.ref || a.selector ? find(a) : deepActive();
       if (el.focus) el.focus();
       showAi();
       for (var i = 0; i < key.length; i++) {
@@ -698,7 +796,7 @@ const body = String.raw`
       return new Promise(function (res, rej) {
         (function check() {
           var ok = false;
-          try { ok = a.text ? (document.body && document.body.innerText.indexOf(String(a.text)) >= 0) : a.selector ? Boolean(document.querySelector(String(a.selector))) : document.readyState === "complete"; } catch (e) { return rej(new Error("잘못된 선택자: " + a.selector)); }
+          try { ok = a.text ? (document.body && document.body.innerText.indexOf(String(a.text)) >= 0) : a.selector ? Boolean(deepQuery(String(a.selector), document, 0)) : document.readyState === "complete"; } catch (e) { return rej(new Error("잘못된 선택자: " + a.selector)); }
           if (ok) return res({ found: a.text || a.selector || "load" });
           if (Date.now() > until) return rej(new Error("기다렸지만 나타나지 않았습니다: " + (a.text || a.selector || "load")));
           setTimeout(check, 200);
@@ -716,6 +814,53 @@ const body = String.raw`
       if (nets.length) text += "\n\n네트워크 오류\n" + nets.map(function (n) { return (n.status || "ERR") + " " + n.url; }).join("\n");
       return { count: out.length, networkErrors: nets.length, text: text };
     },
+    // Native screenshots: element (or viewport) rect in CSS px, AI overlay hidden and painted away.
+    rect: function (a) {
+      hideAi();
+      var box = { x: 0, y: 0, width: innerWidth, height: innerHeight };
+      if (a.ref || a.selector) {
+        var el = find(a), r = topRect(el);
+        if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) { el.scrollIntoView({ block: "center", inline: "center" }); r = topRect(el); }
+        if (r.width < 1 || r.height < 1) throw new Error("요소가 화면에 크기가 없습니다: " + (a.ref || a.selector));
+        box = { x: r.left, y: r.top, width: r.width, height: r.height };
+      }
+      var out = { rect: box, url: location.href, innerWidth: innerWidth, innerHeight: innerHeight };
+      // Two frames so the hidden overlay is painted away; rAF pauses in an occluded window, so cap the wait.
+      return Promise.race([new Promise(function (res) { requestAnimationFrame(function () { requestAnimationFrame(function () { res(out); }); }); }), sleep(150).then(function () { return out; })]);
+    },
+    // Full-page capture: scroll to the top, report the document size; restore: true puts the scroll back.
+    fullpage: function (a) {
+      hideAi();
+      var root = document.documentElement, body = document.body;
+      if (a && a.restore) { scrollTo(Number(a.scrollX) || 0, Number(a.scrollY) || 0); return { restored: true }; }
+      var out = { scrollX: Math.round(scrollX), scrollY: Math.round(scrollY), width: innerWidth, height: Math.max(root.scrollHeight, body ? body.scrollHeight : 0, innerHeight), url: location.href };
+      scrollTo(0, 0);
+      return Promise.race([new Promise(function (res) { requestAnimationFrame(function () { requestAnimationFrame(function () { res(out); }); }); }), sleep(200).then(function () { return out; })]);
+    },
+    // Trusted input: where to send a real mouse click (top-level CSS px), after scrolling it into view.
+    point: function (a) {
+      var el = find(a); el.scrollIntoView({ block: "center", inline: "center" });
+      return pointAt(el).then(function () {
+        var r = topRect(el);
+        if (r.width < 1 || r.height < 1) throw new Error("요소가 화면에 크기가 없습니다: " + (a.ref || a.selector));
+        aiDot.className = "dot press"; setTimeout(function () { aiDot.className = "dot"; }, 160);
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, url: location.href };
+      });
+    },
+    // Trusted typing: focus the field (and select its text for fill) so inserted text replaces it.
+    focus: function (a) {
+      var el = a.ref || a.selector ? find(a) : deepActive();
+      if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
+      return pointAt(el).then(function () {
+        if (el.focus) el.focus();
+        if (!a.append) {
+          if (typeof el.select === "function" && "value" in el) el.select();
+          else if (el.isContentEditable) { var range = el.ownerDocument.createRange(); range.selectNodeContents(el); var sel = viewOf(el).getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+        } else if (typeof el.setSelectionRange === "function" && "value" in el) { try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} }
+        return { focused: a.ref || a.selector || el.tagName.toLowerCase() };
+      });
+    },
+    value: function (a) { var el = a.ref || a.selector ? find(a) : deepActive(); return { value: "value" in el ? el.value : el.textContent }; },
     screenshot: function (a) {
       hideAi();
       return loadH2i().then(function (h) {
@@ -735,6 +880,7 @@ const body = String.raw`
   };
   // ---- in-page devtools (bundled eruda: console, network, elements) ----
   function toggleDevtools() {
+    if (NATIVE) return; // the app opens Web Inspector for native tabs
     function go() {
       var e = window.eruda; if (!e) { post({ type: "error", text: "개발자 도구를 불러오지 못했습니다." }); return; }
       if (!window.__orchestraEruda) { e.init({ tool: ["console", "elements", "network", "resources", "sources", "info"], defaults: { displaySize: 45, theme: "Dark" } }); window.__orchestraEruda = true; logs.forEach(function (l) { try { e.get("console")[l.level](l.text); } catch (x) {} }); e.show(); return; }
@@ -762,8 +908,7 @@ const body = String.raw`
     }, function (e) { done(false, String(e && e.message || e)); }); }
     catch (e) { done(false, String(e && e.message || e)); }
   }
-  addEventListener("message", function (e) {
-    var d = e.data; if (!d || d.source !== "orchestra-parent") return;
+  function onParent(d) {
     if (d.type === "agent") { runAgent(d); return; }
     if (d.type === "emulate") { applyEmulation(d); return; }
     if (d.type === "agent-hide") { hideAi(); return; }
@@ -774,14 +919,113 @@ const body = String.raw`
     else if (d.type === "go" && typeof d.href === "string" && /^https?:\/\//.test(d.href)) { try { location.replace(d.href); } catch (e) {} }
     else if (d.type === "reload") location.reload();
     else if (d.type === "ping") post({ type: "location", href: location.href, title: document.title });
+  }
+  addEventListener("message", function (e) {
+    if (NATIVE) return; // a native tab's own page must not be able to command it
+    var d = e.data; if (!d || d.source !== "orchestra-parent") return;
+    onParent(d);
   });
+  if (NATIVE) {
+    // window.open and target=_blank go through WKUIDelegate (real child view, window.opener intact).
+    // ⌘-click on a link still means "open in a new tab" without an opener.
+    addEventListener("click", function (e) {
+      if (e.defaultPrevented || e.button !== 0 || !e.metaKey) return;
+      var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!a || !/^https?:/i.test(a.href)) return;
+      e.preventDefault();
+      post({ type: "open-tab", href: a.href });
+    });
+    var nativeApi = {
+      run: function (action, args) {
+        return new Promise(function (resolve) {
+          var id = "n" + (++nativeSeq);
+          nativeWaiters[id] = function (m) { resolve({ ok: Boolean(m.ok), result: m.result, error: m.error }); };
+          runAgent({ id: id, action: action, args: args || {} });
+        });
+      },
+      send: function (d) { if (d && typeof d === "object" && d.type !== "agent") onParent(d); return true; },
+      drain: function () { var out = nativeQueue; nativeQueue = []; return out; },
+    };
+    try { Object.defineProperty(window, "__aoNative", { value: Object.freeze(nativeApi), configurable: false, writable: false, enumerable: false }); } catch (e) {}
+  }
 })();
 `;
 
-export function pickerScript(): string {
+/** The page script. `native` builds the variant injected into native (WKWebView) tabs. */
+export function pickerScript(options: { native?: boolean } = {}): string {
   return body
+    .replace("__NATIVE__", options.native ? "true" : "false")
     .replace("__CSS_SELECTOR__", () => `(${cssSelectorFor.toString()})`)
     .replace("__TRIM__", () => `(${trimOuterHtml.toString()})`)
     .replace("__ROLE__", () => `(${accessibleRole.toString()})`)
-    .replace("__NODE__", () => `(${formatNode.toString()})`);
+    .replace("__NODE__", () => `(${formatNode.toString()})`)
+    .replace("__REACT__", () => `(${REACT_INFO})`);
+}
+
+// Page-world half of a native tab's automation (the main script runs isolated in the "sinawi" world).
+// It only reports what lives in page JS (console, uncaught errors, fetch/XHR) and applies navigator
+// emulation, all through DOM CustomEvents with JSON-string details. Nothing here decides snapshot or actions.
+const bridge = String.raw`
+(function () {
+  if (window.top !== window || window.__sinawiPageBridge) return;
+  try { Object.defineProperty(window, "__sinawiPageBridge", { value: true }); } catch (e) {}
+  var reactInfo = __REACT__;
+  function fire(d) { try { document.dispatchEvent(new CustomEvent("sinawi:page", { detail: JSON.stringify(d) })); } catch (e) {} }
+  function text(args) {
+    try { return Array.prototype.map.call(args, function (a) { try { return a instanceof Error ? (a.stack || a.message) : typeof a === "object" ? JSON.stringify(a) : String(a); } catch (e) { return String(a); } }).join(" ").slice(0, 2000); } catch (e) { return ""; }
+  }
+  ["error", "warn"].forEach(function (level) { var orig = console[level]; console[level] = function () { fire({ k: "log", level: level, text: text(arguments) }); return orig.apply(console, arguments); }; });
+  addEventListener("error", function (e) { if (e.target && e.target !== window) return; fire({ k: "log", level: "error", text: e.message + (e.filename ? " (" + e.filename + ":" + e.lineno + ")" : "") }); }, true);
+  addEventListener("unhandledrejection", function (e) { fire({ k: "log", level: "error", text: "Unhandled rejection: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason) }); });
+  if (window.fetch) {
+    var origFetch = window.fetch;
+    window.fetch = function (input) {
+      var url = String(typeof input === "string" ? input : (input && input.url) || "");
+      fire({ k: "net-start", url: url });
+      return Promise.resolve(origFetch.apply(this, arguments)).then(function (res) { fire({ k: "net-end", url: url, status: res.status }); return res; }, function (err) { fire({ k: "net-end", url: url, status: 0 }); throw err; });
+    };
+  }
+  var origOpen = XMLHttpRequest.prototype.open, origSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url) { this.__aoUrl = String(url); return origOpen.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function () {
+    var xhr = this, url = xhr.__aoUrl;
+    fire({ k: "net-start", url: url });
+    xhr.addEventListener("loadend", function () { fire({ k: "net-end", url: url, status: xhr.status }); });
+    return origSend.apply(this, arguments);
+  };
+  var navOrig = null, touch = false;
+  function defineNav(key, getter) { try { Object.defineProperty(navigator, key, { configurable: true, get: getter }); } catch (e) {} }
+  function emulate(d) {
+    if (!navOrig) navOrig = { userAgent: navigator.userAgent, appVersion: navigator.appVersion, platform: navigator.platform, maxTouchPoints: navigator.maxTouchPoints || 0 };
+    var mobile = Boolean(d && d.mobile && d.userAgent);
+    defineNav("userAgent", function () { return mobile ? d.userAgent : navOrig.userAgent; });
+    defineNav("appVersion", function () { return mobile ? String(d.userAgent).replace(/^Mozilla\//, "") : navOrig.appVersion; });
+    defineNav("platform", function () { return mobile ? (d.platform || "iPhone") : navOrig.platform; });
+    defineNav("maxTouchPoints", function () { return mobile && d.touch ? 5 : navOrig.maxTouchPoints; });
+    touch = Boolean(mobile && d.touch);
+    if (touch && !("ontouchstart" in window)) window.ontouchstart = null;
+  }
+  try { var saved = sessionStorage.getItem("ao-emulation"); if (saved) emulate(JSON.parse(saved)); } catch (e) {}
+  document.addEventListener("sinawi:emulate", function (e) { try { emulate(JSON.parse(String(e.detail))); } catch (x) {} });
+  if (window.matchMedia) {
+    var origMatch = window.matchMedia.bind(window);
+    window.matchMedia = function (query) {
+      var q = String(query);
+      if (touch) q = q.replace(/\(pointer:\s*fine\)/gi, "(pointer: coarse)").replace(/\(hover:\s*hover\)/gi, "(hover: none)");
+      return origMatch(q);
+    };
+  }
+  // Picker labels: React fibers are page-world expandos. Answer synchronously with JSON text.
+  addEventListener("sinawi:react-probe", function (e) {
+    var el = e.composedPath ? e.composedPath()[0] : e.target, info = null;
+    try { info = el && el.nodeType === 1 ? reactInfo(el) : null; } catch (x) {}
+    e.stopImmediatePropagation();
+    try { document.dispatchEvent(new CustomEvent("sinawi:react-info", { detail: JSON.stringify(info) })); } catch (x) {}
+  }, true);
+})();
+`;
+
+/** Page-world bridge script for native tabs (installed next to `pickerScript({ native: true })`). */
+export function nativePageBridge(): string {
+  return bridge.replace("__REACT__", () => `(${REACT_INFO})`);
 }

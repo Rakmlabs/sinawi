@@ -2,7 +2,14 @@
 
 Sinawi 창 안의 브라우저 탭을 조작한다. 사용자는 같은 탭을 본다. 결과물, 목업, 디자인 시안, UI 확인은 이 브라우저로만 연다.
 
-코드: `server/browser-bridge.ts`의 `CLI_SOURCE`, `BROWSER_ACTIONS`, `server/preview.ts`의 주소 판정, `server/preview-picker.ts`의 페이지 안 동작, `src/BrowserPanel.tsx`의 명령 실행.
+코드: `server/browser-bridge.ts`의 `CLI_SOURCE`, `BROWSER_ACTIONS`, `server/preview.ts`의 주소 판정, `server/preview-picker.ts`의 페이지 안 동작, `src/BrowserPanel.tsx`의 명령 실행, `src/native-browser.ts`와 `src-tauri/src/native_browser.rs`의 네이티브 탭.
+
+## 두 가지 탭
+
+- **데스크톱 앱(macOS)**: 탭마다 진짜 WKWebView가 패널 위에 놓인다. 프록시 없이 직접 연다. 외부 https 사이트와 localhost 개발 서버 모두 조작된다. 뒤로/앞으로는 그 탭의 실제 기록이고, screenshot은 WebKit이 그린 실제 픽셀이다(canvas, video, WebGL, 다른 도메인 이미지 포함). 페이지에는 앱 명령(IPC)이 전혀 열리지 않는다.
+- **일반 브라우저 개발 모드(`npm run dev`)**: 예전처럼 iframe과 localhost 프록시다. localhost http만 조작되고 외부 https는 `controllable: false`로 표시만 된다. screenshot은 DOM을 다시 그린 근사치다.
+
+`ao-browser tabs`의 `controllable`이 그 탭을 조작할 수 있는지 알려 준다.
 
 실행은 `ao-browser`다. PATH에 없으면 `node ~/.local/bin/ao-browser`. `ao-browser --help`는 사용법을 출력하고 종료 코드 2로 끝난다. 인수가 없으면 종료 코드 0으로 같은 사용법을 출력한다.
 
@@ -14,7 +21,7 @@ Sinawi 창 안의 브라우저 탭을 조작한다. 사용자는 같은 탭을 �
 
 ```text
 ao-browser <명령> [인자]
-  goto <url|포트>               페이지 열기 (탭이 없으면 패널을 염). 로딩과 네트워크 idle을 기다림
+  goto <url|포트>               페이지 열기 (https 외부 사이트도 가능, 탭이 없으면 패널을 염). 로딩과 네트워크 idle을 기다림
   snapshot                      ref가 붙은 접근성 트리
   click <ref|selector>          클릭. 바뀐 snapshot을 돌려줌
   fill <ref|selector> <텍스트>  입력칸 값 바꾸기 (type은 이어서 타이핑)
@@ -49,17 +56,20 @@ ao-browser <명령> [인자]
 
 ## 열리는 주소
 
-조작되는 페이지는 http이고 호스트가 `localhost`, `127.0.0.1`, `::1`, `[::1]`, `0.0.0.0`, `*.localhost`인 경우뿐이다.
+데스크톱 앱에서는 http/https 페이지면 모두 열리고 조작된다(`https://example.com`, `localhost:5173`, `127.0.0.1:8765/index.html`). 개발 모드 iframe에서는 http이고 호스트가 `localhost`, `127.0.0.1`, `::1`, `[::1]`, `0.0.0.0`, `*.localhost`인 페이지만 조작된다.
 
 - `5173`, `:5173/path`는 `http://localhost:5173/`로 정규화된다.
 - `localhost:8765/index.html`은 그 경로를 연다.
 - `8765/index.html`은 포트로 해석되지 않는다. 호스트를 붙인다.
-- https, `file://`, 외부 도메인은 패널에 보이거나 검색으로 빠질 수 있다. 응답에 `controllable: false`가 있으면 조작되지 않는다. Playwright나 외부 브라우저로 우회하지 않고 그 사실을 보고한다.
+- `example.com`처럼 점이 있는 글자는 `https://example.com`, 그 밖의 글자는 검색으로 빠진다.
+- `file://`, `javascript:`, `data:` 같은 주소는 열지 않는다(데스크톱 앱은 `http/https 주소만 열 수 있습니다`).
+- 응답에 `controllable: false`가 있으면(개발 모드의 외부 사이트) 조작되지 않는다. Playwright나 외부 브라우저로 우회하지 않고 그 사실을 보고한다.
 - 앱 자신(보통 3001)과 미리보기 프록시 포트는 `Sinawi 자체 주소는 열 수 없습니다`로 거절된다.
+- 외부 사이트에서는 로그인·결제·글쓰기처럼 사용자 계정에 남는 동작을 사용자 확인 없이 하지 않는다.
 
 ## 정적 파일
 
-`file://`는 조작되지 않으므로 작업 폴더의 HTML·목업은 로컬 HTTP로 띄운다. 이미 떠 있는 개발 서버가 있으면 그 포트를 `goto` 한다. 포트는 package.json의 dev 스크립트에서 확인한다.
+`file://`는 열지 않으므로 작업 폴더의 HTML·목업은 로컬 HTTP로 띄운다. 이미 떠 있는 개발 서버가 있으면 그 포트를 `goto` 한다. 포트는 package.json의 dev 스크립트에서 확인한다.
 
 없을 때 명령은 하나다.
 
@@ -77,7 +87,7 @@ Codex와 Claude는 이 명령을 백그라운드로 두고, 다음 도구 호출
 
 ## 조작 순서
 
-1. `ao-browser goto <포트 또는 localhost 주소>`. 탭이 없으면 패널이 열린다. 로딩이 끝나고 네트워크가 약 0.4초 조용해질 때까지 기다린다. 오래 열리는 요청이 있으면 그 사실을 결과에 적고 계속한다.
+1. `ao-browser goto <포트, localhost 주소 또는 https 주소>`. 탭이 없으면 패널이 열린다. 로딩이 끝나고 네트워크가 약 0.4초 조용해질 때까지 기다린다. 오래 열리는 요청이 있으면 그 사실을 결과에 적고 계속한다.
 2. `ao-browser snapshot`. 여기 나온 ref만 쓴다. goto와 click, fill, press, scroll, hover, select, upload, keyboard, dialog는 바뀐 snapshot을 같이 돌려준다.
 3. `ao-browser click e12`, `ao-browser fill e3 "안녕"`, `ao-browser press Enter`.
 4. 화면이 바뀌거나 `페이지가 이동했습니다. snapshot 을 다시 찍으세요`가 나오면 다시 snapshot. 새 요소는 새 번호다. 이미 찍힌 요소의 ref는 새로고침 전까지 유지된다.
@@ -125,8 +135,8 @@ ref는 `[e12]`다. `e12`만 명령에 넣는다. 랜드마크는 ref가 없다. 
 - `text [ref|selector]`. 없으면 body. 보이는 글자 최대 2만 자. 글자만 출력된다.
 - `console`. 모은 error, warn 최근 50줄. 없으면 `콘솔 오류/경고 없음`. 네트워크 오류가 있으면 그 아래에 붙는다. 글자만 출력된다.
 - `network`. 실패한 요청. `network all`은 최근 요청. 없으면 `네트워크 오류 없음`.
-- `screenshot [ref]`. ref가 없으면 현재 뷰포트, 있으면 그 요소. 크기가 없으면 `요소가 화면에 크기가 없습니다`. JSON에 `path`, `url`, `width`, `height`.
-- `back`, `forward`. 그 탭의 앱 기록만 이동한다. 더 없으면 오류. 이동 뒤 snapshot을 돌려준다.
+- `screenshot [ref]`. ref가 없으면 현재 뷰포트, 있으면 그 요소(화면 밖이면 먼저 그 요소로 스크롤). 크기가 없으면 `요소가 화면에 크기가 없습니다`. JSON에 `path`, `url`, `width`, `height`. 데스크톱 앱은 `native: true`이고 화면 배율(레티나는 2배) 픽셀이다. 브라우저 패널이 닫혀 있거나 가려져 있으면 패널을 연 뒤 찍는다.
+- `back`, `forward`. 그 탭의 기록만 이동한다(앱 창 기록은 건드리지 않는다). 더 없으면 오류. 이동 뒤 snapshot을 돌려준다.
 - `reload`. 새로고침 후 로딩과 네트워크 idle을 기다린다. ref는 초기화된다.
 - `tabs`. `{ index, active, url, title, controllable }`. 번호는 1부터다.
 - `tab new [url]`, `tab select <번호>`, `tab close <번호>`. 번호가 없으면 `탭 번호가 없습니다`. 마지막 탭을 닫으면 페이지를 비운다.
@@ -135,9 +145,9 @@ ref는 `[e12]`다. `e12`만 명령에 넣는다. 랜드마크는 ref가 없다. 
 
 요소를 찾지 못하면 `요소를 찾을 수 없습니다: … — snapshot 을 다시 찍으세요.` 선택자가 문법에 맞지 않으면 `잘못된 선택자`.
 
-`click`, `fill`, `scroll`, `press`, `hover`가 돌아가는 동안 페이지에 점이 잠깐 보인다.
+`click`, `fill`, `scroll`, `press`, `hover`가 돌아가는 동안 페이지에 점이 잠깐 보인다. 클릭과 입력은 페이지 안 DOM 이벤트다(`isTrusted`가 false). 진짜 마우스 입력만 받는 위젯은 반응하지 않을 수 있다.
 
-`click`, `fill`, `scroll`, `press`가 돌아가는 동안 페이지에 점이 잠깐 보인다.
+`target=_blank` 링크와 `window.open`은 데스크톱 앱에서 새 탭으로 열린다. 페이지가 띄우는 팝업 창 자체(OAuth 팝업 등)는 만들지 않는다.
 
 ## 화면 크기
 
