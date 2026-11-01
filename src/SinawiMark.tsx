@@ -1,11 +1,18 @@
-/** Sinawi logo: a rounded square with three wavy strokes. Colours come from --mark-1/2/3. */
+import { useId } from "react";
+
+/** Sinawi logo: two stems that part into three voices. Source: src-tauri/icons/app-icon.svg. */
 export function SinawiMark({ size = 18, className = "" }: { size?: number; className?: string }) {
-  return <svg className={`sinawi-mark${className ? ` ${className}` : ""}`} width={size} height={size} viewBox="0 0 96 96" aria-hidden="true" focusable="false" style={{ pointerEvents: "none", flex: "none" }}>
-    <rect width="96" height="96" rx="24" fill="var(--mark-1, #EFEAE0)" />
-    <g fill="none" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 34c8-8 14 8 22 0s14 8 22 0 10-4 12-2" stroke="var(--mark-2, #4FB08F)" />
-      <path d="M20 50c6 6 12-6 20 0s12 6 18 0 12-6 18 2" stroke="var(--mark-3, #D9774F)" />
-      <path d="M20 66c10-6 16 6 26 0s14-4 30 0" stroke="var(--mark-2, #4FB08F)" />
+  const id = useId();
+  return <svg className={`sinawi-mark${className ? ` ${className}` : ""}`} width={size} height={size} viewBox="0 0 100 100" aria-hidden="true" focusable="false" style={{ pointerEvents: "none", flex: "none" }}>
+    <defs>
+      <linearGradient id={`${id}l`} gradientUnits="userSpaceOnUse" x1="43" y1="30" x2="17" y2="76"><stop offset="0.2" stopColor="#5BD6A0" /><stop offset="0.85" stopColor="#F28C6A" /></linearGradient>
+      <linearGradient id={`${id}r`} gradientUnits="userSpaceOnUse" x1="57" y1="30" x2="83" y2="76"><stop offset="0.2" stopColor="#5BD6A0" /><stop offset="0.85" stopColor="#6B8CFF" /></linearGradient>
+      <linearGradient id={`${id}m`} gradientUnits="userSpaceOnUse" x1="31" y1="0" x2="69" y2="0"><stop offset="0.4" stopColor="#5BD6A0" /><stop offset="1" stopColor="#6B8CFF" /></linearGradient>
+    </defs>
+    <g transform="translate(0 5)" fill="none" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M43 18V36C43 42 40 45 34 49.5C25 56 17 61 17 71" stroke={`url(#${id}l)`} />
+      <path d="M57 18V36C57 42 60 45 66 49.5C75 56 83 61 83 71" stroke={`url(#${id}r)`} />
+      <path d="M31 68.5L50 52.5L69 68.5" stroke={`url(#${id}m)`} />
     </g>
   </svg>;
 }
