@@ -1,0 +1,96 @@
+.app-shell {
+  --window-header-height: 38px;
+}
+
+.app-shell.tauri-app {
+  --window-header-height: 38px;
+  padding-top: var(--window-header-height);
+}
+
+.window-header {
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--window-header-height);
+  padding: 0 78px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--line);
+  background: rgba(25, 33, 27, 0.9);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.window-header-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.window-header-brand,
+.window-header-separator {
+  flex-shrink: 0;
+}
+
+.window-header-brand {
+  font-weight: 550;
+}
+
+.window-header-separator,
+.window-header-conversation {
+  color: var(--muted);
+}
+
+.window-header-reload {
+  position: absolute;
+  right: 12px;
+  top: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.window-header-tools { position: absolute; right: 46px; top: 5px; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; color: var(--muted); -webkit-app-region: no-drag; }
+.window-header-tools[aria-current="page"] { background: var(--line); color: var(--sage); }
+.window-header-tools:hover { background: var(--line); color: inherit; }
+.window-header-tools:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+
+.window-header-reload:hover {
+  background: var(--line);
+  color: inherit;
+}
+
+.window-header-reload:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.window-header-conversation {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell { padding-top: var(--window-header-height); }
+.window-header { z-index: 90; padding-right: 160px; }
+.window-header-terminal, .window-header-notifications { position: absolute; top: 5px; -webkit-app-region: no-drag; }
+.window-header-terminal { right: 80px; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; color: var(--muted); }
+.window-header-notifications { right: 114px; }
+.app-shell main { height: calc(100dvh - var(--window-header-height) - var(--terminal-height, 0px)); }

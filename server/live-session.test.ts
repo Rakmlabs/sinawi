@@ -1,0 +1,112 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { Orchestra } from "./orchestra.js";
+import type { RunCliOptions } from "./cli.js";
+
+async function waitFor(predicate: () => boolean) {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > 1_000) throw new Error("timed out waiting for the running session");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test("a running session answers status from the log and delivers a directive on the named worker's next turn", async () => {
+  let releaseWorker = () => {};
+  const workerGate = new Promise<void>((resolve) => { releaseWorker = () => resolve(); });
+  let blocked = false;
+  const calls: RunCliOptions[] = [];
+  const runner = async (options: RunCliOptions) => {
+    calls.push(options);
+    if (options.readOnly) return { exitCode: 0, finalText: "B가 npm test를 실행 중입니다." };
+    if (options.usageContext?.role === "worker") {
+      options.onLine({ type: "command", text: "npm test" });
+      if (!blocked) {
+        blocked = true;
+        await workerGate;
+      }
+      return { exitCode: 0, finalText: "worker done" };
+    }
+    if (options.prompt.includes("위임한 워커들의 결과")) return { exitCode: 0, finalText: "final" };
+    return { exitCode: 0, finalText: '<<DELEGATE to="claude-1">>첫 작업<</DELEGATE>><<DELEGATE to="claude-2">>둘째 작업<</DELEGATE>>' };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({
+    prompt: "작업 시작",
+    agent: "codex",
+    workers: ["claude", "claude"],
+    cwd: process.cwd(),
+    workerConfigs: [{ agent: "claude", label: "A" }, { agent: "claude", label: "B" }],
+  });
+  await waitFor(() => session.events.some((event) => event.type === "command" && event.text === "npm test"));
+  const workerSignal = calls.find((call) => call.usageContext?.role === "worker")?.signal;
+
+  await orchestra.liveTurn(session.id, "뭐하고 있어?");
+  assert.equal(session.status, "running");
+  const statusCall = calls.find((call) => call.readOnly);
+  assert.ok(statusCall);
+  assert.equal(statusCall.agent, "grok");
+  assert.equal(statusCall.model, "grok-4.7-build-fast");
+  assert.equal(statusCall.resumeSessionId, undefined);
+  assert.notEqual(statusCall.signal, workerSignal);
+  assert.match(statusCall.prompt, /파일을 수정하지 말고/);
+  assert.match(statusCall.prompt, /npm test/);
+  assert.equal(statusCall.usageContext?.role, "status");
+  const statusEvent = session.events.find((event) => event.metadata?.live === "status");
+  assert.equal(statusEvent?.text, "B가 npm test를 실행 중입니다.");
+  assert.equal(statusEvent?.metadata?.ambiguous, false);
+
+  const beforeDirective = calls.length;
+  await orchestra.liveTurn(session.id, "B한테 A부터 보라고 해");
+  assert.equal(calls.length, beforeDirective);
+  assert.equal(session.status, "running");
+  assert.match(session.events.find((event) => event.metadata?.live === "directive")?.text ?? "", /B의 다음 턴/);
+  assert.equal(session.pendingInstructions?.some((item) => item.targetWorkerId === "claude-2"), true);
+
+  await orchestra.liveTurn(session.id, "옆 문서를 먼저");
+  const ambiguous = session.events.find((event) => event.metadata?.ambiguous);
+  assert.equal(ambiguous?.metadata?.live, "status");
+  await orchestra.promoteLive(session.id, ambiguous!.id);
+  assert.equal(ambiguous?.metadata?.promoted, true);
+  assert.equal(session.pendingInstructions?.some((item) => item.text === "옆 문서를 먼저" && !item.targetWorkerId), true);
+
+  releaseWorker();
+  await waitFor(() => session.status !== "running");
+  assert.equal(session.status, "done");
+  const workerPrompts = calls.filter((call) => call.usageContext?.role === "worker").map((call) => call.prompt);
+  assert.equal(workerPrompts.length, 2);
+  assert.doesNotMatch(workerPrompts[0], /A부터 보/);
+  assert.match(workerPrompts[1], /A부터 보라고 해/);
+  assert.doesNotMatch(workerPrompts[1], /옆 문서를 먼저/);
+  const synthesis = calls.find((call) => call.prompt.includes("위임한 워커들의 결과"));
+  assert.match(synthesis?.prompt ?? "", /옆 문서를 먼저/);
+  assert.equal(session.pendingInstructions, undefined);
+  assert.equal(session.events.some((event) => event.agent === "grok" && event.type === "tool"), false);
+});
+
+test("a status agent failure leaves the running task untouched", async () => {
+  let releaseWorker = () => {};
+  const workerGate = new Promise<void>((resolve) => { releaseWorker = () => resolve(); });
+  const runner = async (options: RunCliOptions) => {
+    if (options.readOnly) throw new Error("status cli unavailable");
+    if (options.usageContext?.role === "worker") {
+      await workerGate;
+      return { exitCode: 0, finalText: "done" };
+    }
+    if (options.prompt.includes("위임한 워커들의 결과")) return { exitCode: 0, finalText: "final" };
+    return { exitCode: 0, finalText: '<<DELEGATE to="claude">>조사<</DELEGATE>>' };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "조사", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitFor(() => callsWaiting(session));
+  await orchestra.liveTurn(session.id, "뭐하고 있어?");
+  assert.equal(session.status, "running");
+  assert.match(session.events.find((event) => event.metadata?.live === "status")?.text ?? "", /그대로 진행/);
+  await orchestra.liveTurn(session.id, "중지");
+  assert.equal(session.status, "stopped");
+  releaseWorker();
+});
+
+function callsWaiting(session: { events: Array<{ type: string; role?: string }> }): boolean {
+  return session.events.some((event) => event.type === "delegation");
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the Agent Orchestra desktop window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:3001/*",
+      "http://127.0.0.1:3001",
+      "http://127.0.0.1:5188/*",
+      "http://localhost:3001/*"
+    ]
+  }
+}

@@ -1,0 +1,270 @@
+/* NEXT9 readability layer. Imported last so these type and contrast rules win. */
+:root {
+  color: #fffef9;
+  font-size: 15px;
+  line-height: 1.55;
+  --muted: #d9ddd4;
+  --panel: rgba(31, 38, 32, 0.82);
+}
+
+body,
+button,
+input,
+textarea,
+select {
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+body {
+  color: #fffef9;
+  text-shadow: 0 1px 1px rgba(7, 13, 9, 0.34);
+}
+
+.glass {
+  background-color: rgba(28, 35, 29, 0.86);
+}
+
+.rail,
+.activity-panel,
+.composer,
+.manual-controls {
+  background-color: rgba(25, 33, 27, 0.9);
+}
+
+small,
+time,
+.subtle-tag,
+.status-label,
+.live-badge,
+.count,
+.number-badge,
+.source-tag,
+.field-caption,
+.composer-note,
+.composer-routing > span,
+.session-group-control,
+.slash-heading,
+.slash-popup p,
+.slash-popup small,
+.glass-select-empty,
+.team-caption,
+.delegation-heading > div > span,
+.delegation-heading .status-label,
+.delegation-heading time,
+.delegation-bottom p,
+.handoff-divider,
+.thread-empty,
+.worker-thread-heading time,
+.activity-summary,
+.activity-summary time,
+.event-top,
+.event-top time,
+.event-type,
+.activity-footer {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+small,
+time,
+.subtle-tag,
+.field-caption,
+.team-caption,
+.delegation-heading > div > span,
+.delegation-heading time,
+.delegation-bottom p,
+.handoff-divider,
+.thread-empty,
+.worker-thread-heading time,
+.activity-summary time {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.rail button,
+.rail .sidebar-folder,
+.rail .sidebar-chat-open,
+.rail .sidebar-worker,
+.rail-label,
+.sidebar-session-title,
+.sidebar-action-menu button,
+.sidebar-action-menu label,
+.sidebar-action-menu select,
+.sidebar-edit input,
+.sidebar-confirm p,
+.sidebar-confirm button,
+.sidebar-empty {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.rail .sidebar-section-heading h2,
+.sidebar-folder small,
+.sidebar-chat-copy small,
+.sidebar-worker small {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.message-text {
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.message-author,
+.message-author > span:last-child,
+.thinking {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.composer textarea {
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.minimal-empty > p,
+.prompt-chips button,
+.team-chip,
+.team-editor > p,
+.delegation-heading strong,
+.delegation-bottom .button,
+.directory-button,
+.routing-mode button,
+.button,
+.icon-button,
+.glass-select-control,
+.glass-select-menu [role="option"],
+.glass-select-custom {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.delegation-card h3 {
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.event pre {
+  font-size: 13px;
+  line-height: 1.6;
+  text-shadow: none;
+}
+
+.panel-header h2,
+.activity-empty h3,
+.folder-picker-browser header h3,
+.folder-picker-finder strong {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #d2d9ce;
+  opacity: 1;
+}
+
+@media (max-width: 740px) {
+  :root,
+  body,
+  button,
+  input,
+  textarea,
+  select {
+    font-size: 15px;
+  }
+
+  .rail button,
+  .rail-label,
+  .sidebar-session-title {
+    font-size: 14px;
+  }
+
+  small,
+  time,
+  .subtle-tag,
+  .status-label,
+  .sidebar-chat-copy small,
+  .sidebar-worker small,
+  .activity-summary {
+    font-size: 12px;
+  }
+}
+
+/* Worker selection stays on dark olive so nested labels and agent marks remain legible. */
+.rail .sidebar-worker.active,
+.rail .sidebar-worker.active:hover {
+  background: #3d5135;
+  color: #fffef9;
+  text-shadow: none;
+}
+.rail .sidebar-worker.active .sidebar-session-title,
+.rail .sidebar-worker.active small {
+  color: #fffef9;
+}
+
+.worker-thread .event-top { align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.worker-thread .event-top time { margin-left: auto; }
+.worker-item-status,
+.worker-change-kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #e1eeb4;
+  background: #354431;
+  text-shadow: none;
+}
+.worker-item-status.completed,
+.worker-change-kind.add { color: #c4dfb1; background: #283720; }
+.worker-item-status.failed,
+.worker-change-kind.delete { color: #ffe0d5; background: #643c33; }
+.worker-thread .worker-command,
+.worker-output pre,
+.markdown pre {
+  padding: 12px;
+  border-radius: 8px;
+  background: #19211b;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.worker-thread code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; }
+.worker-output { margin-top: 10px; }
+.worker-output summary {
+  width: fit-content;
+  min-height: 36px;
+  padding: 7px 2px;
+  color: var(--sage);
+  cursor: pointer;
+  font-size: 13px;
+}
+.worker-output summary:focus-visible { outline: 2px solid var(--sage); outline-offset: 3px; border-radius: 4px; }
+.worker-output[open] summary { margin-bottom: 4px; }
+.worker-file-changes { list-style: none; padding: 0; margin: 0; }
+.worker-file-changes li { display: flex; align-items: baseline; gap: 10px; margin: 8px 0; }
+.worker-file-changes code { min-width: 0; overflow-wrap: anywhere; }
+.worker-change-kind { flex-shrink: 0; }
+.worker-log-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown { font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; }
+.markdown > * + * { margin-top: 12px; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { font-size: 17px; line-height: 1.5; font-weight: 600; }
+.markdown h1 { font-size: 21px; }
+.markdown h2 { font-size: 19px; }
+.markdown ul, .markdown ol { padding-left: 24px; }
+.markdown li + li { margin-top: 4px; }
+.markdown blockquote { border-left: 1px solid var(--sage); padding-left: 14px; color: var(--muted); }
+.markdown a { color: var(--sage); text-decoration: underline; text-underline-offset: 3px; }
+.markdown :not(pre) > code { background: #19211b; padding: 2px 4px; border-radius: 4px; }
+.app-error-boundary { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.app-error-card { width: min(100%, 500px); padding: 28px; border-radius: 16px; background: #19211b; }
+.app-error-card h1 { font-size: 23px; line-height: 1.4; }
+.app-error-card p { margin: 14px 0 20px; color: var(--muted); }
+@media (max-width: 740px), (pointer: coarse) {
+  .worker-output summary { min-height: 44px; }
+}

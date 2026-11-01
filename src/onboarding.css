@@ -1,0 +1,61 @@
+.ob-backdrop { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; background: rgba(8,10,14,.55); backdrop-filter: blur(14px) saturate(1.1); animation: ob-fade .18s ease-out; }
+@keyframes ob-fade { from { opacity: 0 } }
+.ob-dialog { width: min(980px, calc(100vw - 48px)); height: min(680px, calc(100vh - 80px)); display: grid; grid-template-columns: 230px 1fr; border-radius: 22px; overflow: hidden; background: rgba(24,27,24,.92); border: 1px solid rgba(255,255,255,.1); box-shadow: 0 40px 120px rgba(0,0,0,.55); color: #ecede7; font-family: inherit; }
+.ob-steps { display: flex; flex-direction: column; gap: 18px; padding: 22px 16px; background: rgba(255,255,255,.035); border-right: 1px solid rgba(255,255,255,.07); }
+.ob-brand { display: flex; gap: 10px; align-items: center; color: #c9e7b4; }
+.ob-brand strong { display: block; color: #fff; font-size: 15px; } .ob-brand small { color: #9fa29a; font-size: 12px; }
+.ob-steps ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.ob-steps li button { width: 100%; display: flex; gap: 10px; align-items: center; padding: 9px 10px; border: 0; border-radius: 10px; background: transparent; color: #cfd1c9; font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
+.ob-steps li button:hover { background: rgba(255,255,255,.05); }
+.ob-steps li button.current { background: rgba(201,231,180,.12); color: #fff; font-weight: 600; }
+.ob-dot { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 50%; font-size: 12px; font-weight: 700; background: rgba(255,255,255,.08); color: #b8bab2; }
+.ob-dot.ok { background: #6fbf73; color: #0d1a0e; } .ob-dot.warn { background: #e9b949; color: #2a1e00; }
+.ob-skip { margin-top: auto; border: 0; background: none; color: #9fa29a; font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.ob-main { display: flex; flex-direction: column; min-width: 0; }
+.ob-main header { display: flex; align-items: center; gap: 10px; padding: 20px 24px 12px; }
+.ob-main header small { color: #9fa29a; font-size: 12px; } .ob-main h2 { margin: 2px 0 0; font-size: 22px; letter-spacing: -.01em; }
+.ob-spacer { flex: 1; }
+.ob-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.04); color: #dfe1d9; cursor: pointer; }
+.ob-icon:hover { background: rgba(255,255,255,.09); }
+.ob-body { flex: 1; overflow: auto; padding: 4px 24px 16px; }
+.ob-main footer { display: flex; gap: 8px; padding: 14px 24px 18px; border-top: 1px solid rgba(255,255,255,.07); }
+.ob-lead { margin: 0 0 14px; font-size: 15px; line-height: 1.6; color: #e3e5dd; }
+.ob-muted { color: #9fa29a; font-size: 13px; line-height: 1.55; }
+.ob-list { display: grid; gap: 8px; margin-bottom: 12px; }
+.ob-row { padding: 12px 14px; border-radius: 13px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07); }
+.ob-row.warn { border-color: rgba(233,185,73,.35); background: rgba(233,185,73,.06); }
+.ob-row.ok { border-color: rgba(111,191,115,.22); }
+.ob-row-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.ob-row-head small { color: #9fa29a; font-size: 12px; padding: 1px 7px; border-radius: 99px; background: rgba(255,255,255,.06); }
+.ob-why { margin: 6px 0 0; color: #b9bbb3; font-size: 13px; line-height: 1.5; }
+.ob-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; background: rgba(255,255,255,.07); color: #cfd1c9; }
+.ob-badge.ok { background: rgba(111,191,115,.16); color: #9ee0a1; } .ob-badge.warn { background: rgba(233,185,73,.16); color: #f2cd73; }
+.ob-command { display: flex; align-items: center; gap: 8px; margin-top: 9px; padding: 6px 6px 6px 12px; border-radius: 10px; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.06); min-width: 0; flex: 1; }
+.ob-command code { flex: 1; overflow-x: auto; white-space: nowrap; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #e8f3dc; }
+.ob-link { display: inline-flex; gap: 4px; align-items: center; margin-top: 7px; color: #a9cdf5; font-size: 12.5px; text-decoration: none; }
+.ob-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 9px; }
+.ob-actions .ob-command { margin-top: 0; }
+.ob-btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 13px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); color: #e9ebe3; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ob-btn:hover:not(:disabled) { background: rgba(255,255,255,.1); }
+.ob-btn:disabled { opacity: .45; cursor: default; }
+.ob-btn.primary { background: #c9e7b4; color: #142012; border-color: transparent; }
+.ob-btn.primary:hover:not(:disabled) { background: #d8f0c6; }
+.ob-check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: #cfd1c9; cursor: pointer; }
+.ob-notice { margin: 0 24px 8px; padding: 9px 12px; border-radius: 10px; background: rgba(169,205,245,.1); color: #cfe3fa; font-size: 13px; }
+.ob-body .ob-notice { margin: 0 0 12px; }
+.ob-notice.warn { background: rgba(233,185,73,.12); color: #f2cd73; }
+.ob-spaces { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.ob-space { text-align: left; padding: 14px; border-radius: 14px; border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04); color: inherit; font: inherit; cursor: pointer; }
+.ob-space.active { border-color: rgba(201,231,180,.45); background: rgba(201,231,180,.07); }
+.ob-space p { margin: 8px 0; color: #c3c5bd; font-size: 13px; line-height: 1.55; } .ob-space small { color: #9fa29a; }
+.ob-input { height: 34px; flex: 1; min-width: 160px; padding: 0 11px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12); background: rgba(0,0,0,.3); color: #fff; font: inherit; font-size: 13.5px; }
+.ob-input.small { flex: none; min-width: 80px; }
+.ob-done { text-align: center; padding: 6px 0 14px; color: #c9e7b4; } .ob-done h3 { margin: 8px 0 4px; font-size: 22px; color: #fff; } .ob-done p { margin: 0; color: #c3c5bd; }
+.ob-shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-bottom: 12px; }
+.ob-shortcuts div { display: flex; gap: 10px; align-items: center; padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.035); font-size: 13px; color: #d5d7cf; }
+.ob-shortcuts kbd { flex: none; min-width: 92px; padding: 3px 8px; border-radius: 7px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); font: 600 12px/1.4 ui-monospace, Menlo, monospace; color: #fff; text-align: center; }
+.ob-resume { position: fixed; right: 20px; bottom: 20px; z-index: 390; display: inline-flex; gap: 8px; align-items: center; padding: 10px 14px; border-radius: 999px; border: 0; background: #c9e7b4; color: #142012; font: inherit; font-weight: 700; font-size: 13.5px; box-shadow: 0 12px 30px rgba(0,0,0,.35); cursor: pointer; }
+.spin { animation: ob-spin 0.9s linear infinite; } @keyframes ob-spin { to { transform: rotate(360deg) } }
+@media (prefers-reduced-motion: reduce) { .ob-backdrop, .spin { animation: none; } }
+@media (max-width: 760px) { .ob-dialog { grid-template-columns: 1fr; } .ob-steps { display: none; } .ob-spaces, .ob-shortcuts { grid-template-columns: 1fr; } }
+.ob-hint { margin: 8px 0 0; padding: 8px 10px; border-radius: 9px; background: rgba(169,205,245,.08); color: #cfe3fa; font-size: 12.5px; line-height: 1.5; }

@@ -1,0 +1,24 @@
+[package]
+name = "agent-orchestra"
+version = "1.0.0"
+description = "Desktop shell for Agent Orchestra"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSError", "NSString", "NSBundle"] }
+objc2-user-notifications = { version = "0.3", features = ["UNUserNotificationCenter", "UNNotificationSettings", "block2"] }

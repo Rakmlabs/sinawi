@@ -1,0 +1,60 @@
+import { createServer } from "./server.js";
+import { accessSync } from "node:fs";
+import { resolve } from "node:path";
+import { runtimeOptions } from "./runtime.js";
+import { installBrowserTooling } from "./browser-bridge.js";
+
+const port = Number(process.env.AGENT_ORCHESTRA_PORT ?? 3001);
+const options = runtimeOptions();
+if (options.staticDir) accessSync(resolve(options.staticDir, "index.html"));
+const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: true });
+void installBrowserTooling().catch((error) => console.error("ao-browser 설치 실패:", error.message));
+
+httpServer.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EADDRINUSE") console.error(`포트 ${port}이 이미 사용 중입니다.`);
+  else if (error.code === "EPERM") console.error(`127.0.0.1:${port}에서 서버를 열 권한이 없습니다.`);
+  else console.error("Agent Orchestra 서버 시작 실패:", error.message);
+  process.exitCode = 1;
+});
+
+httpServer.listen(port, "127.0.0.1", () => {
+  console.log(`Agent Orchestra API: http://127.0.0.1:${port}`);
+});
+
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  terminal.close();
+
+  for (const session of orchestra.list()) {
+    if (session.status === "running") orchestra.stop(session.id);
+  }
+  for (const client of websocket.clients) client.close(1001, "서버를 종료합니다");
+
+  let finishing = false;
+  const finish = () => {
+    if (finishing) return;
+    finishing = true;
+    // Let child-process close handlers and their bounded kill timers finish,
+    // then write any session changes still waiting in the coalesced saver.
+    httpServer.close(() => {
+      flushSessions().then(() => { process.exitCode = 0; }, (error) => {
+        console.error("세션 저장 실패:", error instanceof Error ? error.message : error);
+        process.exitCode = 1;
+      });
+    });
+  };
+  const force = setTimeout(() => {
+    for (const client of websocket.clients) client.terminate();
+    websocket.close();
+    finish();
+  }, 1_500);
+  force.unref();
+  websocket.close(() => {
+    clearTimeout(force);
+    finish();
+  });
+}
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);

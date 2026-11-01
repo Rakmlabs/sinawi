@@ -1,0 +1,137 @@
+.glass-select {
+  position: relative;
+  min-width: 128px;
+  max-width: 100%;
+}
+
+.glass-select-control {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  overflow: hidden;
+  color: #fafaf5;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+}
+
+.glass-select-control:focus-within {
+  outline: 2px solid var(--sage, #c4dfb1);
+  outline-offset: 3px;
+}
+
+.glass-select-control > svg {
+  margin-left: 10px;
+  color: #d7dfcc;
+}
+
+.glass-select-control input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 4px 9px 11px;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  background: transparent;
+  border: 0;
+  outline: 0 !important;
+}
+
+.glass-select-control > svg + input {
+  padding-left: 7px;
+}
+
+.glass-select-control input::placeholder {
+  color: #c8cec1;
+}
+
+.glass-select-control input:disabled,
+.glass-select-control:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.glass-select-control:has(input:disabled) {
+  opacity: 0.45;
+}
+
+.glass-select-toggle {
+  align-self: stretch;
+  display: grid;
+  width: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  color: #d7dfcc;
+}
+
+.glass-select-toggle:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.glass-select-menu {
+  position: fixed;
+  z-index: 10000;
+  overflow: auto;
+  padding: 5px;
+  color: #fafaf5;
+  background: rgba(38, 45, 37, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(10, 18, 12, 0.34);
+  backdrop-filter: blur(24px) saturate(1.1);
+}
+
+.glass-select-menu [role="listbox"] {
+  display: grid;
+  gap: 2px;
+}
+
+.glass-select-menu [role="option"],
+.glass-select-custom {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  overflow: hidden;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.glass-select-menu [role="option"] span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass-select-menu [role="option"].active,
+.glass-select-menu [role="option"]:hover:not(:disabled) {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.glass-select-menu [role="option"][aria-selected="true"] {
+  color: #d0dfbb;
+}
+
+.glass-select-empty {
+  padding: 12px 10px;
+  color: #d0d5cb;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.glass-select-custom {
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.13);
+  color: #d0dfbb;
+}
+
+@media (max-width: 740px), (pointer: coarse) {
+  .glass-select-control,
+  .glass-select-menu [role="option"],
+  .glass-select-custom {
+    min-height: 44px;
+  }
+}

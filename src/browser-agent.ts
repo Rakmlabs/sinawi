@@ -1,0 +1,70 @@
+export type AgentCommand = { type: "browser-command"; id: string; action: string; args: Record<string, unknown> };
+
+export const OWN_APP_ERROR = "Agent Orchestra 자체 주소는 열 수 없습니다. localhost 개발 서버 페이지를 여세요.";
+
+/** App server (default 3001) opened as a tab nests the shell; picker never answers. */
+export function isOwnAppUrl(raw: string | undefined, appPort = 3001): boolean {
+  const value = String(raw ?? "").trim();
+  if (/^\d{2,5}$/.test(value)) return Number(value) === appPort;
+  try { const url = new URL(/^[a-z]+:\/\//i.test(value) ? value : `http://${value}`); return (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") && Number(url.port || 80) === appPort; } catch { return false; }
+}
+
+/** Why the active tab cannot take AI commands, or undefined when it can. */
+export function agentCommandError(tab: { frameUrl?: string; proxied?: boolean; url?: string } | undefined): string | undefined {
+  if (!tab?.frameUrl) return "열린 페이지가 없습니다. 먼저 `ao-browser goto <포트 또는 localhost 주소>` 로 여세요.";
+  if (isOwnAppUrl(tab.url) || isOwnAppUrl(tab.frameUrl)) return OWN_APP_ERROR;
+  if (!tab.proxied) return `외부 사이트(${tab.url ?? "https"})는 AI가 조작할 수 없습니다. localhost 개발 서버 페이지만 조작할 수 있어요.`;
+  return undefined;
+}
+
+/** goto, or a new tab, aimed at the app server itself. */
+export function commandTargetsOwnApp(action: string, args: Record<string, unknown>, appPort = 3001): boolean {
+  if (action === "goto") return isOwnAppUrl(String(args.url ?? ""), appPort);
+  if (action === "tab" && String(args.op ?? "list") === "new") return isOwnAppUrl(String(args.url ?? ""), appPort);
+  return false;
+}
+
+/** Safe to broadcast again. click and goto must run once. */
+export function replayCommand(action: string): boolean {
+  return action === "viewport" || action === "status" || action === "tabs";
+}
+
+const claimed = new Set<string>();
+const claimedOrder: string[] = [];
+
+let held: AgentCommand | undefined;
+
+/** Park a command until a browser panel mounts.
+ *  WKWebView's default inactive policy suspends the view when the window is not frontmost,
+ *  so setTimeout and requestAnimationFrame do not run and must not carry the handoff. */
+export function holdCommand(command: AgentCommand): void {
+  if (command.id) held = command;
+}
+
+/** The panel that just mounted takes the parked command. A panel that is not the target puts it back. */
+export function takeHeldCommand(): AgentCommand | undefined {
+  const command = held;
+  held = undefined;
+  return command;
+}
+
+/** First delivery of an id wins. A 400ms resend must not start the command again. */
+export function claimCommand(id: string): boolean {
+  if (!id || claimed.has(id)) return false;
+  claimed.add(id);
+  claimedOrder.push(id);
+  if (claimedOrder.length > 300) {
+    const oldest = claimedOrder.shift();
+    if (oldest) claimed.delete(oldest);
+  }
+  return true;
+}
+
+/** Agents should see the real dev-server URL, not the internal proxy port. */
+export function withTargetUrls<T extends { result?: unknown }>(value: T, proxyOrigin?: string, targetOrigin?: string): T {
+  if (!proxyOrigin || !targetOrigin || !value.result || typeof value.result !== "object") return value;
+  const swap = (text: string) => text.split(proxyOrigin).join(targetOrigin);
+  const out: Record<string, unknown> = { ...(value.result as Record<string, unknown>) };
+  for (const key of ["url", "from", "snapshot", "text", "href"]) if (typeof out[key] === "string") out[key] = swap(out[key] as string);
+  return { ...value, result: out };
+}

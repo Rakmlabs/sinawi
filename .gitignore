@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.data/
+.env*
+!.env.example
+*.log
+.impeccable/review/
+.impeccable/hook.cache.json
+src-tauri/target/
+src-tauri/resources/
+
+# Agent run transcripts and scratch output (contain local paths and full conversations)
+codex-*.jsonl
+codex-*.err
+grok-*.err
+grok-*.out
+
+# Local screenshots and setting backups made while developing
+/shot*.png
+/w.png
+/routing-backup.json
+
+# Tool state
+.omc/
+.DS_Store
+*.tmp
