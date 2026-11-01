@@ -1,6 +1,7 @@
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes } from "./setup.js";
 import { BrowserBridge, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
+import { envVar } from "./runtime.js";
 import { createServer as createHttpServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -427,7 +428,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   };
 
   app.use("/api", localGuard);
-  const previewProxies = registerPreviewRoutes(app, { dataDir: options.dataDir, appPort: Number(process.env.AGENT_ORCHESTRA_PORT ?? 3001) });
+  const previewProxies = registerPreviewRoutes(app, { dataDir: options.dataDir, appPort: Number(envVar("PORT") ?? 3001) });
   httpServer.once("close", () => previewProxies.close());
   const browserBridge = new BrowserBridge((command) => {
     const message = JSON.stringify(command);
@@ -437,7 +438,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   }, options.browserQueue && process.platform === "darwin" ? () => new Promise<boolean>((done) => {
     // Server runs under launchd, separate from the app; reopen the app window so ao-browser has a target.
     // -g leaves it behind other windows. It still has to answer: WKWebView must not suspend (backgroundThrottling: disabled).
-    execFile("open", ["-g", "-b", process.env.AGENT_ORCHESTRA_BUNDLE_ID ?? "kr.rakm.agentorchestra"], (error) => done(!error));
+    execFile("open", ["-g", "-b", envVar("BUNDLE_ID") ?? "dev.sinawi.app"], (error) => done(!error));
   }) : undefined);
   registerBrowserRoutes(app, browserBridge);
   if (options.browserQueue) { const stop = watchQueue(browserBridge); httpServer.once("close", stop); }
@@ -667,7 +668,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     lookup: (id) => orchestra.get(id),
     extraRoots: () => [previewAssetsDir(options.dataDir)],
     previewRoot: () => previewAssetsDir(options.dataDir),
-    cacheDir: () => join(options.dataDir ?? join(homedir(), ".agent-orchestra"), "file-previews"),
+    cacheDir: () => join(options.dataDir ?? join(homedir(), ".sinawi"), "file-previews"),
   });
   registerLinkPreviewRoute(app);
   app.post("/api/sessions/:id/messages", async (req, res) => {
@@ -892,7 +893,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       res.status(201).json(await orchestra.conversation(input, await loadBots(options.dataDir)));
     } catch (error) { errorResponse(res, error); }
   });
-  const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, app: "agent-orchestra", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: process.env.AGENT_ORCHESTRA_SERVER_VERSION ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });
+  const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, app: "sinawi", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: envVar("SERVER_VERSION") ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });
   app.get("/api/health", sendHealth);
   app.get("/health", sendHealth);
   // Unknown API routes must never become a successful HTML response.

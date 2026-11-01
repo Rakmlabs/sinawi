@@ -120,7 +120,7 @@ test("an interrupted migration keeps split files and imports only missing legacy
 });
 
 test("bots load and persist inside the configured data directory", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-bots-"));
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-bots-"));
   assert.deepEqual(await loadBots(directory), []);
   const bot = { id: "bot-1", name: "Reviewer", agent: "codex" as const, skills: [], systemPrompt: "", createdAt: "2026-01-01T00:00:00.000Z" };
   await mutateBots((bots) => { bots.push(bot); }, directory);

@@ -9,7 +9,7 @@ import { runCli, type RunCliOptions } from "./cli.js";
 import { filterEnabledSkills, publicSkills } from "./skills.js";
 import { loadToolSettings } from "./store.js";
 import type { AgentId, AgentSelection, SkillInfo } from "./types.js";
-import { defaultDataDir } from "./runtime.js";
+import { defaultDataDir, envVar } from "./runtime.js";
 import { companyMediaUnavailableMessage, imageTextKeywords, imageVisualKeywords, isMediaRule, mediaGenerationRequired, mediaRouteRequired, mediaSkills, mediaUnavailableMessage, stripPreviewAttachments, videoKeywords } from "./media-routing.js";
 
 const agentIds = new Set<AgentId>(["codex", "claude", "grok"]);
@@ -244,9 +244,9 @@ export async function discoverLocalModels(homeDirectory = homedir()): Promise<Ro
 
 function modelCommand(agent: AgentId): string {
   return ({
-    codex: process.env.AGENT_ORCHESTRA_CODEX_BIN,
-    claude: process.env.AGENT_ORCHESTRA_CLAUDE_BIN,
-    grok: process.env.AGENT_ORCHESTRA_GROK_BIN,
+    codex: envVar("CODEX_BIN"),
+    claude: envVar("CLAUDE_BIN"),
+    grok: envVar("GROK_BIN"),
   })[agent] || agent;
 }
 
@@ -514,7 +514,7 @@ function recommendationIsAvailable(recommendation: RouteRecommendation, availabl
 }
 
 function plannerPrompt(prompt: string, settings: RoutingSettings, skills: SkillInfo[]): string {
-  return `당신은 Agent Orchestra 라우터입니다. 도구를 사용하거나 작업을 실행하지 말고 사용자 요청을 분석해 JSON 하나만 반환하세요.\n` +
+  return `당신은 Sinawi 라우터입니다. 도구를 사용하거나 작업을 실행하지 말고 사용자 요청을 분석해 JSON 하나만 반환하세요.\n` +
     `형식: {"planner":{"agent":"codex|claude|grok","model":"...","reasoningEffort":"low|medium|high|xhigh|max","reason":"계획 담당 이유"},"orchestrator":{동일 형식},"workers":[{"id":"worker-1","label":"Codex 1","agent":"codex|claude|grok","model":"...","reasoningEffort":"...","reason":"작업자 이유"}],"skills":["skill id"],"reason":"전체 이유 한 줄"}\n` +
     `일치하는 규칙이 없으면 Claude를 기본 오케스트레이터로 선택하세요. 이미지/영상 생성은 Grok이 오케스트레이션하고 Codex와 Grok을 워커로 선택하세요. 쇼츠/릴스/마케팅 영상은 marketing-shorts 스킬을 첨부하세요. 설정과 라우팅 규칙을 반드시 존중하세요. 목록에 있는 모델과 스킬만 선택하세요. 워커는 최대 3명이며 오케스트레이터와 같은 에이전트 또는 같은 에이전트의 여러 독립 워커를 선택할 수 있습니다. 각 워커에는 고유 id와 구분 가능한 label을 지정하세요.\n` +
     `설정: ${JSON.stringify(settings)}\n사용 가능한 스킬: ${JSON.stringify(skills.slice(0, 300).map(({ id, name, description }) => ({ id, name, description: description.slice(0, 500) })))}\n사용자 요청: ${prompt}`;

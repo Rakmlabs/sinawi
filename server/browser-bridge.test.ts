@@ -161,7 +161,7 @@ test("CLI prints usage and parses refs vs selectors via the http route", async (
   registerBrowserRoutes(app, bridge);
   const server = app.listen(0); const port = (server.address() as { port: number }).port;
   try {
-    const env = { ...process.env, AGENT_ORCHESTRA_PORT: String(port) };
+    const env = { ...process.env, SINAWI_PORT: String(port) };
     assert.match((await run("node", [cli, "snapshot"], { env })).stdout, /\[e1\] button "저장"/);
     await assert.rejects(run("node", [cli, "click", "e7"], { env }), /오류: 없음/);
     await assert.rejects(run("node", [cli, "fill", "#name", "홍", "길동"], { env }));
@@ -188,7 +188,7 @@ test("CLI parses viewport, dialog, upload, tabs, and keyboard", async () => {
   bridge = new BrowserBridge((c) => { seen.push(c); setTimeout(() => bridge.resolve(c.id, { ok: true, result: c.action === "click" ? { clicked: "e1", snapshot: "[e1] button \"저장\"" } : { echo: c.action } }), 5); return 1; });
   registerBrowserRoutes(app, bridge);
   const server = app.listen(0); const port = (server.address() as { port: number }).port;
-  const env = { ...process.env, AGENT_ORCHESTRA_PORT: String(port) };
+  const env = { ...process.env, SINAWI_PORT: String(port) };
   const exec = (args: string[]) => run("node", [cli, ...args], { env, encoding: "utf8" });
   try {
     assert.match((await exec(["click", "e1"])).stdout, /클릭 e1/);

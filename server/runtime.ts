@@ -1,7 +1,12 @@
 import { dirname, resolve } from "node:path";
 
+/** Reads `SINAWI_<name>`, falling back to the pre-rename `AGENT_ORCHESTRA_<name>` so existing setups keep working. */
+export function envVar(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env[`SINAWI_${name}`] || env[`AGENT_ORCHESTRA_${name}`] || undefined;
+}
+
 /** Packaged apps keep mutable data outside the signed application bundle. */
-export const defaultDataDir = resolve(process.env.AGENT_ORCHESTRA_DATA_DIR || resolve(process.cwd(), ".data"));
+export const defaultDataDir = resolve(envVar("DATA_DIR") || resolve(process.cwd(), ".data"));
 
 function positiveFinite(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -12,9 +17,9 @@ export function runtimeOptions(args = process.argv.slice(2), env: NodeJS.Process
   const production = args.includes("start");
   return {
     dataDir: defaultDataDir,
-    inactivityTimeoutMs: positiveFinite(env.AGENT_ORCHESTRA_INACTIVITY_TIMEOUT_MS, 10 * 60 * 1_000),
+    inactivityTimeoutMs: positiveFinite(envVar("INACTIVITY_TIMEOUT_MS", env), 10 * 60 * 1_000),
     ...(production ? {
-      staticDir: resolve(env.AGENT_ORCHESTRA_STATIC_DIR || resolve(dirname(process.argv[1]), "dist")),
+      staticDir: resolve(envVar("STATIC_DIR", env) || resolve(dirname(process.argv[1]), "dist")),
     } : {}),
   };
 }

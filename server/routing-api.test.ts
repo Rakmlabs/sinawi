@@ -11,6 +11,7 @@ import { defaultRoutingSettings } from "./routing.js";
 import { loadGroups, loadSessions, loadWorkspaceState, mutateGroups, saveSessions } from "./store.js";
 import type { Session } from "./types.js";
 import { saveProviderQuota } from "./quota.js";
+import { envVar } from "./runtime.js";
 
 // Exercise Express and JSON middleware without requiring a TCP listener.
 function request(app: Express, method: string, path: string, body?: unknown, origin?: string): Promise<{ status: number; body: any }> {
@@ -45,22 +46,22 @@ test("production serves the built frontend alongside guarded API and identifies 
   const directory = await mkdtemp(join(tmpdir(), "orchestra-production-"));
   const staticDir = join(directory, "dist");
   await mkdir(join(staticDir, "assets"), { recursive: true });
-  await writeFile(join(staticDir, "index.html"), "<!doctype html><title>Agent Orchestra fixture</title>");
+  await writeFile(join(staticDir, "index.html"), "<!doctype html><title>Sinawi fixture</title>");
   await writeFile(join(staticDir, "assets", "app.js"), "console.log('bundled asset');");
   const options = { dataDir: directory, modelHomeDir: directory, availableAgents: [], modelRunner: async () => { throw new Error("No CLI in fixture"); } };
   const production = createServer({ ...options, staticDir });
   const development = createServer(options);
   try {
     const health = await request(production.app, "GET", "/api/health");
-    assert.deepEqual(health, { status: 200, body: { ok: true, app: "agent-orchestra", mode: "production", running: 0, version: process.env.AGENT_ORCHESTRA_SERVER_VERSION ?? "", windows: 0 } });
+    assert.deepEqual(health, { status: 200, body: { ok: true, app: "sinawi", mode: "production", running: 0, version: envVar("SERVER_VERSION") ?? "", windows: 0 } });
     assert.deepEqual(await request(production.app, "GET", "/health"), health);
     assert.equal((await request(development.app, "GET", "/api/health")).body.mode, "development");
-    assert.deepEqual(await request(development.app, "GET", "/health"), { status: 200, body: { ok: true, app: "agent-orchestra", mode: "development", running: 0, version: process.env.AGENT_ORCHESTRA_SERVER_VERSION ?? "", windows: 0 } });
+    assert.deepEqual(await request(development.app, "GET", "/health"), { status: 200, body: { ok: true, app: "sinawi", mode: "development", running: 0, version: envVar("SERVER_VERSION") ?? "", windows: 0 } });
     assert.equal((await request(development.app, "GET", "/")).status, 404);
     for (const route of ["/", "/conversation/example", "/usage"]) {
       const response = await request(production.app, "GET", route);
       assert.equal(response.status, 200);
-      assert.match(response.body, /Agent Orchestra fixture/);
+      assert.match(response.body, /Sinawi fixture/);
     }
     assert.match((await request(production.app, "GET", "/assets/app.js")).body, /bundled asset/);
     for (const route of ["/assets/missing.js", "/api/missing", "/ws"]) {

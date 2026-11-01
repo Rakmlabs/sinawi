@@ -8,7 +8,7 @@ import { loadUsage } from "./usage.js";
 import { loadProviderQuotas } from "./quota.js";
 
 async function mockCli() {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-cli-"));
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-cli-"));
   const executable = join(directory, "mock-codex.mjs");
   await writeFile(executable, `#!/usr/bin/env node
 const waiting = process.argv.includes("wait-for-cancel");
@@ -32,7 +32,7 @@ if (waiting) {
 
 test("runCli streams real child-process JSONL into normalized events", async () => {
   const { directory, executable } = await mockCli();
-  process.env.AGENT_ORCHESTRA_CODEX_BIN = executable;
+  process.env.SINAWI_CODEX_BIN = executable;
   const events: Array<{ type: string; text: string }> = [];
   const result = await runCli({
     agent: "codex", prompt: "stream", cwd: directory, model: "gpt-test",
@@ -54,7 +54,7 @@ test("runCli streams real child-process JSONL into normalized events", async () 
 
 test("runCli sends SIGTERM when its abort signal is cancelled", async () => {
   const { directory, executable } = await mockCli();
-  process.env.AGENT_ORCHESTRA_CODEX_BIN = executable;
+  process.env.SINAWI_CODEX_BIN = executable;
   const controller = new AbortController();
   const started = Date.now();
   let markReady: (() => void) | undefined;
@@ -72,7 +72,7 @@ test("runCli sends SIGTERM when its abort signal is cancelled", async () => {
 });
 
 test("runCli abort terminates the CLI's full process group", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-cli-group-"));
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-cli-group-"));
   const child = join(directory, "group-child.mjs");
   const executable = join(directory, "group-parent.mjs");
   const pidFile = join(directory, "child.pid");
@@ -97,7 +97,7 @@ process.once("SIGTERM", () => process.exit(143));
 setInterval(() => {}, 1000);
 `, { mode: 0o700 });
   await Promise.all([chmod(child, 0o700), chmod(executable, 0o700)]);
-  process.env.AGENT_ORCHESTRA_CODEX_BIN = executable;
+  process.env.SINAWI_CODEX_BIN = executable;
   t.after(async () => {
     try { process.kill(Number(await readFile(pidFile, "utf8")), "SIGKILL"); } catch { /* already stopped */ }
   });
@@ -122,7 +122,7 @@ setInterval(() => {}, 1000);
 });
 
 test("server shutdown kills the process group of a CLI that has no abort signal", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-cli-shutdown-"));
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-cli-shutdown-"));
   const child = join(directory, "group-child.mjs");
   const executable = join(directory, "group-parent.mjs");
   const pidFile = join(directory, "child.pid");
@@ -147,7 +147,7 @@ process.once("SIGTERM", () => process.exit(143));
 setInterval(() => {}, 1000);
 `, { mode: 0o700 });
   await Promise.all([chmod(child, 0o700), chmod(executable, 0o700)]);
-  process.env.AGENT_ORCHESTRA_CODEX_BIN = executable;
+  process.env.SINAWI_CODEX_BIN = executable;
   t.after(async () => {
     try { process.kill(Number(await readFile(pidFile, "utf8")), "SIGKILL"); } catch { /* already stopped */ }
   });
@@ -172,8 +172,8 @@ setInterval(() => {}, 1000);
 });
 
 test("runCli records a failed run when the CLI cannot start", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-cli-missing-"));
-  process.env.AGENT_ORCHESTRA_CODEX_BIN = join(directory, "missing-codex");
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-cli-missing-"));
+  process.env.SINAWI_CODEX_BIN = join(directory, "missing-codex");
   await assert.rejects(runCli({
     agent: "codex", prompt: "fail", cwd: directory,
     usageContext: { workspaceId: "personal", sessionId: "failed-app-session", role: "router", dataDir: directory },
@@ -186,14 +186,14 @@ test("runCli records a failed run when the CLI cannot start", async () => {
 });
 
 test("runCli surfaces permission denials written to stderr as warnings", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-cli-stderr-"));
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-cli-stderr-"));
   const executable = join(directory, "mock-claude.mjs");
   await writeFile(executable, `#!/usr/bin/env node
 process.stderr.write("Permission denied: gh pr view\\n");
 process.exitCode = 1;
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
-  process.env.AGENT_ORCHESTRA_CLAUDE_BIN = executable;
+  process.env.SINAWI_CLAUDE_BIN = executable;
   const events: Array<{ type: string; text: string }> = [];
 
   await runCli({ agent: "claude", prompt: "inspect", cwd: directory, onLine: (event) => events.push(event) });
@@ -204,14 +204,14 @@ process.exitCode = 1;
 });
 
 test("every Claude stream run caches its latest rate limit event", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-claude-limit-"));
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-claude-limit-"));
   const executable = join(directory, "mock-claude.mjs");
   await writeFile(executable, `#!/usr/bin/env node
 process.stdout.write(JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.92, resetsAt: "2026-10-30T15:00:00Z" }, seven_day: { utilization: 0.4, resetsAt: "2026-11-02T00:00:00Z" } } } }) + "\\n");
 process.stdout.write(JSON.stringify({ type: "result", result: "done", usage: { input_tokens: 1, output_tokens: 1 } }) + "\\n");
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
-  process.env.AGENT_ORCHESTRA_CLAUDE_BIN = executable;
+  process.env.SINAWI_CLAUDE_BIN = executable;
   const result = await runCli({
     agent: "claude", prompt: ".", cwd: directory,
     usageContext: { workspaceId: "personal", sessionId: "probe", role: "router", dataDir: directory },
@@ -223,7 +223,7 @@ process.stdout.write(JSON.stringify({ type: "result", result: "done", usage: { i
 });
 
 test("a live Claude rate limit event is visible before a long run exits", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-live-limit-"));
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-live-limit-"));
   const executable = join(directory, "mock-live-claude.mjs");
   await writeFile(executable, `#!/usr/bin/env node
 process.stdout.write(JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.97, resetsAt: "2026-10-30T15:00:00Z" } } } }) + "\\n");
@@ -231,7 +231,7 @@ process.once("SIGTERM", () => process.exit(143));
 setInterval(() => {}, 1000);
 `, { mode: 0o700 });
   await chmod(executable, 0o700);
-  process.env.AGENT_ORCHESTRA_CLAUDE_BIN = executable;
+  process.env.SINAWI_CLAUDE_BIN = executable;
   const controller = new AbortController();
   const running = runCli({
     agent: "claude", prompt: "long", cwd: directory, signal: controller.signal,

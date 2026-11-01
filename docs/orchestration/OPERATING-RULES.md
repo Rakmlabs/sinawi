@@ -1,4 +1,4 @@
-# Agent Orchestra 운영 규칙 (앱이 강제하는 것)
+# Sinawi 운영 규칙 (앱이 강제하는 것)
 
 근거는 [RESEARCH.md](./RESEARCH.md). 코드: `server/supervision.ts`, `server/orchestra.ts`.
 

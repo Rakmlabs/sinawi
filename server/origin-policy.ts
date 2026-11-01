@@ -1,9 +1,11 @@
+import { envVar } from "./runtime.js";
+
 // Browser origins allowed to talk to the API, /ws and the terminal socket.
 // Any other loopback port (preview proxies, the user's own dev servers) is rejected.
 const DEV_PORTS = [5188, 5198];
 
 export function appPort() {
-  return Number(process.env.AGENT_ORCHESTRA_PORT ?? 3001);
+  return Number(envVar("PORT") ?? 3001);
 }
 
 export function allowedOrigins(port = appPort()) {

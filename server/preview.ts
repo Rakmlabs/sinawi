@@ -214,7 +214,7 @@ export function safeUploadName(header: string | undefined): string {
 }
 
 export function previewAssetsDir(dataDir?: string) {
-  return resolve(dataDir ?? join(homedir(), ".agent-orchestra"), "preview-attachments");
+  return resolve(dataDir ?? join(homedir(), ".sinawi"), "preview-attachments");
 }
 
 export function registerPreviewRoutes(app: Express, options: { dataDir?: string; appPort?: number }) {
@@ -225,7 +225,7 @@ export function registerPreviewRoutes(app: Express, options: { dataDir?: string;
       const address = normalizeAddress(raw);
       const target = isLoopbackTarget(address);
       if (!target) { res.json({ url: address, frameUrl: address, proxied: false }); return; }
-      if (Number(target.port || 80) === (options.appPort ?? 3001) || proxies.ownPorts().has(Number(target.port))) throw new Error("Agent Orchestra 자체 주소는 열 수 없습니다.");
+      if (Number(target.port || 80) === (options.appPort ?? 3001) || proxies.ownPorts().has(Number(target.port))) throw new Error("Sinawi 자체 주소는 열 수 없습니다.");
       const proxy = await proxies.open(target);
       res.json({ url: target.href, frameUrl: proxy.origin + target.pathname + target.search + target.hash, proxied: true, proxyOrigin: proxy.origin, targetOrigin: target.origin });
     } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }

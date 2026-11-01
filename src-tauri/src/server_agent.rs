@@ -13,7 +13,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const LABEL: &str = "kr.rakm.agentorchestra.server";
+pub const LABEL: &str = "dev.sinawi.server";
+/// Pre-rename ("Agent Orchestra") identifiers, used only to migrate an existing install.
+pub const LEGACY_LABEL: &str = "kr.rakm.agentorchestra.server";
+pub const LEGACY_BUNDLE_ID: &str = "kr.rakm.agentorchestra";
 const ADDRESS: &str = "127.0.0.1:3001";
 
 pub struct Layout {
@@ -22,6 +25,12 @@ pub struct Layout {
     pub data_dir: PathBuf,
     pub log_dir: PathBuf,
     pub plist: PathBuf,
+    /// ~/Library/Application Support/kr.rakm.agentorchestra (holds the old `.data`).
+    pub legacy_app_dir: PathBuf,
+    /// ~/Library/Logs/Agent Orchestra
+    pub legacy_log_dir: PathBuf,
+    /// ~/Library/LaunchAgents/kr.rakm.agentorchestra.server.plist
+    pub legacy_plist: PathBuf,
 }
 
 fn uid() -> String {
@@ -31,6 +40,12 @@ fn uid() -> String {
 }
 fn domain() -> String { format!("gui/{}", uid()) }
 fn target() -> String { format!("{}/{LABEL}", domain()) }
+fn legacy_target() -> String { format!("{}/{LEGACY_LABEL}", domain()) }
+
+/// True for a health body from this server, or from a pre-rename server during an upgrade.
+pub fn is_our_app(body: &str) -> bool {
+    body.contains("\"app\":\"sinawi\"") || body.contains("\"app\":\"agent-orchestra\"")
+}
 
 /// Raw /api/health body, if our server answers.
 pub fn health_body() -> Option<String> {
@@ -41,7 +56,7 @@ pub fn health_body() -> Option<String> {
     let mut response = String::new();
     stream.read_to_string(&mut response).ok()?;
     let (headers, body) = response.split_once("\r\n\r\n")?;
-    (headers.starts_with("HTTP/1.1 200") && body.contains("\"app\":\"agent-orchestra\"")).then(|| body.to_string())
+    (headers.starts_with("HTTP/1.1 200") && is_our_app(body)).then(|| body.to_string())
 }
 
 fn running_sessions(body: &str) -> Option<u64> {
@@ -131,7 +146,7 @@ fn resolve_node_env() -> (String, String) {
 
 /// True when the installed plist predates the direct-node launch (still goes through a login shell).
 fn plist_outdated(layout: &Layout) -> bool {
-    fs::read_to_string(&layout.plist).map(|c| c.contains("/bin/zsh") || !c.contains("<key>PATH</key>")).unwrap_or(true)
+    fs::read_to_string(&layout.plist).map(|c| c.contains("/bin/zsh") || !c.contains("<key>PATH</key>") || !c.contains("<key>SINAWI_PORT</key>")).unwrap_or(true)
 }
 
 fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
@@ -154,10 +169,10 @@ fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
   <dict>
     <key>PATH</key><string>{path_env}</string>
     <key>HOME</key><string>{home}</string>
-    <key>AGENT_ORCHESTRA_PORT</key><string>3001</string>
-    <key>AGENT_ORCHESTRA_STATIC_DIR</key><string>{dist}</string>
-    <key>AGENT_ORCHESTRA_DATA_DIR</key><string>{data}</string>
-    <key>AGENT_ORCHESTRA_SERVER_VERSION</key><string>{version}</string>
+    <key>SINAWI_PORT</key><string>3001</string>
+    <key>SINAWI_STATIC_DIR</key><string>{dist}</string>
+    <key>SINAWI_DATA_DIR</key><string>{data}</string>
+    <key>SINAWI_SERVER_VERSION</key><string>{version}</string>
   </dict>
   <key>WorkingDirectory</key><string>{cwd}</string>
   <key>RunAtLoad</key><true/>
@@ -175,38 +190,107 @@ fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
     fs::write(&layout.plist, plist)
 }
 
-fn is_loaded() -> bool {
-    Command::new("/bin/launchctl").args(["print", &target()]).output().map(|o| o.status.success()).unwrap_or(false)
+fn loaded(target: &str) -> bool {
+    Command::new("/bin/launchctl").args(["print", target]).output().map(|o| o.status.success()).unwrap_or(false)
 }
+fn is_loaded() -> bool { loaded(&target()) }
 
 fn bootstrap(layout: &Layout) {
     let _ = Command::new("/bin/launchctl").args(["bootstrap", &domain(), &layout.plist.to_string_lossy()]).status();
 }
 
-fn bootout() {
-    let _ = Command::new("/bin/launchctl").args(["bootout", &target()]).status();
-    for _ in 0..50 { if !is_loaded() { break; } thread::sleep(Duration::from_millis(100)); }
+fn bootout_target(target: &str) {
+    let _ = Command::new("/bin/launchctl").args(["bootout", target]).status();
+    for _ in 0..50 { if !loaded(target) { break; } thread::sleep(Duration::from_millis(100)); }
 }
+fn bootout() { bootout_target(&target()); }
 
 fn log(message: &str) {
     if let Some(home) = std::env::var_os("HOME") {
-        let path = Path::new(&home).join("Library/Logs/Agent Orchestra/agent.log");
-        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) { let _ = writeln!(file, "{message}"); }
+        let dir = Path::new(&home).join("Library/Logs/Sinawi");
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(dir.join("agent.log")) { let _ = writeln!(file, "{message}"); }
     }
+}
+
+fn is_empty_dir(path: &Path) -> bool {
+    fs::read_dir(path).map(|mut entries| entries.next().is_none()).unwrap_or(false)
+}
+
+/// Rename `from` to `to` when `to` is absent (or an empty dir). Never overwrites existing content.
+pub fn move_legacy_dir(from: &Path, to: &Path, what: &str) -> Option<String> {
+    if !from.is_dir() { return None; }
+    if to.exists() && !is_empty_dir(to) {
+        return Some(format!("migration: {what} left in place at {} ({} already exists)", from.display(), to.display()));
+    }
+    if to.exists() { let _ = fs::remove_dir(to); }
+    if let Some(parent) = to.parent() { let _ = fs::create_dir_all(parent); }
+    Some(match fs::rename(from, to) {
+        Ok(()) => format!("migration: moved {what} {} -> {}", from.display(), to.display()),
+        Err(error) => format!("migration: failed to move {what} {} -> {}: {error}", from.display(), to.display()),
+    })
+}
+
+/// One-time upgrade from the pre-rename "Agent Orchestra" install: stop and remove its LaunchAgent,
+/// then move its data and logs to the Sinawi locations. Idempotent; safe to call on every launch.
+fn migrate_legacy(layout: &Layout) {
+    let mut notes = Vec::new();
+    if loaded(&legacy_target()) {
+        bootout_target(&legacy_target());
+        notes.push(format!("migration: booted out {LEGACY_LABEL}"));
+    }
+    if layout.legacy_plist.exists() {
+        notes.push(match fs::remove_file(&layout.legacy_plist) {
+            Ok(()) => format!("migration: removed {}", layout.legacy_plist.display()),
+            Err(error) => format!("migration: failed to remove {}: {error}", layout.legacy_plist.display()),
+        });
+    }
+    // Logs first: log() below creates the new log dir, which would block this move.
+    notes.extend(move_legacy_dir(&layout.legacy_log_dir, &layout.log_dir, "logs"));
+    let legacy_data = layout.legacy_app_dir.join(".data");
+    if let Some(note) = move_legacy_dir(&legacy_data, &layout.data_dir, "data") {
+        if !legacy_data.exists() {
+            let _ = fs::write(layout.legacy_app_dir.join("MOVED_TO_SINAWI.txt"), format!("Data moved to {}\n", layout.data_dir.display()));
+            // The old installed server copy is regenerated from the bundle; only user data mattered.
+            let _ = fs::remove_dir_all(layout.legacy_app_dir.join("server"));
+        }
+        notes.push(note);
+    }
+    for note in notes { log(&note); }
+}
+
+/// Install the bundled server (when needed), write the plist and bootstrap the LaunchAgent.
+fn install_and_start(layout: &Layout, version: &str) -> Result<(), String> {
+    if installed_version(layout) != version || !layout.server_dir.join("server.cjs").is_file() {
+        install_files(layout, version).map_err(|e| format!("server install failed: {e}"))?;
+    }
+    write_plist(layout, &installed_version(layout)).map_err(|e| format!("plist write failed: {e}"))?;
+    bootstrap(layout);
+    log(&format!("bootstrapped {LABEL} version {}", installed_version(layout)));
+    Ok(())
 }
 
 /// Make sure the LaunchAgent exists and runs; schedule a deferred update when the bundle is newer.
 pub fn ensure(layout: Layout) -> Result<(), String> {
     let version = bundled_version(&layout);
-    if !is_loaded() {
-        if installed_version(&layout) != version || !layout.server_dir.join("server.cjs").is_file() {
-            install_files(&layout, &version).map_err(|e| format!("server install failed: {e}"))?;
+    if loaded(&legacy_target()) {
+        // A pre-rename server still owns port 3001. If it has running sessions, keep using it
+        // (its health is accepted) and switch over once it is idle, so no session is cut.
+        if let Some(running) = health_body().as_deref().and_then(running_sessions).filter(|n| *n > 0) {
+            log(&format!("migration deferred: {LEGACY_LABEL} has {running} running sessions"));
+            thread::spawn(move || {
+                while let Some(running) = health_body().as_deref().and_then(running_sessions).filter(|n| *n > 0) {
+                    log(&format!("migration deferred (running sessions: {running})"));
+                    thread::sleep(Duration::from_secs(20));
+                }
+                migrate_legacy(&layout);
+                if let Err(error) = install_and_start(&layout, &version) { log(&error); }
+            });
+            return Ok(());
         }
-        write_plist(&layout, &installed_version(&layout)).map_err(|e| format!("plist write failed: {e}"))?;
-        bootstrap(&layout);
-        log(&format!("bootstrapped {LABEL} version {}", installed_version(&layout)));
-        return Ok(());
     }
+    migrate_legacy(&layout);
+    if !is_loaded() { return install_and_start(&layout, &version); }
     if installed_version(&layout) == version && !plist_outdated(&layout) { return Ok(()); }
     // Newer server bundled: swap only while idle, so running sessions are never cut.
     thread::spawn(move || loop {
@@ -224,4 +308,57 @@ pub fn ensure(layout: Layout) -> Result<(), String> {
         thread::sleep(Duration::from_secs(20));
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sinawi-migrate-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn moves_legacy_dir_when_target_is_absent_or_empty() {
+        let root = temp("move");
+        let (old, new) = (root.join("old/.data"), root.join("new/.data"));
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("sessions.json"), "[]").unwrap();
+        assert!(move_legacy_dir(&old, &new, "data").unwrap().contains("moved"));
+        assert_eq!(fs::read_to_string(new.join("sessions.json")).unwrap(), "[]");
+        assert!(!old.exists());
+        assert!(move_legacy_dir(&old, &new, "data").is_none());
+
+        let (old2, empty) = (root.join("old2"), root.join("empty"));
+        fs::create_dir_all(&old2).unwrap();
+        fs::write(old2.join("a"), "1").unwrap();
+        fs::create_dir_all(&empty).unwrap();
+        assert!(move_legacy_dir(&old2, &empty, "logs").unwrap().contains("moved"));
+        assert!(empty.join("a").is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn never_overwrites_existing_target() {
+        let root = temp("keep");
+        let (old, new) = (root.join("old"), root.join("new"));
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(old.join("x"), "old").unwrap();
+        fs::write(new.join("x"), "new").unwrap();
+        assert!(move_legacy_dir(&old, &new, "data").unwrap().contains("left in place"));
+        assert_eq!(fs::read_to_string(new.join("x")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(old.join("x")).unwrap(), "old");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn accepts_renamed_and_pre_rename_health() {
+        assert!(is_our_app(r#"{"ok":true,"app":"sinawi"}"#));
+        assert!(is_our_app(r#"{"ok":true,"app":"agent-orchestra"}"#));
+        assert!(!is_our_app(r#"{"ok":true,"app":"other"}"#));
+    }
 }

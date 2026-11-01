@@ -120,19 +120,19 @@ pub async fn request_permission(kind: String) -> Result<State, String> {
     result
 }
 
-/// Appends to ~/Library/Logs/Agent Orchestra/permissions.log (and stderr).
+/// Appends to ~/Library/Logs/Sinawi/permissions.log (and stderr).
 pub fn log(line: &str) {
     use std::io::Write;
     eprintln!("[permissions] {line}");
     let Some(home) = std::env::var_os("HOME") else { return };
-    let dir = std::path::Path::new(&home).join("Library/Logs/Agent Orchestra");
+    let dir = std::path::Path::new(&home).join("Library/Logs/Sinawi");
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("permissions.log")) {
         let _ = writeln!(f, "{:?} {line}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
     }
 }
 
-/// `agent-orchestra --request-permission <kind>`: same code path as the onboarding button, for debugging.
+/// `sinawi --request-permission <kind>`: same code path as the onboarding button, for debugging.
 pub fn cli() -> bool {
     let args: Vec<String> = std::env::args().collect();
     let Some(i) = args.iter().position(|a| a == "--request-permission") else { return false };

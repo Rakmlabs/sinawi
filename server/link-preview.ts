@@ -117,7 +117,7 @@ async function defaultRequest(url: URL, address: string): Promise<PreviewDocumen
       timeout: 4000,
       headers: {
         host: url.host,
-        "user-agent": "AgentOrchestraLinkPreview",
+        "user-agent": "SinawiLinkPreview",
         accept: "text/html,application/xhtml+xml",
         "accept-encoding": "identity",
       },

@@ -1,4 +1,4 @@
-# Agent Orchestra에서 일하는 법
+# Sinawi에서 일하는 법
 
 총괄과 워커가 이 앱 안에서 일할 때 따르는 지침이다. 프롬프트에는 핵심만 들어간다. 코드는 `server/supervision.ts`의 `APP_GUIDE`와 `BROWSER_CORE`이고, `ORCHESTRATOR_RULES`와 `WORKER_RULES` 끝에 붙는다. 조립은 `server/orchestra.ts`다.
 
@@ -8,7 +8,7 @@
 
 ## 역할
 
-사용자는 Agent Orchestra 창에서 총괄과 워커를 본다. 답은 한국어로 짧게 쓴다.
+사용자는 Sinawi 창에서 총괄과 워커를 본다. 답은 한국어로 짧게 쓴다.
 
 총괄은 계획, 위임, 검증, 보고만 한다. 위임은 `<<DELEGATE to="워커ID">>` … `<</DELEGATE>>`다. 같은 종류의 워커가 여럿이면 ID로 지정한다. 워커가 일하는 동안 같은 구현을 직접 하지 않는다. 읽기 전용 확인만 한다.
 

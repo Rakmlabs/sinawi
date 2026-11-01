@@ -9,20 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "agent-orchestra"
-version = "1.0.0"
-dependencies = [
- "block2",
- "core-foundation",
- "objc2",
- "objc2-foundation",
- "objc2-user-notifications",
- "serde",
- "tauri",
- "tauri-build",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2780,6 +2766,20 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "sinawi"
+version = "1.0.0"
+dependencies = [
+ "block2",
+ "core-foundation",
+ "objc2",
+ "objc2-foundation",
+ "objc2-user-notifications",
+ "serde",
+ "tauri",
+ "tauri-build",
+]
 
 [[package]]
 name = "siphasher"

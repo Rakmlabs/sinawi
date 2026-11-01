@@ -14,6 +14,8 @@ const SERVER_ADDRESS: &str = "127.0.0.1:3001";
 const SERVER_URL: &str = "http://127.0.0.1:3001";
 const HEALTH_PATH: &str = "/api/health";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+/// Must match `identifier` in tauri.conf.json.
+const IDENTIFIER: &str = "dev.sinawi.app";
 
 
 fn health_response_is_ours(response: &str) -> bool {
@@ -23,7 +25,7 @@ fn health_response_is_ours(response: &str) -> bool {
 
     headers.starts_with("HTTP/1.1 200")
         && body.contains("\"ok\":true")
-        && body.contains("\"app\":\"agent-orchestra\"")
+        && server_agent::is_our_app(body)
         && body.contains("\"mode\":\"production\"")
 }
 
@@ -60,18 +62,18 @@ fn port_is_in_use() -> bool {
 fn show_error_dialog(message: &str, can_continue: bool) -> bool {
     let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
     let buttons = if can_continue { "{\"로그 열기\", \"계속 대기\"}" } else { "{\"로그 열기\", \"종료\"}" };
-    let script = format!("display dialog \"{escaped}\" with title \"Agent Orchestra\" with icon caution buttons {buttons} default button 2");
+    let script = format!("display dialog \"{escaped}\" with title \"Sinawi\" with icon caution buttons {buttons} default button 2");
     let out = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).output();
     let open_log = out.map(|o| String::from_utf8_lossy(&o.stdout).contains("로그 열기")).unwrap_or(false);
     if open_log {
         if let Some(home) = std::env::var_os("HOME") {
-            let _ = std::process::Command::new("/usr/bin/open").arg(std::path::Path::new(&home).join("Library/Logs/Agent Orchestra")).status();
+            let _ = std::process::Command::new("/usr/bin/open").arg(std::path::Path::new(&home).join("Library/Logs/Sinawi")).status();
         }
     }
     open_log
 }
 
-const LOG_HINT: &str = "로그: ~/Library/Logs/Agent Orchestra/server.log";
+const LOG_HINT: &str = "로그: ~/Library/Logs/Sinawi/server.log";
 
 fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let resources = app.path().resolve("server.cjs", BaseDirectory::Resource)?
@@ -82,11 +84,14 @@ fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::
         resources,
         server_dir: app_data_dir.join("server"),
         data_dir: app_data_dir.join(".data"),
-        log_dir: home.join("Library/Logs/Agent Orchestra"),
+        log_dir: home.join("Library/Logs/Sinawi"),
         plist: home.join("Library/LaunchAgents").join(format!("{}.plist", server_agent::LABEL)),
+        legacy_app_dir: app_data_dir.parent().ok_or("app data parent")?.join(server_agent::LEGACY_BUNDLE_ID),
+        legacy_log_dir: home.join("Library/Logs/Agent Orchestra"),
+        legacy_plist: home.join("Library/LaunchAgents").join(format!("{}.plist", server_agent::LEGACY_LABEL)),
     };
     if !production_server_is_ready() && port_is_in_use() {
-        show_error_dialog(&format!("포트 3001을 다른 프로그램이 사용 중이라 Agent Orchestra 서버를 시작할 수 없습니다.\n해당 프로그램을 종료한 뒤 앱을 다시 실행하세요.\n\n{LOG_HINT}"), false);
+        show_error_dialog(&format!("포트 3001을 다른 프로그램이 사용 중이라 Sinawi 서버를 시작할 수 없습니다.\n해당 프로그램을 종료한 뒤 앱을 다시 실행하세요.\n\n{LOG_HINT}"), false);
         std::process::exit(1);
     }
     // The server is owned by launchd, not by this app: quitting/replacing the app never stops it.
@@ -100,7 +105,7 @@ fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::
             if production_server_is_ready() {
                 let url = SERVER_URL.parse().expect("constant server URL must be valid");
                 if let Err(error) = window.navigate(url) {
-                    eprintln!("failed to navigate to Agent Orchestra server: {error}");
+                    eprintln!("failed to navigate to Sinawi server: {error}");
                 }
                 // Watchdog: the server (launchd) can restart under the window, leaving it on a dead/error
                 // page with no live socket, so ao-browser sees no window. Reload when no client is connected.
@@ -113,7 +118,7 @@ fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::
                     }
                     if missing >= 3 {
                         missing = 0;
-                        eprintln!("Agent Orchestra window lost its server connection; reloading");
+                        eprintln!("Sinawi window lost its server connection; reloading");
                         if let Ok(url) = SERVER_URL.parse() {
                             let _ = window.navigate(url);
                         }
@@ -122,13 +127,13 @@ fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::
             }
             if !warned && started_at.elapsed() > STARTUP_TIMEOUT {
                 warned = true;
-                eprintln!("Agent Orchestra server is not ready yet; still waiting (launchd keeps it alive)");
+                eprintln!("Sinawi server is not ready yet; still waiting (launchd keeps it alive)");
                 let reason = if port_is_in_use() {
                     "포트 3001을 다른 프로그램이 사용 중이거나 서버가 정상 응답하지 않습니다."
                 } else {
                     "서버가 시작되지 않았습니다 (node를 찾지 못했거나 서버가 즉시 종료됨)."
                 };
-                let message = format!("Agent Orchestra 서버가 {}초 안에 준비되지 않았습니다.\n{reason}\n\n{LOG_HINT}", STARTUP_TIMEOUT.as_secs());
+                let message = format!("Sinawi 서버가 {}초 안에 준비되지 않았습니다.\n{reason}\n\n{LOG_HINT}", STARTUP_TIMEOUT.as_secs());
                 // Dialog blocks only this watcher thread; if the server comes up later the window still loads.
                 show_error_dialog(&message, true);
             }
@@ -155,6 +160,15 @@ fn open_devtools(app: tauri::AppHandle) {
 
 fn main() {
     if permissions::cli() { return; }
+    // Pre-rename WebKit storage (the window's localStorage/IndexedDB) must move before any webview exists.
+    if !cfg!(dev) {
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            let webkit = home.join("Library/WebKit");
+            if let Some(note) = server_agent::move_legacy_dir(&webkit.join(server_agent::LEGACY_BUNDLE_ID), &webkit.join(IDENTIFIER), "webkit data") {
+                eprintln!("{note}");
+            }
+        }
+    }
 
     let app = tauri::Builder::default()
         .on_page_load(|webview, payload| {
@@ -182,7 +196,7 @@ fn main() {
                 && payload.event() == PageLoadEvent::Finished
             {
                 if let Err(error) = webview.window().show() {
-                    eprintln!("failed to show Agent Orchestra window: {error}");
+                    eprintln!("failed to show Sinawi window: {error}");
                 }
             }
         })
@@ -247,7 +261,7 @@ fn main() {
                         if let Some(window) = focused_window(app) {
                             // The page decides: reload the focused in-app browser tab, or the app.
                             if let Err(error) = window.eval("(window.__orchestraMenuReload || (() => location.reload()))()") {
-                                eprintln!("failed to reload Agent Orchestra: {error}");
+                                eprintln!("failed to reload Sinawi: {error}");
                             }
                         }
                     }
@@ -264,7 +278,7 @@ fn main() {
             start_production_runtime(app)
         })
         .build(tauri::generate_context!())
-        .expect("failed to build Agent Orchestra");
+        .expect("failed to build Sinawi");
 
     // Do not stop the server on exit: launchd keeps it (and running sessions) alive.
     app.run(|_app_handle, _event| {});

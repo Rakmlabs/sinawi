@@ -1,4 +1,5 @@
 import { fullPath, resolveCli } from "./cli-path";
+import { envVar } from "./runtime.js";
 /** 설정 도우미(first-run onboarding): tool versions, login state, macOS permissions. No user-specific paths. */
 import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
@@ -46,7 +47,7 @@ const defaultRunner: Runner = (command, args) => new Promise((resolve, reject) =
   execFile(resolveCli(command) ?? command, args, { timeout: 8000, env: { ...process.env, PATH: searchPath() } }, (error, stdout, stderr) => error ? reject(error) : resolve(`${stdout}\n${stderr}`));
 });
 
-const binary = (id: SetupToolId) => ({ claude: process.env.AGENT_ORCHESTRA_CLAUDE_BIN, codex: process.env.AGENT_ORCHESTRA_CODEX_BIN, grok: process.env.AGENT_ORCHESTRA_GROK_BIN } as Record<string, string | undefined>)[id] || id;
+const binary = (id: SetupToolId) => ({ claude: envVar("CLAUDE_BIN"), codex: envVar("CODEX_BIN"), grok: envVar("GROK_BIN") } as Record<string, string | undefined>)[id] || id;
 
 export async function detectTools(run: Runner = defaultRunner): Promise<SetupTool[]> {
   return Promise.all(SETUP_TOOLS.map(async (tool) => {

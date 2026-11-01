@@ -1,11 +1,11 @@
 import { createServer } from "./server.js";
 import { accessSync } from "node:fs";
 import { resolve } from "node:path";
-import { runtimeOptions } from "./runtime.js";
+import { envVar, runtimeOptions } from "./runtime.js";
 import { installBrowserTooling } from "./browser-bridge.js";
 import { killCliProcessGroups } from "./cli.js";
 
-const port = Number(process.env.AGENT_ORCHESTRA_PORT ?? 3001);
+const port = Number(envVar("PORT") ?? 3001);
 const options = runtimeOptions();
 if (options.staticDir) accessSync(resolve(options.staticDir, "index.html"));
 const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: true });
@@ -14,12 +14,12 @@ void installBrowserTooling().catch((error) => console.error("ao-browser 설치 �
 httpServer.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") console.error(`포트 ${port}이 이미 사용 중입니다.`);
   else if (error.code === "EPERM") console.error(`127.0.0.1:${port}에서 서버를 열 권한이 없습니다.`);
-  else console.error("Agent Orchestra 서버 시작 실패:", error.message);
+  else console.error("Sinawi 서버 시작 실패:", error.message);
   process.exitCode = 1;
 });
 
 httpServer.listen(port, "127.0.0.1", () => {
-  console.log(`Agent Orchestra API: http://127.0.0.1:${port}`);
+  console.log(`Sinawi API: http://127.0.0.1:${port}`);
 });
 
 let shuttingDown = false;

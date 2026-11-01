@@ -56,7 +56,7 @@ test("parseCliUsage reads Grok's standalone ACP usage line", () => {
 });
 
 test("usage records append atomically and preserve runs that have no token report", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-usage-"));
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-usage-"));
   await Promise.all([
     appendUsage({ id: "one", agent: "grok", model: "CLI default", workspaceId: "personal", sessionId: "session-1", role: "worker", durationMs: 250, status: "completed", timestamp: "2026-10-30T01:00:00.000Z" }, directory),
     appendUsage({ id: "two", agent: "claude", model: "sonnet", workspaceId: "company", sessionId: "session-2", role: "orchestrator", tokens: { input: 10, output: 2 }, costUsd: 0.01, durationMs: 300, status: "completed", timestamp: "2026-10-30T02:00:00.000Z" }, directory),

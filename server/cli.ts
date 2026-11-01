@@ -1,5 +1,6 @@
 import { cliChildEnv, DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
+import { envVar } from "./runtime.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -31,9 +32,9 @@ export interface RunCliOptions {
 
 function cliName(agent: AgentId): string {
   const configured = {
-    codex: process.env.AGENT_ORCHESTRA_CODEX_BIN,
-    claude: process.env.AGENT_ORCHESTRA_CLAUDE_BIN,
-    grok: process.env.AGENT_ORCHESTRA_GROK_BIN,
+    codex: envVar("CODEX_BIN"),
+    claude: envVar("CLAUDE_BIN"),
+    grok: envVar("GROK_BIN"),
   }[agent];
   return configured || resolveCli(agent) || agent;
 }

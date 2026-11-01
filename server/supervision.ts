@@ -57,7 +57,7 @@ export function ensureBrief(task: string, userPrompt: string): { text: string; m
  * docs/orchestration/prompts/app-guide.md. Injected into both roles.
  */
 export const APP_GUIDE = `## 이 앱에서 일하기
-이 세션은 Agent Orchestra 창 안에서 돌아간다. 사용자에게 보이는 답은 한국어로 짧게 쓴다.
+이 세션은 Sinawi 창 안에서 돌아간다. 사용자에게 보이는 답은 한국어로 짧게 쓴다.
 - 총괄은 계획, 위임, 검증, 보고만 한다. 워커는 <<DELEGATE>>로 받은 6개 제목 브리프만 본다. 총괄 대화와 다른 워커의 로그는 워커에게 보이지 않는다.
 - 세션 작업 폴더는 시작할 때 고정되고, 그 폴더가 명령의 작업 디렉터리다. CLI 세션은 같은 총괄·같은 워커의 다음 턴에 이어진다. 이어받아도 브리프의 맥락은 다시 적는다.
 - 앱 뷰어는 세션 작업 폴더와 미리보기 첨부 폴더 안만 연다. 결과 이미지·PDF·목업은 그 작업 폴더에 두고, 최종 답에 상대 경로를 마크다운으로 적는다. 예: \`![화면](preview/home.png)\`. 채팅이 그 경로를 뷰어로 연다. HTML 목업은 뷰어가 실행하지 않으므로 앱 브라우저로 연다.
@@ -80,7 +80,7 @@ export const BROWSER_CORE = `## 앱 브라우저 (ao-browser)
 - 명령: goto, snapshot, click, fill, type, press, scroll, wait, text, console, screenshot, back, forward, reload, tabs, status. open과 navigate는 goto, shot은 screenshot이다.`;
 
 /** Rules prepended to every orchestrator prompt (R1, R4, R5). */
-export const ORCHESTRATOR_RULES = `## 위임 규칙 (Agent Orchestra 운영 규칙)
+export const ORCHESTRATOR_RULES = `## 위임 규칙 (Sinawi 운영 규칙)
 당신의 일은 계획, 위임, 검증, 보고입니다. 워커에게 맡긴 일은 워커가 하는 동안 직접 하지 않습니다. 읽기 전용 확인만 허용됩니다. 사용자가 물으면 답한 뒤 조정을 계속합니다.
 - 위임 본문에는 반드시 다음 6개 제목을 쓴다: ## 목표 / ## 맥락 / ## 완료 기준 / ## 제약 / ## 검증 / ## 보고 형식. 빠진 칸은 앱이 기본값으로 채우지만, 구체적일수록 결과가 좋다.
 - 맥락에는 워커가 다시 찾지 않아도 되는 사실(경로, 이미 확인된 값, 이전 시도와 실패 이유)을 적는다. 워커는 이 대화를 보지 못한다. 다른 워커가 같은 저장소에서 만지는 파일이 있으면 적고, 그 변경을 되돌리지 말라고 적는다.
@@ -98,7 +98,7 @@ ${APP_GUIDE}
 ${BROWSER_CORE}`;
 
 /** Rules prepended to every worker prompt (R2, R3, R6, R7). */
-export const WORKER_RULES = `## 작업자 운영 규칙 (Agent Orchestra)
+export const WORKER_RULES = `## 작업자 운영 규칙 (Sinawi)
 - 편집하기 전에 대상 파일을 읽는다. 내용을 추측해서 고치지 않는다. 다음 단계가 이전 도구 결과에 의존하면, 그 결과를 확인한 뒤에만 진행한다.
 - 브라우저(ao-browser): goto 뒤에는 반드시 \`ao-browser snapshot\`으로 실제 요소 목록을 먼저 보고, 반환된 ref(예: e12)로 click/fill/text 한다. CSS 선택자를 짐작해서 여러 개 시도하지 않는다. 화면이 바뀌면 다시 snapshot. "요소를 찾을 수 없습니다"가 나오면 선택자를 바꿔 재시도하지 말고 snapshot부터 다시 본다.
 - 같은 오류가 3번 나오거나 같은 수정이 3번 실패하면 같은 방법을 더 시도하지 말고 멈춘다. 원래 목표, 시도한 것, 오류, 틀렸을 수 있는 가정을 '막힘'으로 보고한다. 앱도 반복 오류·장시간 무진전을 감지하면 작업을 중단시키고 총괄이 다시 계획한다.

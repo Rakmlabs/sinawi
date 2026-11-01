@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Agent Orchestra",
+  "productName": "Sinawi",
   "version": "1.0.0",
-  "identifier": "kr.rakm.agentorchestra",
+  "identifier": "dev.sinawi.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:5188",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Agent Orchestra",
+        "title": "Sinawi",
         "width": 1440,
         "height": 900,
         "minWidth": 1100,

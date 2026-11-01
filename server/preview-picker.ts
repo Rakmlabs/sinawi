@@ -1,7 +1,7 @@
 import { accessibleRole, formatNode } from "./browser-snapshot.js";
 import { cssSelectorFor, trimOuterHtml } from "./preview-selector.js";
 
-// Injected into every proxied HTML page. Talks to the Agent Orchestra window via postMessage.
+// Injected into every proxied HTML page. Talks to the Sinawi window via postMessage.
 const body = String.raw`
 (function () {
   if (window.__orchestraPicker) return;

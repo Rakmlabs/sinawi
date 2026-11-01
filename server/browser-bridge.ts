@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/pr
 import { homedir, tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
 import type { Express } from "express";
+import { envVar } from "./runtime.js";
 
 /** Actions an agent may run against the user's visible in-app browser tab. */
 export const BROWSER_ACTIONS = ["goto", "snapshot", "click", "type", "fill", "press", "scroll", "wait", "text", "console", "screenshot", "back", "forward", "reload", "tabs", "status", "viewport", "network", "dialog", "upload", "hover", "keyboard", "tab", "select"] as const;
@@ -12,10 +13,10 @@ export const isBrowserAction = (value: string): value is BrowserAction => (BROWS
 export type BrowserCommand = { type: "browser-command"; id: string; action: BrowserAction; args: Record<string, unknown> };
 export type BrowserResult = { ok: boolean; result?: unknown; error?: string };
 
-export const QUEUE_DIR = join(tmpdir(), "agent-orchestra-browser");
+export const QUEUE_DIR = join(tmpdir(), "sinawi-browser");
 
 /** True when ao-browser would open the app server itself (nested WebSocket, no picker, then timeout). */
-export function isOwnAppUrl(raw: string, appPort = Number(process.env.AGENT_ORCHESTRA_PORT || 3001)): boolean {
+export function isOwnAppUrl(raw: string, appPort = Number(envVar("PORT") || 3001)): boolean {
   const value = String(raw ?? "").trim();
   if (/^\d{2,5}$/.test(value)) return Number(value) === appPort;
   try { const url = new URL(/^[a-z]+:\/\//i.test(value) ? value : `http://${value}`); return (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") && Number(url.port || 80) === appPort; } catch { return false; }
@@ -48,7 +49,7 @@ export class BrowserBridge {
   }
 
   request(action: BrowserAction, args: Record<string, unknown> = {}, timeoutMs = defaultTimeout(action, args)): Promise<BrowserResult> {
-    if ((action === "goto" || (action === "tab" && String(args.op ?? "") === "new")) && isOwnAppUrl(String(args.url ?? ""))) return Promise.resolve({ ok: false, error: "Agent Orchestra 자체 주소는 열 수 없습니다. localhost 개발 서버 페이지를 여세요." });
+    if ((action === "goto" || (action === "tab" && String(args.op ?? "") === "new")) && isOwnAppUrl(String(args.url ?? ""))) return Promise.resolve({ ok: false, error: "Sinawi 자체 주소는 열 수 없습니다. localhost 개발 서버 페이지를 여세요." });
     const id = randomUUID();
     return new Promise((resolve) => {
       const command: BrowserCommand = { type: "browser-command", id, action, args };
@@ -60,7 +61,7 @@ export class BrowserBridge {
       };
       const timer = setTimeout(() => finish({ ok: false, error: `앱 브라우저가 ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다. 앱 창이 최소화됐거나 화면이 잠겨 있으면 응답하지 못합니다.` }), timeoutMs);
       this.pending.set(id, { resolve: (value) => finish(value), timer });
-      const fail = () => finish({ ok: false, error: "Agent Orchestra 앱 창이 열려 있지 않습니다. 앱을 실행한 뒤 다시 시도하세요." });
+      const fail = () => finish({ ok: false, error: "Sinawi 앱 창이 열려 있지 않습니다. 앱을 실행한 뒤 다시 시도하세요." });
       const replay = action === "viewport" || action === "status" || action === "tabs";
       const pulse = () => { if (!replay) return; const entry = this.pending.get(id); if (entry && !entry.pulse) entry.pulse = setInterval(() => { if (this.pending.has(id)) this.send(command); }, 400); };
       if (this.send(command)) { pulse(); return; }
@@ -171,11 +172,11 @@ export function watchQueue(bridge: BrowserBridge, dir = QUEUE_DIR, intervalMs = 
 }
 
 export const CLI_SOURCE = String.raw`#!/usr/bin/env node
-// ao-browser — Agent Orchestra 앱 안 브라우저 탭을 조작합니다. (자동 생성 파일)
+// ao-browser — Sinawi 앱 안 브라우저 탭을 조작합니다. (자동 생성 파일)
 const fs = require("fs"), path = require("path"), os = require("os");
-const port = process.env.AGENT_ORCHESTRA_PORT || "3001";
-const QUEUE = path.join(os.tmpdir(), "agent-orchestra-browser");
-const QUEUES = [...new Set([QUEUE, "/tmp/agent-orchestra-browser", path.join(process.env.TMPDIR || "/tmp", "agent-orchestra-browser")])];
+const port = process.env.SINAWI_PORT || process.env.AGENT_ORCHESTRA_PORT || "3001";
+const QUEUE = path.join(os.tmpdir(), "sinawi-browser");
+const QUEUES = [...new Set([QUEUE, "/tmp/sinawi-browser", path.join(process.env.TMPDIR || "/tmp", "sinawi-browser")])];
 const usage = "사용법: ao-browser <명령> [인자]\n" +
   "  goto <url|포트>               페이지 열기 (탭이 없으면 패널을 염). 로딩과 네트워크 idle을 기다림\n" +
   "  snapshot                      ref가 붙은 접근성 트리\n" +
@@ -253,7 +254,7 @@ async function viaQueue(action, args) {
   const res = path.join(dir, id + ".res.json"), req = path.join(dir, id + ".req.json"), start = Date.now();
   while (Date.now() - start < 75000) {
     if (fs.existsSync(res)) { const out = JSON.parse(fs.readFileSync(res, "utf8")); fs.rmSync(res, { force: true }); return out; }
-    if (Date.now() - start > 4000 && fs.existsSync(req)) { fs.rmSync(req, { force: true }); return { ok: false, error: "Agent Orchestra 앱이 실행 중이 아닙니다." }; }
+    if (Date.now() - start > 4000 && fs.existsSync(req)) { fs.rmSync(req, { force: true }); return { ok: false, error: "Sinawi 앱이 실행 중이 아닙니다." }; }
     await new Promise((r) => setTimeout(r, 100));
   }
   return { ok: false, error: "응답 시간 초과" };
@@ -293,12 +294,12 @@ function print(out) {
 
 export const SKILL_MD = `---
 name: orchestra-browser
-description: Agent Orchestra 앱 안 브라우저 탭(사용자가 보고 있는 화면)을 직접 조작한다. localhost 개발 서버 페이지를 열고, 요소를 클릭/입력하고, 스냅샷·스크린샷·콘솔 오류로 UI 작업 결과를 확인할 때 사용.
+description: Sinawi 앱 안 브라우저 탭(사용자가 보고 있는 화면)을 직접 조작한다. localhost 개발 서버 페이지를 열고, 요소를 클릭/입력하고, 스냅샷·스크린샷·콘솔 오류로 UI 작업 결과를 확인할 때 사용.
 ---
 
 # orchestra-browser
 
-사용자가 Agent Orchestra 앱 오른쪽 브라우저 패널에서 **같은 탭을 보면서** 네가 조작하는 걸 지켜본다.
+사용자가 Sinawi 앱 오른쪽 브라우저 패널에서 **같은 탭을 보면서** 네가 조작하는 걸 지켜본다.
 명령은 셸에서 \`ao-browser\` (없으면 \`node ~/.local/bin/ao-browser\`) 로 실행한다.
 
 ## 핵심 규칙 (먼저 읽기)

@@ -1,4 +1,6 @@
-# Agent Orchestra
+# Sinawi
+
+(구 Agent Orchestra) 시나위(Sinawi)는 즉흥 합주를 뜻하는 우리 음악 용어입니다.
 
 Mac에 설치된 Codex, Claude Code, Grok Build를 한 화면에서 실행하고 작업 과정을 확인하는 로컬 웹 앱입니다. `SPEC.md`와 `ref/*.png`를 바탕으로 따뜻한 라운지 사진, 반투명 유리 패널, 상단 내비게이션, 왼쪽 아이콘 레일을 구현했습니다. 배경 이미지는 AI로 생성하여 `public/lounge.png`에 저장했습니다.
 
@@ -34,9 +36,9 @@ npm run app:build
 
 빌드 전에 TypeScript 검사, Vite 빌드, esbuild 서버 번들 생성을 실행합니다. `src-tauri/resources/server.cjs`에는 Node 서버와 JS 의존성이 포함되며 `resources/dist/`에는 프런트엔드가 복사됩니다. 설치된 앱에는 프로젝트 폴더나 `node_modules`가 필요하지 않지만 Node 자체는 별도 설치가 필요합니다. macOS 앱·설치 이미지 출력은 `src-tauri/target/release/bundle/`에 생성됩니다. 아이콘 교체 방법은 `src-tauri/icons/README.md`를 참고하세요.
 
-배포 앱은 `127.0.0.1:3001`에서 프런트엔드·`/api`·`/ws`를 함께 제공합니다. 서버 준비 후 창을 표시하며, 종료할 때 자신이 시작한 서버를 종료합니다. 이미 실행 중인 Agent Orchestra 프로덕션 서버는 재사용하고 종료하지 않습니다. 다른 서비스나 개발 서버가 3001을 사용 중이면 종료한 뒤 다시 여세요.
+배포 앱은 `127.0.0.1:3001`에서 프런트엔드·`/api`·`/ws`를 함께 제공합니다. 서버 준비 후 창을 표시하며, 종료할 때 자신이 시작한 서버를 종료합니다. 이미 실행 중인 Sinawi 프로덕션 서버는 재사용하고 종료하지 않습니다. 다른 서비스나 개발 서버가 3001을 사용 중이면 종료한 뒤 다시 여세요.
 
-데스크톱 데이터는 `~/Library/Application Support/kr.rakm.agentorchestra/.data/`에 저장됩니다. 웹 개발·일반 프로덕션 실행은 프로젝트의 `.data/`를 사용합니다. `AGENT_ORCHESTRA_DATA_DIR`로 저장 위치를 지정할 수 있습니다. 두 실행 환경의 기존 기록은 자동으로 이동하지 않습니다. 실행 중 새 이벤트가 없는 세션은 기본 10분 후 중단되며, `AGENT_ORCHESTRA_INACTIVITY_TIMEOUT_MS`에 양의 밀리초 값을 지정해 조정할 수 있습니다.
+데스크톱 데이터는 `~/Library/Application Support/dev.sinawi.app/.data/`에 저장되고, 로그는 `~/Library/Logs/Sinawi/`에 남습니다. 이전 이름(Agent Orchestra, `kr.rakm.agentorchestra`)으로 설치한 적이 있으면 첫 실행 때 이전 LaunchAgent를 내리고 데이터·로그 폴더를 새 위치로 옮깁니다(새 위치에 내용이 있으면 덮어쓰지 않습니다). 웹 개발·일반 프로덕션 실행은 프로젝트의 `.data/`를 사용합니다. `SINAWI_DATA_DIR`로 저장 위치를 지정할 수 있습니다(환경 변수는 모두 `SINAWI_*`이며, 이전 `AGENT_ORCHESTRA_*` 이름도 계속 읽습니다). 두 실행 환경의 기존 기록은 자동으로 이동하지 않습니다. 실행 중 새 이벤트가 없는 세션은 기본 10분 후 중단되며, `SINAWI_INACTIVITY_TIMEOUT_MS`에 양의 밀리초 값을 지정해 조정할 수 있습니다.
 
 데스크톱 없이 같은 프로덕션 서버를 실행할 수도 있습니다.
 

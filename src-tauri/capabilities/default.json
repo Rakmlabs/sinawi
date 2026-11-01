@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Production capability for the Agent Orchestra desktop window",
+  "description": "Production capability for the Sinawi desktop window",
   "windows": [
     "main"
   ],
