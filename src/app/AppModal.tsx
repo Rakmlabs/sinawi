@@ -8,6 +8,7 @@ import { RemainingChip } from "../QuotaContext";
 import { ONBOARDING_OPEN_EVENT } from "../onboarding-state";
 import { names } from "./labels";
 import { AppearanceSettings } from "./AppearanceSettings";
+import { UpdateSettings } from "../updates/UpdateSettings";
 import type { Bootstrap } from "./api";
 import type { RoutingSettings } from "../../server/routing";
 import type { AgentId, SkillInfo as Skill, WorkspaceId } from "../../server/types";
@@ -177,6 +178,7 @@ export function AppModal(props: AppModalProps) {
               <input type="checkbox" checked={autoSwitch} disabled={busy} onChange={(event) => setAutoSwitch(event.target.checked)} />
             </label>}
             {modal === "settings" && <AppearanceSettings />}
+            {modal === "settings" && <UpdateSettings />}
             {modal === "settings" && <button className="button light" onClick={props.onOpenRouting}>{t("modal.editRouting")}</button>}
             {modal === "settings" && <button className="button light" onClick={() => reopenOnboarding(close)}>{t("modal.reopenOnboarding")}</button>}
             <label>

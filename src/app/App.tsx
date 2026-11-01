@@ -6,6 +6,7 @@ import { useOnboardingView } from "./useOnboardingView";
 import { WorkspaceApp } from "./WorkspaceApp";
 import { WorkspacesContext, type WorkspacesApi } from "../workspace-context";
 import { t } from "../i18n";
+import { UpdateBanner } from "../updates/UpdateBanner";
 
 /** Workspace shell: loads the user-defined workspaces and mounts one WorkspaceApp for the current one. */
 export function App() {
@@ -31,5 +32,6 @@ export function App() {
       else retry();
     }}>{t("common.retry")}</button></div>}
     {workspaces ? <WorkspaceApp key={workspaces.currentWorkspaceId} workspaceId={workspaces.currentWorkspaceId} defaults={workspaces.defaults[workspaces.currentWorkspaceId] ?? {}} onDefaultsChange={updateDefaults} /> : !workspaceError && <div role="status">{t("app.loadingWorkspace")}</div>}
+    <UpdateBanner />
   </WorkspacesContext.Provider>;
 }
