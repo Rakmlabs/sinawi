@@ -24,3 +24,8 @@ grok-*.out
 .omc/
 .DS_Store
 *.tmp
+
+# Release output (scripts/bundle-macos.sh) and any updater signing key that strays into the repo
+/release-assets/
+*.key
+*.key.password

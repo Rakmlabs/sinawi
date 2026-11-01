@@ -1,0 +1,103 @@
+name: Release
+
+# Push a tag `vX.Y.Z` (see docs/RELEASING.md) → a DRAFT GitHub release with the DMG, the signed
+# updater tarball and latest.json. Installed apps only see it once you publish the draft, because
+# the updater endpoint is releases/latest/download/latest.json (drafts and pre-releases are skipped).
+# Publishing also re-syncs latest.json's notes with the (possibly edited) release body.
+
+on:
+  push:
+    tags: ["v*"]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'push'
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Check version, tag and updater endpoint agree
+        run: node scripts/release.mjs check --tag-name "$TAG" --repo "$GITHUB_REPOSITORY"
+
+      - run: npm test
+
+      - name: Build, sign and bundle (universal)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Optional: with these the app is Developer-ID signed and notarized; without them it is
+          # ad-hoc signed (Gatekeeper warns on first install, see docs/RELEASING.md).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/bundle-macos.sh
+
+      - name: Release notes (annotated tag message, else GitHub's generated notes)
+        run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          if [ "$(git cat-file -t "$TAG")" = tag ]; then
+            git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$TAG" > notes.md
+          fi
+          if [ ! -s notes.md ] || [ -z "$(tr -d '[:space:]' < notes.md)" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" -q .body > notes.md
+          fi
+          cat notes.md
+
+      - name: Updater manifest
+        run: node scripts/latest-json.mjs --repo "$GITHUB_REPOSITORY" --tag "$TAG" --assets release-assets --notes notes.md
+
+      - name: Upload draft release
+        run: |
+          VERSION="${TAG#v}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            gh release create "$TAG" --draft --verify-tag --title "Sinawi $VERSION" --notes-file notes.md release-assets/*
+          fi
+
+  refresh-notes:
+    # The banner in the app shows latest.json's notes; keep them equal to the published body.
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Sync latest.json notes with the release body
+        run: |
+          gh release download "$TAG" --pattern latest.json --dir manifest
+          gh release view "$TAG" --json body --jq .body > notes.md
+          jq --rawfile notes notes.md '.notes = ($notes | sub("\\s+$"; ""))' manifest/latest.json > latest.json
+          gh release upload "$TAG" latest.json --clobber

@@ -75,7 +75,7 @@ fn show_error_dialog(message: &str, can_continue: bool) -> bool {
 
 const LOG_HINT: &str = "로그: ~/Library/Logs/Sinawi/server.log";
 
-fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn server_layout<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Result<server_agent::Layout, Box<dyn std::error::Error>> {
     let resources = app.path().resolve("server.cjs", BaseDirectory::Resource)?
         .parent().ok_or("resource dir")?.to_path_buf();
     let app_data_dir = app.path().app_data_dir()?;
@@ -90,6 +90,29 @@ fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::
         legacy_log_dir: home.join("Library/Logs/Agent Orchestra"),
         legacy_plist: home.join("Library/LaunchAgents").join(format!("{}.plist", server_agent::LEGACY_LABEL)),
     };
+    Ok(layout)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerVersionStatus {
+    /// Version hash of the server bundled in this app (what the LaunchAgent should run).
+    bundled: String,
+    /// Version hash of the copy installed for the LaunchAgent (differs while a swap is deferred).
+    installed: String,
+}
+
+/// Lets the UI compare the running server (`/api/health` `version`) with this app's bundled server,
+/// e.g. right after an app update. None in dev, where no LaunchAgent is involved.
+#[tauri::command]
+fn server_version_status(app: tauri::AppHandle) -> Option<ServerVersionStatus> {
+    if cfg!(dev) { return None; }
+    let layout = server_layout(&app).ok()?;
+    Some(ServerVersionStatus { bundled: server_agent::bundled_version(&layout), installed: server_agent::installed_version(&layout) })
+}
+
+fn start_production_runtime(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let layout = server_layout(app)?;
     if !production_server_is_ready() && port_is_in_use() {
         show_error_dialog(&format!("포트 3001을 다른 프로그램이 사용 중이라 Sinawi 서버를 시작할 수 없습니다.\n해당 프로그램을 종료한 뒤 앱을 다시 실행하세요.\n\n{LOG_HINT}"), false);
         std::process::exit(1);
@@ -171,6 +194,8 @@ fn main() {
     }
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .on_page_load(|webview, payload| {
             let is_production_page = payload.url().scheme() == "http"
                 && payload.url().host_str() == Some("127.0.0.1")
@@ -200,7 +225,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![open_devtools, permissions::permission_status, permissions::request_permission])
+        .invoke_handler(tauri::generate_handler![open_devtools, server_version_status, permissions::permission_status, permissions::request_permission])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             if let Some(menu) = app.menu() {

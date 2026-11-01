@@ -76,7 +76,7 @@ pub fn bundled_version(layout: &Layout) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn installed_version(layout: &Layout) -> String {
+pub fn installed_version(layout: &Layout) -> String {
     fs::read_to_string(layout.server_dir.join("VERSION")).unwrap_or_default().trim().to_string()
 }
 
@@ -90,21 +90,57 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Copy server.cjs, dist and node_modules into the stable dir (staged, then swapped).
-fn install_files(layout: &Layout, version: &str) -> std::io::Result<()> {
+/// Copy server.cjs, dist and node_modules into a staging dir next to the stable dir. The running
+/// server is untouched, so a failed copy never affects it.
+fn stage_files(layout: &Layout, version: &str) -> std::io::Result<PathBuf> {
     let staging = layout.server_dir.with_extension("staging");
     let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging)?;
-    fs::copy(layout.resources.join("server.cjs"), staging.join("server.cjs"))?;
-    copy_dir(&layout.resources.join("dist"), &staging.join("dist"))?;
-    let modules = layout.resources.join("node_modules");
-    if modules.is_dir() { copy_dir(&modules, &staging.join("node_modules"))?; }
-    fs::write(staging.join("VERSION"), version)?;
-    let old = layout.server_dir.with_extension("old");
+    let result = (|| {
+        fs::create_dir_all(&staging)?;
+        fs::copy(layout.resources.join("server.cjs"), staging.join("server.cjs"))?;
+        copy_dir(&layout.resources.join("dist"), &staging.join("dist"))?;
+        let modules = layout.resources.join("node_modules");
+        if modules.is_dir() { copy_dir(&modules, &staging.join("node_modules"))?; }
+        fs::write(staging.join("VERSION"), version)
+    })();
+    if result.is_err() { let _ = fs::remove_dir_all(&staging); }
+    result.map(|_| staging)
+}
+
+fn previous_dir(layout: &Layout) -> PathBuf { layout.server_dir.with_extension("old") }
+
+/// Swap a staged copy in. The previous copy is kept as `server.old` until the new server is
+/// verified (`discard_previous`) or rolled back (`restore_previous`).
+fn swap_in(layout: &Layout, staging: &Path) -> std::io::Result<()> {
+    let old = previous_dir(layout);
     let _ = fs::remove_dir_all(&old);
     if layout.server_dir.exists() { fs::rename(&layout.server_dir, &old)?; }
-    fs::rename(&staging, &layout.server_dir)?;
-    let _ = fs::remove_dir_all(&old);
+    if let Err(error) = fs::rename(staging, &layout.server_dir) {
+        if old.exists() { let _ = fs::rename(&old, &layout.server_dir); }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Put the previous copy back. Returns false when there is none (nothing was swapped).
+fn restore_previous(layout: &Layout) -> bool {
+    let old = previous_dir(layout);
+    if !old.is_dir() { return false; }
+    let failed = layout.server_dir.with_extension("failed");
+    let _ = fs::remove_dir_all(&failed);
+    if layout.server_dir.exists() && fs::rename(&layout.server_dir, &failed).is_err() { return false; }
+    let restored = fs::rename(&old, &layout.server_dir).is_ok();
+    let _ = fs::remove_dir_all(&failed);
+    restored
+}
+
+fn discard_previous(layout: &Layout) { let _ = fs::remove_dir_all(previous_dir(layout)); }
+
+/// Fresh install (no server running): stage, swap, drop the previous copy.
+fn install_files(layout: &Layout, version: &str) -> std::io::Result<()> {
+    let staging = stage_files(layout, version)?;
+    swap_in(layout, &staging)?;
+    discard_previous(layout);
     Ok(())
 }
 
@@ -296,18 +332,60 @@ pub fn ensure(layout: Layout) -> Result<(), String> {
     thread::spawn(move || loop {
         match health_body().as_deref().and_then(running_sessions) {
             Some(0) => {
-                bootout();
-                let result = (if installed_version(&layout) == version { Ok(()) } else { install_files(&layout, &version) })
-                    .and_then(|_| write_plist(&layout, &version));
-                bootstrap(&layout);
-                log(&format!("updated server to {version}: {result:?}"));
-                return;
+                if update_installed_server(&layout, &version) { return; }
             }
             other => log(&format!("server update deferred (running sessions: {other:?})")),
         }
         thread::sleep(Duration::from_secs(20));
     });
     Ok(())
+}
+
+/// True once our server answers with `version` (the plist's SINAWI_SERVER_VERSION).
+fn wait_for_version(version: &str, timeout: Duration) -> bool {
+    let started = Instant::now();
+    let needle = format!("\"version\":\"{version}\"");
+    while started.elapsed() < timeout {
+        if health_body().is_some_and(|body| body.contains(&needle)) { return true; }
+        thread::sleep(Duration::from_millis(500));
+    }
+    false
+}
+
+/// Swap the installed server for the bundled one while idle. Returns false to retry later (a session
+/// started while staging). On any failure the previous server is restored and restarted.
+fn update_installed_server(layout: &Layout, version: &str) -> bool {
+    let previous = installed_version(layout);
+    // Stage while the old server still runs, so the downtime is only the rename + restart.
+    let staged = if previous == version { None } else {
+        match stage_files(layout, version) {
+            Ok(dir) => Some(dir),
+            Err(error) => {
+                log(&format!("server update to {version} failed while staging, keeping {previous}: {error}"));
+                return true;
+            }
+        }
+    };
+    if health_body().as_deref().and_then(running_sessions) != Some(0) {
+        if let Some(dir) = &staged { let _ = fs::remove_dir_all(dir); }
+        return false;
+    }
+    bootout();
+    let result = match &staged { Some(dir) => swap_in(layout, dir), None => Ok(()) }
+        .and_then(|_| write_plist(layout, version));
+    bootstrap(layout);
+    if result.is_ok() && wait_for_version(version, Duration::from_secs(45)) {
+        discard_previous(layout);
+        log(&format!("updated server {previous} -> {version}"));
+        return true;
+    }
+    log(&format!("server update to {version} failed ({result:?}); rolling back to {previous}"));
+    bootout();
+    let restored = staged.is_some() && restore_previous(layout);
+    let plist = write_plist(layout, &installed_version(layout));
+    bootstrap(layout);
+    log(&format!("rollback: restored files={restored}, plist={plist:?}, running version {}", installed_version(layout)));
+    true
 }
 
 #[cfg(test)]
@@ -352,6 +430,54 @@ mod tests {
         assert!(move_legacy_dir(&old, &new, "data").unwrap().contains("left in place"));
         assert_eq!(fs::read_to_string(new.join("x")).unwrap(), "new");
         assert_eq!(fs::read_to_string(old.join("x")).unwrap(), "old");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn layout_in(root: &Path) -> Layout {
+        Layout {
+            resources: root.join("resources"), server_dir: root.join("server"), data_dir: root.join(".data"),
+            log_dir: root.join("logs"), plist: root.join("agent.plist"), legacy_app_dir: root.join("legacy"),
+            legacy_log_dir: root.join("legacy-logs"), legacy_plist: root.join("legacy.plist"),
+        }
+    }
+
+    fn write_resources(layout: &Layout, marker: &str) {
+        fs::create_dir_all(layout.resources.join("dist")).unwrap();
+        fs::write(layout.resources.join("server.cjs"), marker).unwrap();
+        fs::write(layout.resources.join("dist/index.html"), marker).unwrap();
+    }
+
+    #[test]
+    fn swap_keeps_previous_until_verified_and_rolls_back() {
+        let root = temp("swap");
+        let layout = layout_in(&root);
+        write_resources(&layout, "v1");
+        install_files(&layout, "one").unwrap();
+        assert_eq!(installed_version(&layout), "one");
+        assert!(!previous_dir(&layout).exists());
+
+        write_resources(&layout, "v2");
+        let staging = stage_files(&layout, "two").unwrap();
+        assert_eq!(installed_version(&layout), "one", "staging must not touch the running copy");
+        swap_in(&layout, &staging).unwrap();
+        assert_eq!(installed_version(&layout), "two");
+        assert!(restore_previous(&layout));
+        assert_eq!(installed_version(&layout), "one");
+        assert_eq!(fs::read_to_string(layout.server_dir.join("server.cjs")).unwrap(), "v1");
+        assert!(!restore_previous(&layout), "nothing left to restore");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn failed_staging_leaves_installed_server_alone() {
+        let root = temp("stage-fail");
+        let layout = layout_in(&root);
+        write_resources(&layout, "v1");
+        install_files(&layout, "one").unwrap();
+        fs::remove_file(layout.resources.join("server.cjs")).unwrap();
+        assert!(stage_files(&layout, "two").is_err());
+        assert!(!layout.server_dir.with_extension("staging").exists());
+        assert_eq!(installed_version(&layout), "one");
         let _ = fs::remove_dir_all(&root);
     }
 

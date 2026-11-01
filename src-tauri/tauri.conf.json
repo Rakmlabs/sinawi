@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Sinawi",
-  "version": "1.0.0",
+  "version": "../package.json",
   "identifier": "dev.sinawi.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -20,7 +20,7 @@
         "minHeight": 700,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 16, "y": 17 },
+        "trafficLightPosition": { "x": 16, "y": 25 },
         "visible": false,
         "dragDropEnabled": false,
         "backgroundThrottling": "disabled"
@@ -33,6 +33,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
     "icon": [
       "icons/32x32.png",
@@ -46,6 +47,15 @@
       "resources/server.cjs": "server.cjs",
       "resources/dist/": "dist/",
       "resources/node_modules/": "node_modules/"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDAxNzU0NEE4QjZGQzJEODMKUldTRExmeTJxRVIxQVhqWG00b2NobjhIcTlsdEdYanM2bHRFOEZCQW1hOGpueDErV2gzL3ZvSDIK",
+      "endpoints": [
+        "https://github.com/OWNER/sinawi/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true
     }
   }
 }

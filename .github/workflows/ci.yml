@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+      - name: Version files in sync
+        run: node scripts/release.mjs check
+      - run: npm run typecheck
+      - run: npm test
+      # Also produces src-tauri/resources, which the Tauri build script requires.
+      - run: npm run build
+      - name: cargo check
+        working-directory: src-tauri
+        run: cargo check --locked
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked
