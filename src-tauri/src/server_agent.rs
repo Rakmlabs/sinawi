@@ -306,8 +306,33 @@ fn install_and_start(layout: &Layout, version: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The login user's real home directory from Directory Services (ignores a redirected $HOME).
+fn account_home() -> Option<String> {
+    let user = Command::new("/usr/bin/id").arg("-un").output().ok()?;
+    let user = String::from_utf8_lossy(&user.stdout).trim().to_string();
+    let out = Command::new("/usr/bin/dscl").args([".", "-read", &format!("/Users/{user}"), "NFSHomeDirectory"]).output().ok()?;
+    parse_dscl_home(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_dscl_home(output: &str) -> Option<String> {
+    output.split_once(':').map(|(_, value)| value.trim().to_string()).filter(|value| !value.is_empty())
+}
+
+/// launchd labels are per login session, not per $HOME: a copy of the app started with a test
+/// $HOME would bootstrap `dev.sinawi.server` from a throwaway plist and replace the user's server.
+fn home_matches_account(home: &str, account: Option<&str>) -> bool {
+    match account {
+        Some(account) => Path::new(home.trim_end_matches('/')) == Path::new(account.trim_end_matches('/')),
+        None => true,
+    }
+}
+
 /// Make sure the LaunchAgent exists and runs; schedule a deferred update when the bundle is newer.
 pub fn ensure(layout: Layout) -> Result<(), String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home_matches_account(&home, account_home().as_deref()) {
+        return Err(format!("HOME ({home}) is not this account's home folder; not touching the {LABEL} LaunchAgent"));
+    }
     let version = bundled_version(&layout);
     if loaded(&legacy_target()) {
         // A pre-rename server still owns port 3001. If it has running sessions, keep using it
@@ -417,6 +442,15 @@ mod tests {
         assert!(move_legacy_dir(&old2, &empty, "logs").unwrap().contains("moved"));
         assert!(empty.join("a").is_file());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_a_redirected_home() {
+        assert_eq!(parse_dscl_home("NFSHomeDirectory: /Users/me\n").as_deref(), Some("/Users/me"));
+        assert_eq!(parse_dscl_home(""), None);
+        assert!(home_matches_account("/Users/me/", Some("/Users/me")));
+        assert!(!home_matches_account("/private/tmp/test-home", Some("/Users/me")));
+        assert!(home_matches_account("/anything", None));
     }
 
     #[test]
