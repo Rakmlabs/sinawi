@@ -322,6 +322,27 @@ export interface CliRunResult {
   sessionId?: string;
 }
 
+/** Kill functions for every CLI process group this server spawned and has not finished reaping. */
+const liveCliGroups = new Set<(signal: NodeJS.Signals) => void>();
+let exitHookInstalled = false;
+
+/**
+ * Signals every CLI process group still owned by this server (shutdown path).
+ * Only groups we spawned are targeted: each CLI is its own group leader (detached).
+ */
+export function killCliProcessGroups(signal: NodeJS.Signals = "SIGTERM"): number {
+  const groups = [...liveCliGroups];
+  for (const kill of groups) kill(signal);
+  return groups.length;
+}
+
+function installExitHook() {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  // Last chance on any exit (crash, process.exit): unref'd escalation timers never fire after this.
+  process.once("exit", () => killCliProcessGroups("SIGKILL"));
+}
+
 export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
   const invocation = await prepareCliInvocation(options);
   return new Promise((resolve, reject) => {
@@ -383,20 +404,31 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     };
     const killProcessGroup = (signal: NodeJS.Signals) => {
       if (process.platform === "win32" || !child.pid) {
-        child.kill(signal);
+        try { child.kill(signal); } catch { /* already gone */ }
         return;
       }
       try { process.kill(-child.pid, signal); }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        // ESRCH: group already empty. Anything else (EPERM): fall back to the direct child only.
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          try { child.kill(signal); } catch { /* already gone */ }
+        }
       }
     };
     const abort = () => {
       aborted = true;
       killProcessGroup("SIGTERM");
-      escalationTimer = setTimeout(() => killProcessGroup("SIGKILL"), 2_000);
+      escalationTimer = setTimeout(() => {
+        escalationTimer = undefined;
+        killProcessGroup("SIGKILL");
+        liveCliGroups.delete(killProcessGroup);
+      }, 2_000);
       escalationTimer.unref();
     };
+    liveCliGroups.add(killProcessGroup);
+    installExitHook();
+    // Once the run is over and no SIGKILL escalation is pending, the group is no longer ours to signal.
+    const releaseGroup = () => { if (!escalationTimer) liveCliGroups.delete(killProcessGroup); };
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();
 
@@ -425,6 +457,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       if (finished) return;
       finished = true;
       clearEscalation();
+      releaseGroup();
       options.signal?.removeEventListener("abort", abort);
       void saveUsage(aborted ? "aborted" : "failed").then(() => {
         reject(new Error(`${options.agent === "codex" ? "Codex" : options.agent === "claude" ? "Claude" : "Grok Build"} CLI를 시작할 수 없습니다${error.code ? ` (${error.code})` : ""}.`));
@@ -434,6 +467,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       if (finished) return;
       finished = true;
       if (!aborted) clearEscalation();
+      releaseGroup();
       options.signal?.removeEventListener("abort", abort);
       const exitCode = code ?? 1;
       flushDelta();

@@ -3,7 +3,7 @@ import { access, chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { runCli } from "./cli.js";
+import { killCliProcessGroups, runCli } from "./cli.js";
 import { loadUsage } from "./usage.js";
 import { loadProviderQuotas } from "./quota.js";
 
@@ -119,6 +119,56 @@ setInterval(() => {}, 1000);
     catch { await new Promise((resolve) => setTimeout(resolve, 25)); }
   }
   assert.equal(stopped, true, "the CLI child process should receive the process-group SIGTERM");
+});
+
+test("server shutdown kills the process group of a CLI that has no abort signal", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-cli-shutdown-"));
+  const child = join(directory, "group-child.mjs");
+  const executable = join(directory, "group-parent.mjs");
+  const pidFile = join(directory, "child.pid");
+  const stoppedFile = join(directory, "child.stopped");
+  await writeFile(child, `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+process.once("SIGTERM", () => {
+  writeFileSync(${JSON.stringify(stoppedFile)}, "stopped");
+  process.exit(143);
+});
+process.stdout.write("ready\\n");
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+  await writeFile(executable, `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+const child = spawn(process.execPath, [${JSON.stringify(child)}], { stdio: ["ignore", "pipe", "ignore"] });
+child.stdout.once("data", () => {
+  process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "shutdown-ready" }) + "\\n");
+});
+process.once("SIGTERM", () => process.exit(143));
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+  await Promise.all([chmod(child, 0o700), chmod(executable, 0o700)]);
+  process.env.AGENT_ORCHESTRA_CODEX_BIN = executable;
+  t.after(async () => {
+    try { process.kill(Number(await readFile(pidFile, "utf8")), "SIGKILL"); } catch { /* already stopped */ }
+  });
+
+  let markReady: (() => void) | undefined;
+  const ready = new Promise<void>((resolve) => { markReady = resolve; });
+  const running = runCli({
+    agent: "codex", prompt: "group", cwd: directory,
+    onLine: (event) => { if (event.sessionId === "shutdown-ready") markReady?.(); },
+  });
+  await ready;
+  // Other tests may still hold groups awaiting their SIGKILL escalation, so count at least this one.
+  assert.ok(killCliProcessGroups("SIGTERM") >= 1);
+  await running;
+
+  let stopped = false;
+  for (let attempt = 0; attempt < 40 && !stopped; attempt++) {
+    try { await access(stoppedFile); stopped = true; }
+    catch { await new Promise((resolve) => setTimeout(resolve, 25)); }
+  }
+  assert.equal(stopped, true, "the CLI grandchild should receive the shutdown SIGTERM");
 });
 
 test("runCli records a failed run when the CLI cannot start", async () => {

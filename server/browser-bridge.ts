@@ -73,7 +73,7 @@ export class BrowserBridge {
         if (!entry) return;
         entry.timer = setTimeout(() => finish({ ok: false, error: `앱 브라우저가 ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다.` }), timeoutMs);
         pulse();
-      });
+      }, fail); // a failed app launch must answer the request, not leave it pending with no timer
     });
   }
 
@@ -158,8 +158,10 @@ export function watchQueue(bridge: BrowserBridge, dir = QUEUE_DIR, intervalMs = 
           await writeFile(join(dir, `${base}.res.tmp`), JSON.stringify(out));
           const { rename } = await import("node:fs/promises");
           await rename(join(dir, `${base}.res.tmp`), join(dir, `${base}.res.json`));
-          busy.delete(name);
-        })();
+        })().catch((error) => {
+          // The queue dir can vanish (tmp cleanup) between request and response; never crash the server.
+          console.error("ao-browser 응답 저장 실패:", error instanceof Error ? error.message : error);
+        }).finally(() => busy.delete(name));
       }
     } catch { /* ignore */ }
     if (!stopped) timer = setTimeout(tick, intervalMs);

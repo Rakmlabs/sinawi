@@ -6,7 +6,7 @@ import { normalizeWorkerConfigs } from "./workers.js";
 import { defaultDataDir } from "./runtime.js";
 
 const dataDir = defaultDataDir;
-const botsFile = resolve(dataDir, "bots.json");
+const botsFile = (directory: string) => resolve(directory, "bots.json");
 let botMutationQueue: Promise<void> = Promise.resolve();
 let groupMutationQueue: Promise<void> = Promise.resolve();
 let sessionMutationQueue: Promise<void> = Promise.resolve();
@@ -29,12 +29,12 @@ async function saveObject<T>(file: string, value: T): Promise<void> {
   await writeJsonFile(file, value, 2);
 }
 
-export async function loadBots(): Promise<Bot[]> {
-  return loadArray<Bot>(botsFile);
+export async function loadBots(directory = dataDir): Promise<Bot[]> {
+  return loadArray<Bot>(botsFile(directory));
 }
 
-async function saveBots(bots: Bot[]): Promise<void> {
-  await saveArray(botsFile, bots);
+async function saveBots(bots: Bot[], directory: string): Promise<void> {
+  await saveArray(botsFile(directory), bots);
 }
 
 async function readGroups(directory: string): Promise<Group[]> {
@@ -218,11 +218,11 @@ export function createCoalescedSaver<T>(save: (value: T) => void | Promise<void>
   };
 }
 
-export function mutateBots<T>(mutator: (bots: Bot[]) => T | Promise<T>): Promise<T> {
+export function mutateBots<T>(mutator: (bots: Bot[]) => T | Promise<T>, directory = dataDir): Promise<T> {
   const operation = botMutationQueue.then(async () => {
-    const bots = await loadBots();
+    const bots = await loadBots(directory);
     const result = await mutator(bots);
-    await saveBots(bots);
+    await saveBots(bots, directory);
     return result;
   });
   botMutationQueue = operation.then(() => undefined, () => undefined);

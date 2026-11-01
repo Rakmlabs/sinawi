@@ -75,8 +75,9 @@ export async function recoverStaleSessions(
   await persist(sessions);
 }
 
-export function sessionStreamMessage(session: Session, lastEventId?: string) {
-  const lastIndex = lastEventId ? session.events.findIndex((event) => event.id === lastEventId) : -1;
+/** `full` forces a whole snapshot: the client merges incremental events by id, so it never learns about edits or removals. */
+export function sessionStreamMessage(session: Session, lastEventId?: string, full = false) {
+  const lastIndex = lastEventId && !full ? session.events.findIndex((event) => event.id === lastEventId) : -1;
   if (lastEventId && lastIndex >= 0) {
     return { type: "session" as const, incremental: true as const, session: { ...session, events: session.events.slice(lastIndex + 1) } };
   }
@@ -283,7 +284,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   } });
   const observedEvents = new Set<string>();
   const completedRuns = new Set<string>();
-  const broadcast = (session: Session) => {
+  const broadcast = (session: Session, publishOptions?: { full?: boolean }) => {
     for (const note of sessionNotifications(session)) {
       const seen = note.type === "run-finished" ? completedRuns : observedEvents;
       if (note.key && !seen.has(note.key)) {
@@ -298,7 +299,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         delivered = new Map();
         deliveredEvents.set(client, delivered);
       }
-      const message = sessionStreamMessage(session, delivered.get(session.id));
+      const message = sessionStreamMessage(session, delivered.get(session.id), publishOptions?.full);
       client.send(JSON.stringify(message));
       const latest = session.events.at(-1)?.id;
       if (latest) delivered.set(session.id, latest);
@@ -479,7 +480,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       try { if (!(await stat(defaultCwd)).isDirectory()) defaultCwd = process.cwd(); } catch { defaultCwd = process.cwd(); }
       const groups = await loadGroups(options.dataDir);
       const disabled = workspaceId ? (await loadToolSettings(options.dataDir))[workspaceId].disabledSkills : [];
-      res.json({ agents, skills: await enabledPublicSkills(undefined, false, disabled), bots: await loadBots(), groups: workspaceId ? groups.filter((group) => group.workspaceId === workspaceId) : groups, defaultCwd, homeCwd: homedir() });
+      res.json({ agents, skills: await enabledPublicSkills(undefined, false, disabled), bots: await loadBots(options.dataDir), groups: workspaceId ? groups.filter((group) => group.workspaceId === workspaceId) : groups, defaultCwd, homeCwd: homedir() });
     } catch (error) { errorResponse(res, error, 500); }
   });
 
@@ -868,7 +869,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.post("/api/bots", async (req, res) => {
     try {
       const bot: Bot = { id: randomUUID(), name: string(req.body?.name, 100), agent: agent(req.body?.agent), model: optionalString(req.body?.model, 200), skills: ids(req.body?.skills), systemPrompt: optionalString(req.body?.systemPrompt, 50_000) ?? "", createdAt: new Date().toISOString() };
-      await mutateBots((bots) => { bots.push(bot); });
+      await mutateBots((bots) => { bots.push(bot); }, options.dataDir);
       res.status(201).json(bot);
     } catch (error) { errorResponse(res, error); }
   });
@@ -879,7 +880,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         const index = bots.findIndex((bot) => bot.id === id);
         if (index < 0) throw new Error("봇을 찾을 수 없습니다.");
         bots.splice(index, 1);
-      });
+      }, options.dataDir);
       res.status(204).end();
     } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "봇을 찾을 수 없습니다." ? 404 : 400); }
   });
@@ -888,7 +889,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const requestedTurns = Number(req.body?.turns);
       if (!Number.isFinite(requestedTurns) || !Number.isInteger(requestedTurns)) throw new Error("대화 턴 수는 정수여야 합니다.");
       const input: ConversationInput = { botA: string(req.body?.botA, 100), botB: string(req.body?.botB, 100), turns: Math.min(Math.max(requestedTurns, 1), 20), prompt: string(req.body?.prompt), cwd: string(req.body?.cwd, 4_096), workspaceId: workspace(req.body?.workspaceId, "personal") };
-      res.status(201).json(await orchestra.conversation(input, await loadBots()));
+      res.status(201).json(await orchestra.conversation(input, await loadBots(options.dataDir)));
     } catch (error) { errorResponse(res, error); }
   });
   const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, app: "agent-orchestra", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: process.env.AGENT_ORCHESTRA_SERVER_VERSION ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });

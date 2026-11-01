@@ -74,11 +74,14 @@ export class Orchestra {
   private configs = new Map<string, { skills: string[]; systemPrompt: string }>();
   /** Per-session kill switch + stall detector for the worker currently running. */
   private workerGuards = new Map<string, { kill: AbortController; detector: StallDetector; stall?: StallSignal }>();
+  /** Sessions whose already-published events were edited or removed since the last publish. */
+  private rewrittenEvents = new Set<string>();
   /** Tunable stall thresholds (tests shorten these). */
   stallOptions: StallOptions = {};
 
   constructor(
-    private publish: (session: Session) => void = () => undefined,
+    // `full` = already-sent events were changed or removed, so clients need a whole snapshot, not an append.
+    private publish: (session: Session, options?: { full?: boolean }) => void = () => undefined,
     private runner: typeof runCli = runCli,
     // Receives the full list plus the ids that changed, so storage can rewrite only those.
     private persist: (sessions: Session[], changedIds: string[]) => void | Promise<void> = () => undefined,
@@ -154,8 +157,13 @@ export class Orchestra {
 
   get(id: string): Session | undefined { return this.sessions.get(id); }
 
+  /** Call after editing or removing events that clients may already hold. */
+  private markEventsRewritten(session: Session): void {
+    this.rewrittenEvents.add(session.id);
+  }
+
   private broadcast(session: Session) {
-    this.publish(session);
+    this.publish(session, this.rewrittenEvents.delete(session.id) ? { full: true } : undefined);
     void Promise.resolve(this.persist(this.list(), [session.id])).catch(() => undefined);
   }
 
@@ -408,6 +416,8 @@ export class Orchestra {
       this.enqueueInstruction(session, prompt, classified.targetWorkerId);
       return session;
     }
+    // The status answer is a Grok CLI run, so it obeys the same workspace policy as every other run.
+    this.assertPolicy(session.workspaceId, ["grok"]);
     const ambiguous = classified.intent === "ambiguous";
     const digest = statusDigest(session);
     this.event(session, "user", "message", prompt);
@@ -448,6 +458,7 @@ export class Orchestra {
     if (event.metadata.promoted) return session;
     const prompt = event.metadata.prompt;
     event.metadata = { ...event.metadata, promoted: true };
+    this.markEventsRewritten(session);
     const target = classifyLiveMessage(prompt, this.liveWorkers(session)).targetWorkerId;
     this.enqueueInstruction(session, prompt, target);
     return session;
@@ -772,6 +783,7 @@ export class Orchestra {
     }
     session.lastAutoSwitchTurn = session.turnCount ?? session.events.filter((event) => event.agent === "user" && event.type === "message").length;
     latest.metadata.undone = true;
+    this.markEventsRewritten(session);
     return this.updateTeam(id, latest.metadata.previousConfig);
   }
 
@@ -809,6 +821,7 @@ export class Orchestra {
     if (orchestratorChanged) delete session.cliSessionId;
     clearChangedWorkerSessions(session, currentWorkers, session.workerConfigs);
     latest.metadata.undone = true;
+    this.markEventsRewritten(session);
     const restoredWorker = session.workerConfigs?.find((config) => config.agent === latest.metadata!.from);
     this.event(session, latest.metadata.from, "handoff", `${agentNames[latest.metadata.to ?? session.agent]} → ${agentNames[latest.metadata.from]}로 돌아왔습니다`, {
       role: orchestratorChanged ? "orchestrator" : "worker",
@@ -834,6 +847,7 @@ export class Orchestra {
       for (const event of session.events) {
         if (!event.role && event.agent === previous && event.type === "message") event.role = "orchestrator";
       }
+      this.markEventsRewritten(session);
       session.agent = input.agent;
       delete session.cliSessionId;
     }
@@ -868,6 +882,7 @@ export class Orchestra {
     this.sessions.delete(id);
     this.controllers.delete(id);
     this.clearInactivityTimer(id);
+    this.rewrittenEvents.delete(id);
     this.configs.delete(id);
     this.publishRemoval(id);
     void Promise.resolve(this.persist(this.list(), [])).catch(() => undefined);
@@ -903,8 +918,8 @@ export class Orchestra {
     setWorkerSessionId(session, workerId);
     const config = session.workerConfigs?.find((worker) => worker.id === workerId);
     if (config?.agent && config.agent !== workerId) setWorkerSessionId(session, config.agent);
-    this.publish(session);
-    void Promise.resolve(this.persist(this.list(), [session.id])).catch(() => undefined);
+    this.markEventsRewritten(session);
+    this.broadcast(session);
     return session;
   }
 

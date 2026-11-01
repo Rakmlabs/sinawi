@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rename, mkdir, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rename, mkdir, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -120,6 +120,30 @@ test("file queue fallback answers requests", async () => {
     for (let i = 0; i < 100 && !res; i++) { await new Promise((r) => setTimeout(r, 20)); if ((await readdir(dir)).includes("a.res.json")) res = await readFile(join(dir, "a.res.json"), "utf8"); }
     assert.deepEqual(JSON.parse(res!), { ok: true, result: { action: "status" } });
   } finally { stop(); }
+});
+
+test("file queue survives its directory vanishing before the response is written", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aobq-gone-"));
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => { rejections.push(reason); };
+  process.on("unhandledRejection", onRejection);
+  let answered!: () => void;
+  const done = new Promise<void>((resolve) => { answered = resolve; });
+  let bridge!: BrowserBridge;
+  let stop = () => undefined as void;
+  bridge = new BrowserBridge((c) => {
+    stop();
+    void rm(dir, { recursive: true, force: true }).then(() => { bridge.resolve(c.id, { ok: true, result: {} }); answered(); });
+    return 1;
+  });
+  stop = watchQueue(bridge, dir, 10);
+  try {
+    await writeFile(join(dir, "b.req.tmp"), JSON.stringify({ action: "status", args: {} }));
+    await rename(join(dir, "b.req.tmp"), join(dir, "b.req.json"));
+    await done;
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(rejections, []);
+  } finally { stop(); process.off("unhandledRejection", onRejection); }
 });
 
 test("CLI prints usage and parses refs vs selectors via the http route", async () => {

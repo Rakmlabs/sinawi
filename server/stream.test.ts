@@ -25,3 +25,9 @@ test("session stream falls back to a full snapshot when the cursor was evicted",
   assert.equal("incremental" in message, false);
   assert.equal(message.session.events.length, 2);
 });
+
+test("session stream sends a full snapshot when already-sent events were rewritten", () => {
+  const message = sessionStreamMessage(session, "event-1", true);
+  assert.equal("incremental" in message, false);
+  assert.deepEqual(message.session.events.map((event) => event.id), ["event-1", "event-2"]);
+});

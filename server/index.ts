@@ -3,6 +3,7 @@ import { accessSync } from "node:fs";
 import { resolve } from "node:path";
 import { runtimeOptions } from "./runtime.js";
 import { installBrowserTooling } from "./browser-bridge.js";
+import { killCliProcessGroups } from "./cli.js";
 
 const port = Number(process.env.AGENT_ORCHESTRA_PORT ?? 3001);
 const options = runtimeOptions();
@@ -30,6 +31,8 @@ function shutdown() {
   for (const session of orchestra.list()) {
     if (session.status === "running") orchestra.stop(session.id);
   }
+  // Runs not tied to a session controller (live status answers) still own process groups.
+  killCliProcessGroups("SIGTERM");
   for (const client of websocket.clients) client.close(1001, "서버를 종료합니다");
 
   let finishing = false;

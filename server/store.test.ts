@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, mutateGroups, mutateToolSettings, saveSessions, saveWorkspaceState } from "./store.js";
+import { loadBots, loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, mutateBots, mutateGroups, mutateToolSettings, saveSessions, saveWorkspaceState } from "./store.js";
 import type { Session } from "./types.js";
 
 test("tool settings persist disabled skills and MCP tools per workspace", async () => {
@@ -117,4 +117,13 @@ test("an interrupted migration keeps split files and imports only missing legacy
   const stored = Object.fromEntries((await loadSessions(directory)).map((session) => [session.id, session.title]));
   assert.deepEqual(stored, { a: "split copy", b: "only legacy" });
   assert.deepEqual((await readdir(directory)).filter((name) => name.startsWith("sessions")).sort(), ["sessions", "sessions.json.migrated"]);
+});
+
+test("bots load and persist inside the configured data directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-orchestra-bots-"));
+  assert.deepEqual(await loadBots(directory), []);
+  const bot = { id: "bot-1", name: "Reviewer", agent: "codex" as const, skills: [], systemPrompt: "", createdAt: "2026-01-01T00:00:00.000Z" };
+  await mutateBots((bots) => { bots.push(bot); }, directory);
+  assert.deepEqual(JSON.parse(await readFile(join(directory, "bots.json"), "utf8")), [bot]);
+  assert.deepEqual(await loadBots(directory), [bot]);
 });

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Orchestra } from "./orchestra.js";
+import { sessionStreamMessage } from "./server.js";
 import type { RunCliOptions } from "./cli.js";
 import type { Session } from "./types.js";
 import { delegationWorkers, mainConversation } from "../src/conversation.js";
@@ -82,4 +83,31 @@ test("deleting a running worker stops the run first", async () => {
 test("unknown chat or worker is rejected", async () => {
   const orchestra = new Orchestra(() => undefined, scripted([]));
   assert.throws(() => orchestra.removeWorker("missing", "claude"), /세션을 찾을 수 없습니다/);
+});
+
+test("clients following the incremental stream see a removed worker's log disappear", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "wdel-stream-"));
+  const calls: Array<{ agent: string; role?: string; resume?: string }> = [];
+  // Mirrors the browser client: incremental messages merge by id, full snapshots replace.
+  let cursor: string | undefined;
+  let clientEvents: Session["events"] = [];
+  const fullPublishes: number[] = [];
+  const publish = (published: Session, options?: { full?: boolean }) => {
+    const message = sessionStreamMessage(published, cursor, options?.full);
+    const incoming = structuredClone(message.session.events);
+    clientEvents = "incremental" in message ? [...new Map([...clientEvents, ...incoming].map((event) => [event.id, event])).values()] : incoming;
+    cursor = published.events.at(-1)?.id;
+    if (options?.full) fullPublishes.push(published.events.length);
+  };
+  const orchestra = new Orchestra(publish, scripted(calls));
+  const session = await orchestra.create({ prompt: "go", agent: "codex", workers: ["claude"], cwd });
+  await settle(session);
+  assert.equal(fullPublishes.length, 0, "ordinary appends stay incremental");
+  const workerId = session.events.find((event) => event.type === "delegation")!.workerId!;
+  assert.ok(clientEvents.some((event) => event.role === "worker" && event.type !== "delegation"));
+
+  orchestra.removeWorker(session.id, workerId);
+  assert.equal(fullPublishes.length, 1);
+  assert.deepEqual(clientEvents.map((event) => event.id), session.events.map((event) => event.id));
+  assert.equal(clientEvents.find((event) => event.type === "delegation")?.metadata?.deletedWorker, true);
 });

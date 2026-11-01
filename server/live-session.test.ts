@@ -110,3 +110,52 @@ test("a status agent failure leaves the running task untouched", async () => {
 function callsWaiting(session: { events: Array<{ type: string; role?: string }> }): boolean {
   return session.events.some((event) => event.type === "delegation");
 }
+
+test("a live status question obeys the workspace agent policy like any other run", async () => {
+  let releaseWorker = () => {};
+  const workerGate = new Promise<void>((resolve) => { releaseWorker = () => resolve(); });
+  const calls: RunCliOptions[] = [];
+  const runner = async (options: RunCliOptions) => {
+    calls.push(options);
+    if (options.readOnly) return { exitCode: 0, finalText: "상태" };
+    if (options.usageContext?.role === "worker") { await workerGate; return { exitCode: 0, finalText: "worker done" }; }
+    if (options.prompt.includes("위임한 워커들의 결과")) return { exitCode: 0, finalText: "final" };
+    return { exitCode: 0, finalText: '<<DELEGATE to="claude">>조사<</DELEGATE>>' };
+  };
+  let allowed: Array<"codex" | "claude" | "grok"> = ["codex", "claude", "grok"];
+  const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, () => allowed);
+  const session = await orchestra.create({ prompt: "조사", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitFor(() => callsWaiting(session));
+  allowed = ["codex", "claude"];
+  const eventsBefore = session.events.length;
+  await assert.rejects(orchestra.liveTurn(session.id, "뭐하고 있어?"), /Grok Build/);
+  assert.equal(calls.some((call) => call.readOnly), false, "Grok must not be spawned when the workspace forbids it");
+  assert.equal(session.events.length, eventsBefore);
+  assert.equal(session.status, "running");
+  await orchestra.stop(session.id);
+  releaseWorker();
+});
+
+test("promoting a live answer republishes a full snapshot so clients see the promoted flag", async () => {
+  let releaseWorker = () => {};
+  const workerGate = new Promise<void>((resolve) => { releaseWorker = () => resolve(); });
+  const runner = async (options: RunCliOptions) => {
+    if (options.readOnly) return { exitCode: 0, finalText: "상태" };
+    if (options.usageContext?.role === "worker") { await workerGate; return { exitCode: 0, finalText: "worker done" }; }
+    if (options.prompt.includes("위임한 워커들의 결과")) return { exitCode: 0, finalText: "final" };
+    return { exitCode: 0, finalText: '<<DELEGATE to="claude">>조사<</DELEGATE>>' };
+  };
+  const publishes: Array<boolean> = [];
+  const orchestra = new Orchestra((_session, options) => { publishes.push(Boolean(options?.full)); }, runner);
+  const session = await orchestra.create({ prompt: "조사", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitFor(() => callsWaiting(session));
+  await orchestra.liveTurn(session.id, "중지하지 마");
+  const answer = session.events.find((event) => event.metadata?.live === "status" && event.metadata.ambiguous);
+  assert.ok(answer);
+  assert.equal(publishes.includes(true), false);
+  orchestra.promoteLive(session.id, answer.id);
+  assert.equal(publishes.at(-1), true);
+  assert.equal(publishes.filter(Boolean).length, 1, "only the rewrite publish is a full snapshot");
+  await orchestra.stop(session.id);
+  releaseWorker();
+});
