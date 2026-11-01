@@ -1,14 +1,16 @@
 import { cliChildEnv, DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
 import { envVar } from "./runtime.js";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentId, NormalizedLine } from "./types.js";
 import { appendUsage, parseCliUsage, type CliUsageSnapshot, type UsageContext, type UsageStatus } from "./usage.js";
 import { parseProviderQuota, saveProviderQuota, type ProviderQuota } from "./quota.js";
 import { isQuotaExhaustion } from "./quota-fallback.js";
-import { ensureCompanyGrokGuard } from "./grok-mcp-guard.js";
+import { ensureGrokMcpGuard } from "./grok-mcp-guard.js";
+import { bashHookSettings, ensureBashHookScript } from "./claude-bash-hook.js";
+import { computerRunEnv, revokeComputerToken } from "./computer-tokens.js";
 
 export interface CliInvocation {
   command: string;
@@ -23,10 +25,37 @@ export interface RunCliOptions {
   model?: string;
   reasoningEffort?: string;
   readOnly?: boolean;
+  /**
+   * With readOnly: keep read/search tools instead of none. A reviewer told to "verify by reading files"
+   * but given zero tools writes fake tool-call markup as plain text in a loop (Claude) or rejects
+   * finished work it cannot inspect (Grok), so the run never ends with an answer.
+   */
+  readTools?: boolean;
   resumeSessionId?: string;
   blockedMcp?: string[];
+  /** MCP servers the workspace locks off; Grok also gets them disabled in the project config. */
+  lockedMcp?: string[];
   usageContext?: UsageContext;
   signal?: AbortSignal;
+  /** How long to wait for stdout to drain after the CLI exits before giving up on it (tests shorten it). */
+  exitGraceMs?: number;
+  /** Folders outside `cwd` the run may read (e.g. worker worktrees a reviewer checks). */
+  extraDirs?: string[];
+  /** `--settings` JSON for Claude (the Bash pre-approval hook); set by prepareCliInvocation. */
+  claudeSettings?: string;
+  /**
+   * Long flags the installed Claude Code lists in `--help` (see claudeHelpFlags). When set, optional
+   * flags it lacks (`--include-partial-messages`, `--settings`) are left out instead of making an
+   * older CLI fail on an unknown option. Unset = assume a current CLI.
+   */
+  claudeFlags?: ReadonlySet<string>;
+  /**
+   * Called for every raw stdout line, including ones that render nothing (partial-message deltas,
+   * thinking). Watchdogs use it to tell a quiet run from a dead one. stderr does not count: retry
+   * and warning noise there would keep a stuck run "alive" forever. The orchestrator also caps how
+   * long activity without any rendered event may last (Orchestra.quietLimitMs).
+   */
+  onActivity?: () => void;
   onLine: (line: NormalizedLine) => void;
 }
 
@@ -40,6 +69,17 @@ function cliName(agent: AgentId): string {
 }
 
 const developmentBashRules = DEVELOPMENT_SHELL_PROGRAMS.map((command) => `Bash(${command}:*)`);
+/** Read-only verification profile (see RunCliOptions.readTools). Plan mode still refuses edits. */
+export const CLAUDE_READ_TOOLS = ["Read", "Grep", "Glob", "Bash"] as const;
+export const GROK_READ_TOOLS = "read_file,list_dir,grep";
+/**
+ * Pure read commands for the review profile. Nothing here runs project code (no test runners:
+ * workers run tests, the reviewer reads their evidence) and nothing writes: the deny rules below
+ * (which win over allow rules) remove the flags of these programs that write a file or run another
+ * program (`git diff --output=FILE`, external diff/textconv drivers, `rg --pre CMD`).
+ */
+export const CLAUDE_READ_ONLY_BASH_RULES = ["git diff", "git status", "git log", "git show", "ls", "cat", "rg", "wc", "head", "tail"].map((command) => `Bash(${command}:*)`);
+export const CLAUDE_READ_ONLY_BASH_DENY = ["--output", "--ext-diff", "--textconv", "--pre"].map((flag) => `Bash(*${flag}*)`);
 const developmentCommandNames = developmentBashRules.map((rule) => rule.slice(5, -3));
 /** Nobody can approve a prompt in headless mode: a non-pre-approved shell command cancels the whole run. */
 export const grokHeadlessRules = [
@@ -49,8 +89,9 @@ export const grokHeadlessRules = [
   "Use absolute paths or paths relative to the working directory instead of cd. Split multi-step work into several separate tool calls; write longer logic to a .py file and run it with python3.",
 ].join(" ");
 
-export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine">): CliInvocation {
-  const { agent, prompt, cwd, model, reasoningEffort, readOnly, resumeSessionId, blockedMcp } = options;
+export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine" | "exitGraceMs" | "onActivity">): CliInvocation {
+  const { agent, prompt, cwd, model, reasoningEffort, readOnly, readTools, resumeSessionId, blockedMcp } = options;
+  const extraDirs = [...new Set(options.extraDirs ?? [])].filter((dir) => dir && dir !== cwd);
   if (agent === "codex") {
     const args = ["exec", "--json", "--sandbox", readOnly ? "read-only" : "workspace-write", "-C", cwd, "--skip-git-repo-check"];
     for (const pattern of blockedMcp ?? []) {
@@ -65,20 +106,26 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
   }
 
   if (agent === "claude") {
-    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"];
+    const supports = (flag: string) => !options.claudeFlags || options.claudeFlags.has(flag);
+    // Partial messages are only a liveness signal (long thinking is otherwise silent); normalizeCliLine drops them.
+    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", ...(supports("--include-partial-messages") ? ["--include-partial-messages"] : [])];
     if (model) args.push("--model", model);
     if (reasoningEffort) args.push("--effort", reasoningEffort);
-    if (readOnly) args.push("--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan");
+    if (readOnly && readTools) args.push("--tools", ...CLAUDE_READ_TOOLS, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan", "--allowedTools", ...CLAUDE_READ_ONLY_BASH_RULES, "--disallowedTools", ...CLAUDE_READ_ONLY_BASH_DENY);
+    else if (readOnly) args.push("--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan");
     else args.push("--permission-mode", "acceptEdits", "--allowedTools", ...developmentBashRules);
-    const disallowed = [...new Set([...(blockedMcp ?? []), "mcp__bbanana__*"])];
-    for (const pattern of disallowed) args.push("--disallowedTools", pattern);
+    if (!readOnly && options.claudeSettings && supports("--settings")) args.push("--settings", options.claudeSettings);
+    for (const dir of extraDirs) args.push("--add-dir", dir);
+    for (const pattern of new Set(blockedMcp ?? [])) args.push("--disallowedTools", pattern);
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     return { command: cliName("claude"), args, cwd };
   }
 
   const args = ["-p", prompt, "--output-format", "streaming-json", "--cwd", cwd];
   if (model) args.push("--model", model);
-  if (readOnly) args.push("--tools", "", "--deny", "*", "--disable-web-search");
+  for (const dir of extraDirs) args.push("--add-dir", dir);
+  if (readOnly && readTools) args.push("--tools", GROK_READ_TOOLS, "--permission-mode", "plan", "--disable-web-search");
+  else if (readOnly) args.push("--tools", "", "--deny", "*", "--disable-web-search");
   else {
     // Headless Grok cancels the whole run when a command isn't pre-allowed (e.g. `cd x && ffprobe`);
     // "auto" lets its safety classifier approve routine commands while deny rules still apply.
@@ -91,19 +138,60 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
   return { command: cliName("grok"), args, cwd };
 }
 
-type InvocationOptions = Omit<RunCliOptions, "signal" | "onLine">;
-type GrokGuard = (cwd: string) => Promise<void>;
+type InvocationOptions = Omit<RunCliOptions, "signal" | "onLine" | "exitGraceMs" | "onActivity">;
+type GrokGuard = (cwd: string, names: readonly string[]) => Promise<void>;
+type ClaudeFlagProbe = (command: string) => Promise<ReadonlySet<string> | undefined>;
+
+/**
+ * Long options listed in a CLI's `--help` text (`--foo`, `--foo-bar`, aliases after a comma).
+ * Undefined when the text does not look like Claude Code's help (no `--output-format`), so a
+ * failed or unexpected probe never strips flags from a CLI that has them.
+ */
+export function parseHelpFlags(help: string): ReadonlySet<string> | undefined {
+  const flags = new Set<string>();
+  for (const line of help.split("\n")) {
+    // Option lines start with the flag list; descriptions may mention other flags, which still exist.
+    for (const match of line.matchAll(/(?:^|[\s,(])(--[A-Za-z][A-Za-z0-9-]*)/gu)) flags.add(match[1]);
+  }
+  return flags.has("--output-format") ? flags : undefined;
+}
+
+const claudeFlagCache = new Map<string, Promise<ReadonlySet<string> | undefined>>();
+
+/** `claude --help`, parsed once per binary path and cached for the life of the server. */
+export function claudeHelpFlags(command: string): Promise<ReadonlySet<string> | undefined> {
+  let cached = claudeFlagCache.get(command);
+  if (!cached) {
+    cached = new Promise((resolve) => {
+      execFile(command, ["--help"], { timeout: 5_000, maxBuffer: 1024 * 1024, env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1" }) }, (error, stdout) => {
+        resolve(error ? undefined : parseHelpFlags(String(stdout)));
+      });
+    });
+    claudeFlagCache.set(command, cached);
+  }
+  return cached;
+}
 
 export async function prepareCliInvocation(
   options: InvocationOptions,
-  guard: GrokGuard = ensureCompanyGrokGuard,
+  guard: GrokGuard = ensureGrokMcpGuard,
+  probe: ClaudeFlagProbe = claudeHelpFlags,
 ): Promise<CliInvocation> {
-  if (options.agent !== "grok") return buildInvocation(options);
-  if (options.usageContext?.workspaceId !== "company") return buildInvocation(options);
-  await guard(options.cwd);
+  if (options.agent === "claude" && !options.claudeFlags) {
+    const flags = await probe(cliName("claude")).catch(() => undefined);
+    if (flags) options = { ...options, claudeFlags: flags };
+  }
+  // Writable Claude runs get the Bash pre-approval hook, bounded to their own folder (see claude-bash-hook.ts).
+  if (options.agent === "claude" && !options.readOnly && !options.claudeSettings && options.usageContext?.dataDir) {
+    const script = await ensureBashHookScript(options.usageContext.dataDir).catch(() => undefined);
+    if (script) options = { ...options, claudeSettings: bashHookSettings(script, options.cwd) };
+  }
+  const locked = [...new Set(options.lockedMcp ?? [])];
+  if (!locked.length) return buildInvocation(options);
+  if (options.agent === "grok") await guard(options.cwd, locked);
   return buildInvocation({
     ...options,
-    blockedMcp: [...new Set([...(options.blockedMcp ?? []), "mcp__bbanana__*"])],
+    blockedMcp: [...new Set([...(options.blockedMcp ?? []), ...locked.map((name) => `mcp__${name}__*`)])],
   });
 }
 
@@ -242,6 +330,8 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
 
   const sessionId = data.session_id ?? data.thread_id ?? data.sessionId ?? data.params?.sessionId
     ?? (/session|thread/.test(String(data.type ?? "")) ? data.id : undefined);
+  // `--include-partial-messages` deltas: liveness only. The whole message still arrives afterwards.
+  if (agent === "claude" && data.type === "stream_event") return [];
   if (agent === "grok" || agent === "claude") {
     const deniedCommand = permissionDenial(data);
     if (deniedCommand) return [{ type: "warning", text: `권한 거부: ${deniedCommand}`, sessionId }];
@@ -269,7 +359,8 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
   const content = asText(payload);
 
   if (isQuotaExhaustion(data)) {
-    return [{ type: "error", text: content || clippedJson(data), sessionId }];
+    // Codex `turn.failed` keeps the message under `error`; show that text, not the raw JSON.
+    return [{ type: "error", text: content || asText(data.error) || clippedJson(data), sessionId }];
   }
 
   const claudeBlocks = data.message?.content;
@@ -317,6 +408,13 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
   return [];
 }
 
+/** Codex prints this informational notice on stderr whenever stdin is not a TTY; it is never the failure. */
+const STDERR_NOISE = [/^Reading additional input from stdin\.{0,3}$/];
+
+export function meaningfulStderr(stderr: string): string {
+  return stderr.split("\n").filter((line) => !STDERR_NOISE.some((pattern) => pattern.test(line.trim()))).join("\n").trim();
+}
+
 export interface CliRunResult {
   exitCode: number;
   finalText: string;
@@ -334,7 +432,57 @@ let exitHookInstalled = false;
 export function killCliProcessGroups(signal: NodeJS.Signals = "SIGTERM"): number {
   const groups = [...liveCliGroups];
   for (const kill of groups) kill(signal);
-  return groups.length;
+  let orphans = 0;
+  for (const sessionId of [...orphanGroups.keys()]) orphans += killSessionProcessGroups(sessionId, signal);
+  return groups.length + orphans;
+}
+
+/**
+ * Process groups whose CLI already exited but which still have members: background children the
+ * CLI left running (dev server, watcher). They are deliberately NOT killed when the run ends (the
+ * user may still be using that server); they are kept per session and terminated when the session
+ * is deleted (killSessionProcessGroups) or the server shuts down (killCliProcessGroups / exit hook).
+ * Key "" holds groups of runs without a session id. A group id could in theory be reused by an
+ * unrelated process group after ours died; groups are re-checked (signal 0) before each use and
+ * dropped once empty or not ours (EPERM), which keeps that window small.
+ */
+const orphanGroups = new Map<string, Set<number>>();
+
+function groupAlive(pgid: number): boolean {
+  try { process.kill(-pgid, 0); return true; } catch { return false; }
+}
+
+function trackOrphanGroup(sessionId: string, pgid: number): void {
+  if (process.platform === "win32" || !groupAlive(pgid)) return;
+  const groups = orphanGroups.get(sessionId) ?? new Set<number>();
+  for (const known of groups) if (!groupAlive(known)) groups.delete(known);
+  groups.add(pgid);
+  orphanGroups.set(sessionId, groups);
+  installExitHook();
+}
+
+/** Group ids still tracked for a session (tests, diagnostics). Dead groups are dropped first. */
+export function sessionProcessGroups(sessionId: string): number[] {
+  const groups = orphanGroups.get(sessionId);
+  if (!groups) return [];
+  for (const pgid of groups) if (!groupAlive(pgid)) groups.delete(pgid);
+  if (!groups.size) orphanGroups.delete(sessionId);
+  return [...groups];
+}
+
+/** Terminates the background process groups a session's CLI runs left behind. Returns how many were signalled. */
+export function killSessionProcessGroups(sessionId: string, signal: NodeJS.Signals = "SIGTERM"): number {
+  const groups = sessionProcessGroups(sessionId);
+  orphanGroups.delete(sessionId);
+  let count = 0;
+  for (const pgid of groups) {
+    try { process.kill(-pgid, signal); count++; } catch { /* already gone */ }
+    if (signal !== "SIGKILL") {
+      // A dev server that ignores SIGTERM still goes away with its session.
+      setTimeout(() => { if (groupAlive(pgid)) try { process.kill(-pgid, "SIGKILL"); } catch { /* gone */ } }, 2_000).unref();
+    }
+  }
+  return count;
 }
 
 function installExitHook() {
@@ -353,9 +501,11 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     let providerQuotaSave: Promise<void> = Promise.resolve();
     let aborted = false;
     let finished = false;
+    // SINAWI_SESSION_ID (display) + a per-run SINAWI_COMPUTER_TOKEN: ao-computer is attributed by the token only.
+    const computerEnv = computerRunEnv(options.agent, options.usageContext);
     const child = spawn(invocation.command, invocation.args, {
       cwd: invocation.cwd,
-      env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1" }),
+      env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv }),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
@@ -364,6 +514,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     let sessionId: string | undefined;
     let stderr = "";
     let deltaBuffer = "";
+    let lastErrorText = "";
     const flushDelta = () => {
       if (!deltaBuffer.trim()) { deltaBuffer = ""; return; }
       const text = deltaBuffer;
@@ -372,6 +523,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     };
     const output = createInterface({ input: child.stdout });
     output.on("line", (raw) => {
+      options.onActivity?.();
       const reported = parseCliUsage(options.agent, raw);
       if (reported) usage = { ...usage, ...reported };
       const quota = parseProviderQuota(options.agent, raw);
@@ -380,6 +532,11 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
         if (options.usageContext) providerQuotaSave = saveProviderQuota(providerQuota, options.usageContext.dataDir).catch(() => undefined);
       }
       for (const normalized of normalizeCliLine(options.agent, raw)) {
+        // Codex reports one failure twice (`error` then `turn.failed`); show it once.
+        if (normalized.type === "error") {
+          if (normalized.text === lastErrorText) continue;
+          lastErrorText = normalized.text;
+        }
         if (normalized.finalText) finalText = normalized.appendFinal ? finalText + normalized.finalText : normalized.finalText;
         if (normalized.sessionId) sessionId = normalized.sessionId;
         if (normalized.delta) { deltaBuffer += normalized.text; continue; }
@@ -387,6 +544,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
         options.onLine(normalized);
       }
     });
+    // stderr is not activity: a CLI stuck in a retry loop prints there forever (see RunCliOptions.onActivity).
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
       if (stderr.length > 8_000) stderr = stderr.slice(-8_000);
@@ -464,16 +622,35 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
         reject(new Error(`${options.agent === "codex" ? "Codex" : options.agent === "claude" ? "Claude" : "Grok Build"} CLI를 시작할 수 없습니다${error.code ? ` (${error.code})` : ""}.`));
       }, reject);
     });
+    // `close` waits for every holder of stdout/stderr. A background child the CLI left running
+    // (dev server, watcher) keeps them open forever, so the run would never end although the CLI
+    // already exited. After a short drain window, drop our ends of the pipes so `close` fires.
+    // The background child itself keeps running; its group is tracked per session (orphanGroups).
+    let exitDrainTimer: NodeJS.Timeout | undefined;
+    child.once("exit", () => {
+      exitDrainTimer = setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, options.exitGraceMs ?? 3_000);
+      exitDrainTimer.unref();
+    });
     child.once("close", (code) => {
+      if (exitDrainTimer) clearTimeout(exitDrainTimer);
+      if (computerEnv.SINAWI_COMPUTER_TOKEN) revokeComputerToken(computerEnv.SINAWI_COMPUTER_TOKEN);
       if (finished) return;
       finished = true;
       if (!aborted) clearEscalation();
       releaseGroup();
+      // Aborted runs have a SIGKILL escalation for the whole group; normal exits leave members alive.
+      if (!aborted && child.pid) trackOrphanGroup(options.usageContext?.sessionId ?? "", child.pid);
       options.signal?.removeEventListener("abort", abort);
       const exitCode = code ?? 1;
       flushDelta();
-      if (exitCode !== 0 && stderr.trim()) {
-        options.onLine({ type: "error", text: stderr.trim().slice(-4_000) });
+      const stderrText = meaningfulStderr(stderr);
+      if (exitCode !== 0 && stderrText) {
+        options.onLine({ type: "error", text: stderrText.slice(-4_000) });
+      } else if (exitCode !== 0 && lastErrorText) {
+        // The CLI already explained the failure on stdout; a bare exit-code line adds nothing.
       } else if (exitCode !== 0) {
         options.onLine({ type: "error", text: `CLI가 종료 코드 ${exitCode}로 끝났습니다.` });
       } else if (!aborted && !finalText.trim()) {

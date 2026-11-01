@@ -14,12 +14,21 @@ export interface QuotaExhaustion {
 }
 
 /** Recognizes quota errors in both human-readable CLI output and JSON event lines. */
+function jsonStrings(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string") out.push(value);
+  else if (Array.isArray(value)) for (const item of value) jsonStrings(item, out);
+  else if (value && typeof value === "object") for (const item of Object.values(value)) jsonStrings(item, out);
+  return out;
+}
+
 export function isQuotaExhaustion(value: unknown): boolean {
-  const text = value instanceof Error
+  let text = value instanceof Error
     ? `${value.message}\n${String((value as Error & { stderr?: unknown }).stderr ?? "")}`
     : typeof value === "string" ? value : JSON.stringify(value ?? "");
   try {
     const event = JSON.parse(text) as Record<string, unknown>;
+    // Only the event's text counts: a timing like `"print_import_ms":429` in Claude's init line is not an HTTP 429.
+    if (event && typeof event === "object") text = jsonStrings(event).join("\n");
     if (event.type === "rate_limit_event" || event.type === "rate_limit") {
       const info = event.rate_limit_info && typeof event.rate_limit_info === "object" ? event.rate_limit_info as Record<string, unknown> : undefined;
       return event.status === "rejected" || info?.status === "rejected"
@@ -55,7 +64,8 @@ export function selectQuotaFallback(
   authenticatedAgents: readonly AgentId[],
   quotas: readonly ProviderQuota[],
   order?: Partial<Record<AgentId, AgentId[]>>,
-  workspaceId: WorkspaceId = "personal",
+  // Kept for callers; the workspace's allowed agents already carry its policy.
+  _workspaceId?: WorkspaceId,
   threshold = 3,
 ): AgentId | undefined {
   const allowed = new Set(allowedAgents);
@@ -63,7 +73,7 @@ export function selectQuotaFallback(
   const preferred = order?.[exhaustedAgent] ?? defaultFallbackOrder[exhaustedAgent];
   const rank = new Map(preferred.map((agent, index) => [agent, index]));
   return preferred
-    .filter((agent) => agent !== exhaustedAgent && allowed.has(agent) && authenticated.has(agent) && !(workspaceId === "company" && agent === "codex"))
+    .filter((agent) => agent !== exhaustedAgent && allowed.has(agent) && authenticated.has(agent))
     .filter((agent) => !exhaustionFromQuota(quotas.find((quota) => quota.agent === agent), threshold).exhausted)
     .sort((left, right) => usableRemaining(quotas.find((quota) => quota.agent === right)) - usableRemaining(quotas.find((quota) => quota.agent === left))
       || (rank.get(left) ?? 99) - (rank.get(right) ?? 99))[0];

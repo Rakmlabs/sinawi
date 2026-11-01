@@ -226,6 +226,8 @@ test("a live Claude rate limit event is visible before a long run exits", async 
   const directory = await mkdtemp(join(tmpdir(), "sinawi-live-limit-"));
   const executable = join(directory, "mock-live-claude.mjs");
   await writeFile(executable, `#!/usr/bin/env node
+// runCli probes \`claude --help\` once per binary (see claudeHelpFlags); answer it like the real CLI.
+if (process.argv.includes("--help")) { process.stdout.write("  --output-format <format>\\n"); process.exit(0); }
 process.stdout.write(JSON.stringify({ type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.97, resetsAt: "2026-10-30T15:00:00Z" } } } }) + "\\n");
 process.once("SIGTERM", () => process.exit(143));
 setInterval(() => {}, 1000);

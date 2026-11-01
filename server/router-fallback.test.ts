@@ -110,13 +110,14 @@ test("router runner does not retry ordinary failures, disabled fallback, or abor
   }
 });
 
-test("company router fallback never selects Codex even when it has the most quota", async () => {
+test("router fallback never selects an agent the workspace does not allow, even with the most quota", async () => {
   const agents: string[] = [];
   const runner: PlannerRunner = async (options) => {
     agents.push(options.agent);
     return { exitCode: 0, finalText: "ok" };
   };
   const wrapped = createQuotaFallbackRunner(runner, () => context({
+    allowedAgents: ["claude", "grok"],
     quotas: [
       { agent: "claude", windows: [{ key: "current", label: "현재", remainingPercent: 0 }] },
       { agent: "codex", windows: [{ key: "current", label: "현재", remainingPercent: 99 }] },

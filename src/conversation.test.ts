@@ -187,3 +187,22 @@ test("delegation tasks expose start/end so a leaf clock can tick only running ta
   assert.equal(formatElapsed(0, 65_000), "1:05");
   assert.equal(formatElapsed(10_000, 0), "0:00");
 });
+
+test("after a quota fallback the card names the agent and model that actually ran", () => {
+  const s = session([
+    event("t", "delegation", "codex", "작업", { role: "worker", workerId: "codex", workerLabel: "Codex", delegationId: "t", taskStatus: "running", model: "gpt-5.5" }),
+    event("h", "status", "claude", "작업을 이어받고 있습니다.", { role: "worker", workerId: "codex", workerLabel: "Codex", delegationId: "t", taskStatus: "running", model: "haiku" }),
+    event("d", "status", "claude", "작업을 완료했습니다.", { role: "worker", workerId: "codex", workerLabel: "Codex", delegationId: "t", taskStatus: "done", model: "haiku" }),
+  ]);
+  const [task] = delegationTasks(s, Date.parse("2026-10-30T00:00:09Z"));
+  assert.equal(task.event.agent, "claude");
+  assert.equal(task.event.workerLabel, "Claude");
+  assert.equal(task.event.model, "haiku");
+  const custom = session([
+    event("t", "delegation", "codex", "작업", { role: "worker", workerId: "front", workerLabel: "프론트", delegationId: "t", taskStatus: "running", model: "gpt-5.5" }),
+    event("h", "status", "claude", "작업을 이어받고 있습니다.", { role: "worker", workerId: "front", workerLabel: "프론트", delegationId: "t", taskStatus: "running" }),
+  ]);
+  const [renamed] = delegationTasks(custom, Date.parse("2026-10-30T00:00:09Z"));
+  assert.equal(renamed.event.workerLabel, "프론트", "a custom label stays");
+  assert.equal(renamed.event.model, undefined, "the fallback's CLI default, not Codex's model");
+});

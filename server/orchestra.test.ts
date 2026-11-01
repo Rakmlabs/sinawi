@@ -4,8 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Orchestra, parseDelegations } from "./orchestra.js";
+import { defaultWorkspacePolicy, mediaBlockedMessage } from "./workspace-policy.js";
 import type { RunCliOptions } from "./cli.js";
 import { publicSkills } from "./skills.js";
+
+// No workspace id is special. These tests configure "company" the way an old install's migration does:
+// Codex off and media generation off, through the same resolvers the server passes.
+const restrictedAgents = (id: string) => id === "company" ? ["claude", "grok"] as const : ["codex", "claude", "grok"] as const;
+const restrictedPolicy = (id: string) => ({ ...defaultWorkspacePolicy(), mediaGeneration: id !== "company" });
+const codexBlocked = /작업 공간 설정에서 Codex 사용이 꺼져 있습니다/;
 
 test("parseDelegations accepts supported agents and ignores empty tasks", () => {
   assert.deepEqual(parseDelegations('<<DELEGATE to="claude">>Review API<</DELEGATE>><<DELEGATE to="grok">>  <</DELEGATE>>'), [
@@ -521,24 +528,24 @@ test("company sessions reject Codex in every configured role before starting a C
   const orchestra = new Orchestra(undefined, async () => {
     calls += 1;
     return { exitCode: 0, finalText: "unexpected" };
-  });
+  }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
 
   await assert.rejects(
     orchestra.create({ prompt: "blocked orchestrator", agent: "codex", workers: ["claude"], cwd, workspaceId: "company" }),
-    /회사 공간에서는 Codex를 사용할 수 없습니다/,
+    codexBlocked,
   );
   await assert.rejects(
     orchestra.create({ prompt: "blocked worker", agent: "claude", workers: ["codex"], cwd, workspaceId: "company" }),
-    /회사 공간에서는 Codex를 사용할 수 없습니다/,
+    codexBlocked,
   );
   await assert.rejects(
     orchestra.create({ prompt: "blocked planner", agent: "claude", workers: ["grok"], planner: { agent: "codex" }, cwd, workspaceId: "company" }),
-    /회사 공간에서는 Codex를 사용할 수 없습니다/,
+    codexBlocked,
   );
   assert.equal(calls, 0);
 });
 
-test("workspace settings can narrow personal agents and company settings still cannot enable Codex", async () => {
+test("workspace settings can narrow agents and no workspace id forces a restriction", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-policy-"));
   const allowed = (workspaceId: string) => workspaceId === "personal"
     ? ["claude", "grok"] as const
@@ -547,12 +554,11 @@ test("workspace settings can narrow personal agents and company settings still c
 
   await assert.rejects(
     orchestra.create({ prompt: "personal subset", agent: "codex", workers: ["claude"], cwd, workspaceId: "personal" }),
-    /이 공간에서는 Codex를 사용할 수 없습니다/,
+    codexBlocked,
   );
-  await assert.rejects(
-    orchestra.create({ prompt: "company invariant", agent: "codex", workers: ["claude"], cwd, workspaceId: "company" }),
-    /회사 공간에서는 Codex를 사용할 수 없습니다/,
-  );
+  const company = await orchestra.create({ prompt: "company allows codex", agent: "codex", workers: ["claude"], cwd, workspaceId: "company" });
+  await waitUntilSettled(company);
+  assert.equal(company.status, "done");
 });
 
 test("moving an archived Codex session is allowed but company follow-up and team changes are rejected", async () => {
@@ -561,15 +567,15 @@ test("moving an archived Codex session is allowed but company follow-up and team
   const orchestra = new Orchestra(undefined, async () => {
     calls += 1;
     return { exitCode: 0, finalText: "done" };
-  });
+  }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
   const session = await orchestra.create({ prompt: "personal", agent: "codex", workers: ["claude"], cwd });
   await waitUntilSettled(session);
   orchestra.setWorkspace(session.id, "company");
 
-  await assert.rejects(orchestra.followup(session.id, "blocked"), /회사 공간에서는 Codex를 사용할 수 없습니다/);
+  await assert.rejects(orchestra.followup(session.id, "blocked"), codexBlocked);
   assert.throws(
     () => orchestra.updateTeam(session.id, { agent: "claude", workers: ["codex"] }),
-    /회사 공간에서는 Codex를 사용할 수 없습니다/,
+    codexBlocked,
   );
   assert.equal(session.status, "done");
   assert.equal(calls, 1);
@@ -581,13 +587,13 @@ test("editing a valid team clears a persisted planner that the workspace now pro
   const orchestra = new Orchestra(undefined, async () => {
     calls += 1;
     return { exitCode: 0, finalText: "done" };
-  });
+  }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
   const session = await orchestra.create({
     prompt: "personal", agent: "claude", workers: ["grok"], planner: { agent: "codex", model: "stale-plan" }, cwd,
   });
   await waitUntilSettled(session);
   orchestra.setWorkspace(session.id, "company");
-  await assert.rejects(orchestra.followup(session.id, "blocked"), /회사 공간에서는 Codex를 사용할 수 없습니다/);
+  await assert.rejects(orchestra.followup(session.id, "blocked"), codexBlocked);
 
   orchestra.updateTeam(session.id, { agent: "claude", workers: ["grok"] });
   assert.equal(session.planner, undefined);
@@ -603,7 +609,7 @@ test("company bot conversations reject Codex before starting a CLI", async () =>
   const orchestra = new Orchestra(undefined, async () => {
     calls += 1;
     return { exitCode: 0, finalText: "unexpected" };
-  });
+  }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
   const bots = [
     { id: "a", name: "A", agent: "claude" as const, skills: [], systemPrompt: "", createdAt: new Date().toISOString() },
     { id: "b", name: "B", agent: "codex" as const, skills: [], systemPrompt: "", createdAt: new Date().toISOString() },
@@ -611,7 +617,7 @@ test("company bot conversations reject Codex before starting a CLI", async () =>
 
   await assert.rejects(
     orchestra.conversation({ botA: "a", botB: "b", turns: 2, prompt: "talk", cwd, workspaceId: "company" }, bots),
-    /회사 공간에서는 Codex를 사용할 수 없습니다/,
+    codexBlocked,
   );
   assert.equal(calls, 0);
 });
@@ -799,7 +805,7 @@ test("new session mode does not resume a prior worker session", async () => {
 test("a running Codex team cannot move into company", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  const orchestra = new Orchestra(() => undefined, async () => { await gate; return { exitCode: 0, finalText: "done" }; });
+  const orchestra = new Orchestra(() => undefined, async () => { await gate; return { exitCode: 0, finalText: "done" }; }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
   const session = await orchestra.create({ prompt: "work", agent: "codex", workers: ["claude"], cwd: process.cwd() });
   try {
     assert.throws(() => orchestra.setWorkspace(session.id, "company"), /Codex/);
@@ -1093,53 +1099,56 @@ test("company media creates and followups reject before session mutation or CLI 
   const orchestra = new Orchestra(undefined, async (options) => {
     calls.push(options);
     return { exitCode: 0, finalText: "done" };
-  });
-  await assert.rejects(orchestra.create({ prompt: "이미지 생성", agent: "grok", workers: ["grok"], cwd: process.cwd(), workspaceId: "company" }), { message: "영상·이미지 생성은 개인 공간에서만 가능" });
+  }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
+  await assert.rejects(orchestra.create({ prompt: "이미지 생성", agent: "grok", workers: ["grok"], cwd: process.cwd(), workspaceId: "company" }), { message: mediaBlockedMessage });
   assert.equal(orchestra.list().length, 0);
   assert.equal(calls.length, 0);
   const session = await orchestra.create({ prompt: "ordinary task", agent: "grok", workers: ["grok"], cwd: process.cwd(), workspaceId: "company" });
   await waitUntilSettled(session);
   const before = structuredClone(session);
-  await assert.rejects(orchestra.followup(session.id, "광고 영상 생성"), { message: "영상·이미지 생성은 개인 공간에서만 가능" });
+  await assert.rejects(orchestra.followup(session.id, "광고 영상 생성"), { message: mediaBlockedMessage });
   assert.deepEqual(session, before);
   assert.equal(calls.length, 1);
 });
 
-test("personal media workers receive bbanana credit hint and support Codex workers", async () => {
+const mediaHint = "MEDIA_HINT: show the model and credits before generating.";
+const hintPolicy = (id: string) => ({ ...defaultWorkspacePolicy(), ...(id === "personal" ? { mediaPrompt: mediaHint } : {}) });
+
+test("media workers receive their workspace's media prompt and support Codex workers", async () => {
   const calls: RunCliOptions[] = [];
   const orchestra = new Orchestra(undefined, async (options) => {
     calls.push(options);
     return { exitCode: 0, finalText: calls.length === 1 ? '<<DELEGATE to="codex">>Prepare asset<</DELEGATE>>' : "done" };
-  });
+  }, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, hintPolicy);
   const session = await orchestra.create({ prompt: "이미지 생성", agent: "grok", workers: ["codex", "grok"], cwd: process.cwd(), workspaceId: "personal" });
   await waitUntilSettled(session);
   assert.equal(session.status, "done");
   assert.deepEqual(session.workers, ["codex", "grok"]);
   const worker = calls.find((call) => call.usageContext?.role === "worker");
   assert.equal(worker?.agent, "codex");
-  assert.ok(worker?.prompt.includes("Codex는 내장 이미지 생성(GPT image)을 사용할 수 있고, bbanana MCP 도구로 이미지·영상 생성이 가능하다. 생성 전에 사용할 모델과 예상 크레딧을 먼저 보여주고 확인받은 뒤 생성하라. 시안은 저가/무료 모델, 최종본만 고급 모델. Grok은 자체 Imagine 도구도 사용 가능."));
+  assert.ok(worker?.prompt.startsWith(`${mediaHint}\n\n`));
 });
 
-test("ordinary personal and company workers receive no media credit hint", async () => {
+test("ordinary workers and workspaces without a media prompt receive no media hint", async () => {
   for (const workspaceId of ["personal", "company"] as const) {
     const calls: RunCliOptions[] = [];
     const orchestra = new Orchestra(undefined, async (options) => {
       calls.push(options);
       return { exitCode: 0, finalText: calls.length === 1 ? '<<DELEGATE to="grok">>Research<</DELEGATE>>' : "done" };
-    });
+    }, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, hintPolicy);
     const session = await orchestra.create({ prompt: "Research", agent: "grok", workers: ["grok"], cwd: process.cwd(), workspaceId });
     await waitUntilSettled(session);
-    assert.equal(calls.some((call) => call.prompt.includes("bbanana MCP")), false);
+    assert.equal(calls.some((call) => call.prompt.includes(mediaHint)), false);
   }
 });
 
 test("company bot conversations reject media before launching either bot", async () => {
   let calls = 0;
-  const orchestra = new Orchestra(undefined, async () => { calls++; return { exitCode: 0, finalText: "done" }; });
+  const orchestra = new Orchestra(undefined, async () => { calls++; return { exitCode: 0, finalText: "done" }; }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
   await assert.rejects(orchestra.conversation({ botA: "a", botB: "b", turns: 1, prompt: "영상 생성", cwd: process.cwd(), workspaceId: "company" }, [
     { id: "a", name: "A", agent: "grok", skills: [], systemPrompt: "", createdAt: "" },
     { id: "b", name: "B", agent: "claude", skills: [], systemPrompt: "", createdAt: "" },
-  ]), { message: "영상·이미지 생성은 개인 공간에서만 가능" });
+  ]), { message: mediaBlockedMessage });
   assert.equal(calls, 0);
   assert.equal(orchestra.list().length, 0);
 });
@@ -1167,17 +1176,17 @@ test("media followups honor the available workers returned by automatic routing"
   assert.deepEqual(session.workers, ["grok"]);
 });
 
-test("Claude media helper workers never receive the bbanana capability hint", async () => {
+test("Claude media helper workers never receive the workspace media prompt", async () => {
   const calls: RunCliOptions[] = [];
   const orchestra = new Orchestra(undefined, async (options) => {
     calls.push(options);
     return { exitCode: 0, finalText: calls.length === 1 ? '<<DELEGATE to="claude">>Plan the concept<</DELEGATE>>' : "done" };
-  });
-  const session = await orchestra.create({ prompt: "이미지 생성", agent: "grok", workers: ["claude"], cwd: process.cwd() });
+  }, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, hintPolicy);
+  const session = await orchestra.create({ prompt: "이미지 생성", agent: "grok", workers: ["claude"], cwd: process.cwd(), workspaceId: "personal" });
   await waitUntilSettled(session);
   const worker = calls.find((call) => call.agent === "claude");
   assert.ok(worker);
-  assert.equal(worker.prompt.includes("bbanana"), false);
+  assert.equal(worker.prompt.includes(mediaHint), false);
 });
 
 test("manual media followups preserve an existing customized media team", async () => {

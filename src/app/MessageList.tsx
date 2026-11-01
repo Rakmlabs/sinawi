@@ -11,6 +11,9 @@ import { Elapsed } from "./Elapsed";
 import { names, statusLabels } from "./labels";
 import type { Session, SessionEvent } from "../../server/types";
 import { t } from "../i18n";
+import { ComputerTrail } from "../ComputerUse";
+import { QuietIndicator } from "./QuietIndicator";
+import { WorktreePanel } from "./WorktreePanel";
 
 export type MessageListProps = {
   active: Session;
@@ -48,7 +51,7 @@ function DelegationCard({ e, task, active, onOpenWorker }: { e: SessionEvent; ta
 /** The main conversation of the active session: messages, handoffs and delegation cards. */
 export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose }: MessageListProps) {
   return <div className="messages">
-    {events.map((e) => {
+    {events.flatMap((e, index) => [(() => {
       if (e.type === "handoff") return <div className="handoff-divider" key={e.id}>
         <span className="agent-label"><AgentMark agent={e.agent} size="small" />{e.text}</span>
         {e.metadata?.auto && !e.metadata.quotaFallback && e.id === latestHandoffId && <button className="handoff-undo" disabled={busy || !canUndoAutoHandoff(e, active.status, latestHandoffId)} onClick={() => onUndoHandoff(e.id)}>{e.metadata.undone ? t("msg.undone") : t("msg.undo")}</button>}
@@ -72,10 +75,11 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
           {choiceOptions.map((option, index) => <button type="button" key={option} onClick={() => onChoose(option)}><span>{index + 1}</span>{option}</button>)}
         </div>}
       </article>;
-    })}
+    })(), <ComputerTrail key={`cu-${e.id}`} sessionId={active.id} from={e.time} to={events[index + 1]?.time} />])}
+    <WorktreePanel session={active} />
     {active.status === "running" && (
       <div className="thinking" role="status">
-        <Beat /> {t("msg.teamWorking")}
+        <Beat /> {t("msg.teamWorking")} <QuietIndicator session={active} />
       </div>
     )}
     <div ref={bottomRef} />

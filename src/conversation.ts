@@ -51,6 +51,14 @@ export function formatElapsed(startMs: number, endMs: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+const defaultNames: Record<AgentId, string> = { codex: "Codex", claude: "Claude", grok: "Grok Build" };
+
+/** A default label ("Codex", "Codex 2") names the original agent; a custom label stays. */
+function relabel(label: string | undefined, from: AgentId, to: AgentId): string | undefined {
+  if (!label) return undefined;
+  return new RegExp(`^${defaultNames[from]}(?: \\d+)?$`, "u").test(label) ? defaultNames[to] : label;
+}
+
 export function delegationTasks(session: Session, now: number): DelegationTask[] {
   const tasks: DelegationTask[] = [];
   session.events.forEach((event, start) => {
@@ -70,7 +78,11 @@ export function delegationTasks(session: Session, now: number): DelegationTask[]
     const status = terminal?.taskStatus ?? (currentAttempt.some((item) => item.type === "error") ? "error" : event.delegationId ? session.status : next >= 0 ? "done" : session.status);
     const end = terminal?.time ?? (status === "running" ? undefined : last?.time ?? session.endedAt ?? event.time);
     const current = [...thread].reverse().find((item) => item.role === "worker" && item.agent !== "user");
-    const displayedEvent = current ? { ...event, agent: current.agent, model: current.model ?? event.model, reasoningEffort: current.reasoningEffort ?? event.reasoningEffort } : event;
+    // After a quota fallback the worker that actually runs is another agent: show its name and model, not the original's.
+    const switched = current && current.agent !== event.agent && current.agent !== "user" && event.agent !== "user";
+    const displayedEvent = !current ? event : switched
+      ? { ...event, agent: current.agent, model: current.model, reasoningEffort: current.reasoningEffort, workerLabel: relabel(event.workerLabel, event.agent as AgentId, current.agent as AgentId) }
+      : { ...event, agent: current.agent, model: current.model ?? event.model, reasoningEffort: current.reasoningEffort ?? event.reasoningEffort };
     tasks.push({ event: displayedEvent, thread, status, elapsed: formatElapsed(Date.parse(event.time), end ? Date.parse(end) : now), startedAt: event.time, endedAt: end, activity: (last ? workerLogSummary(parseWorkerLog(last)) : "") || t("delegation.preparing") });
   });
   return tasks;

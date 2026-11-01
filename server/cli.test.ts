@@ -39,7 +39,8 @@ test("buildInvocation enforces a tool-free read-only profile for every planner C
   const claude = buildInvocation({ agent: "claude", prompt: "plan", cwd: "/tmp/project", readOnly: true });
   const planAt = claude.args.indexOf("--permission-mode");
   assert.deepEqual(claude.args.slice(planAt - 5, planAt + 2), ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan"]);
-  assert.deepEqual(claude.args.slice(planAt + 2), ["--disallowedTools", "mcp__bbanana__*"]);
+  // No tool is denied unless the workspace or the tools panel says so.
+  assert.deepEqual(claude.args.slice(planAt + 2), []);
 
   const grok = buildInvocation({ agent: "grok", prompt: "plan", cwd: "/tmp/project", readOnly: true });
   assert.deepEqual(grok.args.slice(-5), ["--tools", "", "--deny", "*", "--disable-web-search"]);
@@ -99,39 +100,41 @@ test("normalizes nested Claude tool-result permission failures", () => {
   }
 });
 
-test("company Grok invocations deny blocked MCP tools after installing the project guard", async () => {
-  const guarded: string[] = [];
+test("Grok invocations with workspace-locked tools deny them after installing the project guard", async () => {
+  const guarded: Array<[string, readonly string[]]> = [];
   const invocation = await prepareCliInvocation({
-    agent: "grok", prompt: "research", cwd: "/tmp/company", blockedMcp: ["mcp__existing__*"],
-    usageContext: { workspaceId: "company", sessionId: "session", role: "worker" },
-  }, async (cwd) => { guarded.push(cwd); });
+    agent: "grok", prompt: "research", cwd: "/tmp/team", blockedMcp: ["mcp__existing__*"], lockedMcp: ["media-tool"],
+    usageContext: { workspaceId: "team", sessionId: "session", role: "worker" },
+  }, async (cwd, names) => { guarded.push([cwd, names]); });
 
-  assert.deepEqual(guarded, ["/tmp/company"]);
-  assert.deepEqual(invocation.args.slice(-4), ["--deny", "mcp__existing__*", "--deny", "mcp__bbanana__*"]);
+  assert.deepEqual(guarded, [["/tmp/team", ["media-tool"]]]);
+  assert.deepEqual(invocation.args.slice(-4), ["--deny", "mcp__existing__*", "--deny", "mcp__media-tool__*"]);
 });
 
-test("personal Grok and Claude omit project guards while preserving explicit app blocks", async () => {
+test("runs without locked tools omit project guards whatever the workspace id; Claude only gets explicit blocks", async () => {
   const guarded: string[] = [];
   const guard = async (cwd: string) => { guarded.push(cwd); };
-  const personalGrok = await prepareCliInvocation({
-    agent: "grok", prompt: "research", cwd: "/tmp/personal",
-    usageContext: { workspaceId: "personal", sessionId: "personal", role: "orchestrator" },
-  }, guard);
-  const companyClaude = await prepareCliInvocation({
-    agent: "claude", prompt: "plan", cwd: "/tmp/company", blockedMcp: ["mcp__bbanana__*"],
+  const companyGrok = await prepareCliInvocation({
+    agent: "grok", prompt: "research", cwd: "/tmp/company",
     usageContext: { workspaceId: "company", sessionId: "company", role: "orchestrator" },
+  }, guard);
+  const lockedClaude = await prepareCliInvocation({
+    agent: "claude", prompt: "plan", cwd: "/tmp/team", lockedMcp: ["media-tool"],
+    usageContext: { workspaceId: "team", sessionId: "team", role: "orchestrator" },
   }, guard);
 
   assert.deepEqual(guarded, []);
-  assert.equal(personalGrok.args.join(" ").includes("bbanana"), false);
-  assert.equal(companyClaude.args.includes("--deny"), false);
-  const denied = companyClaude.args.flatMap((arg, index) => companyClaude.args[index - 1] === "--disallowedTools" ? [arg] : []);
-  assert.deepEqual(denied, ["mcp__bbanana__*"]);
+  assert.equal(companyGrok.args.join(" ").includes("mcp__"), false);
+  assert.equal(lockedClaude.args.includes("--deny"), false);
+  const denied = lockedClaude.args.flatMap((arg, index) => lockedClaude.args[index - 1] === "--disallowedTools" ? [arg] : []);
+  assert.deepEqual(denied, ["mcp__media-tool__*"]);
   const plain = buildInvocation({ agent: "claude", prompt: "plan", cwd: "/tmp/personal" });
-  assert.equal(plain.args[plain.args.indexOf("--disallowedTools") + 1], "mcp__bbanana__*");
-  const extra = buildInvocation({ agent: "claude", prompt: "plan", cwd: "/tmp/personal", blockedMcp: ["mcp__example__*"] });
-  assert.deepEqual(extra.args.flatMap((arg, index) => extra.args[index - 1] === "--disallowedTools" ? [arg] : []), ["mcp__example__*", "mcp__bbanana__*"]);
-  assert.equal(buildInvocation({ agent: "codex", prompt: "plan", cwd: "/tmp/personal" }).args.join(" ").includes("bbanana"), false);
+  assert.equal(plain.args.includes("--disallowedTools"), false);
+  const extra = buildInvocation({ agent: "claude", prompt: "plan", cwd: "/tmp/personal", blockedMcp: ["mcp__example__*", "mcp__example__*"] });
+  assert.deepEqual(extra.args.flatMap((arg, index) => extra.args[index - 1] === "--disallowedTools" ? [arg] : []), ["mcp__example__*"]);
+  const codex = await prepareCliInvocation({ agent: "codex", prompt: "plan", cwd: "/tmp/team", lockedMcp: ["media-tool"] }, guard);
+  assert.ok(codex.args.join(" ").includes('mcp_servers."media-tool".enabled=false'));
+  assert.deepEqual(guarded, []);
 });
 
 test("normalizes Codex messages and tool calls", () => {

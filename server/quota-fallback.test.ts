@@ -34,14 +34,16 @@ test("quota threshold uses the limiting window and exposes its reset", () => {
   assert.equal(exhaustionFromQuota({ agent: "codex", updatedAt: "2020-01-01T00:00:00Z", windows: [{ key: "stale", label: "stale", remainingPercent: 0 }] }, 3, 2_000_000_000).exhausted, false);
 });
 
-test("selects the authenticated allowed fallback with most remaining quota and honors company policy", () => {
+test("selects the authenticated allowed fallback with most remaining quota and only the allowed agents", () => {
   const quotas = [
     { agent: "claude" as const, windows: [{ key: "a", label: "a", remainingPercent: 60 }] },
     { agent: "grok" as const, windows: [{ key: "a", label: "a", remainingPercent: 80 }] },
     { agent: "codex" as const, windows: [{ key: "a", label: "a", remainingPercent: 99 }] },
   ];
   assert.equal(selectQuotaFallback("codex", ["codex", "claude", "grok"], ["claude", "grok"], quotas), "grok");
-  assert.equal(selectQuotaFallback("claude", ["codex", "grok"], ["codex", "grok"], quotas, undefined, "company"), "grok");
+  assert.equal(selectQuotaFallback("claude", ["grok"], ["codex", "grok"], quotas), "grok");
+  // No workspace id restricts anything by itself.
+  assert.equal(selectQuotaFallback("claude", ["codex", "grok"], ["codex", "grok"], quotas, undefined, "company"), "codex");
 });
 
 test("fallback order breaks remaining-quota ties and model tier is preserved", () => {
@@ -54,4 +56,11 @@ test("fallback order breaks remaining-quota ties and model tier is preserved", (
   assert.deepEqual(equivalentFallbackModel("claude", "codex", "opus", undefined), { model: undefined, reasoningEffort: "high" });
   assert.deepEqual(equivalentFallbackModel("codex", "grok", undefined, "high"), { model: "grok-4.7", reasoningEffort: undefined });
   assert.deepEqual(equivalentFallbackModel("claude", "grok", "haiku", undefined), { model: "grok-4.7-build-fast", reasoningEffort: undefined });
+});
+
+test("a number 429 inside a JSON event (Claude init timings) is not a quota failure", () => {
+  const init = JSON.stringify({ type: "system", subtype: "init", timings: { print_import_ms: 429, mcp_connect_ms: 426 } });
+  assert.equal(isQuotaExhaustion(init), false);
+  assert.equal(isQuotaExhaustion(JSON.stringify({ type: "error", message: "HTTP 429 Too Many Requests" })), true);
+  assert.equal(isQuotaExhaustion(JSON.stringify({ type: "turn.failed", error: { message: "You’ve hit your usage limit." } })), true);
 });
