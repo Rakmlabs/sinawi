@@ -7,9 +7,11 @@ import { ModelChoice } from "../RoutingControls";
 import { RemainingChip } from "../QuotaContext";
 import { ONBOARDING_OPEN_EVENT } from "../onboarding-state";
 import { names } from "./labels";
+import { AppearanceSettings } from "./AppearanceSettings";
 import type { Bootstrap } from "./api";
 import type { RoutingSettings } from "../../server/routing";
 import type { AgentId, SkillInfo as Skill, WorkspaceId } from "../../server/types";
+import { t, translatedMap } from "../i18n";
 
 export type AppModalProps = {
   modal: string;
@@ -47,13 +49,13 @@ export type AppModalProps = {
   onSaveBot: () => void;
 };
 
-const titles: Record<string, string> = {
-  usage: "사용량",
-  skills: "팀 스킬 설정",
-  directory: "작업 폴더",
-  bot: "봇 만들기",
-  settings: "세션 설정",
-};
+const titles: Record<string, string> = translatedMap({
+  usage: "modal.usage",
+  skills: "modal.skills",
+  directory: "modal.directory",
+  bot: "modal.bot",
+  settings: "modal.settings",
+});
 
 const reopenOnboarding = (close: () => void) => { close(); window.dispatchEvent(new CustomEvent(ONBOARDING_OPEN_EVENT)); };
 
@@ -71,12 +73,12 @@ export function AppModal(props: AppModalProps) {
     >
       <div className="panel-header">
         <h2 id="modal-title">
-          {titles[modal] ?? "내 컴퓨터의 에이전트 팀"}
+          {titles[modal] ?? t("modal.help")}
         </h2>
         <button
           className="icon-button"
           onClick={close}
-          aria-label="대화 상자 닫기"
+          aria-label={t("modal.close")}
         >
           <X size={20} />
         </button>
@@ -86,7 +88,7 @@ export function AppModal(props: AppModalProps) {
           <div className="error-banner" role="alert">
             {error}
             <button
-              aria-label="오류 닫기"
+              aria-label={t("modal.closeError")}
               onClick={clearError}
             >
               <X size={16} />
@@ -95,16 +97,13 @@ export function AppModal(props: AppModalProps) {
         )}
         {modal === "skills" && (
           <>
-            <p>
-              각 에이전트의 작업 프롬프트에 추가할 스킬을
-              최대 20개까지 선택하세요.
-            </p>
-            <button className="button light" disabled={busy || !shownCwd} onClick={props.onRefreshSkills}>{busy ? <LoaderCircle size={14} className="spin" /> : <Activity size={14} />}스킬 새로고침</button>
+            <p>{t("modal.skillsIntro")}</p>
+            <button className="button light" disabled={busy || !shownCwd} onClick={props.onRefreshSkills}>{busy ? <LoaderCircle size={14} className="spin" /> : <Activity size={14} />}{t("modal.refreshSkills")}</button>
             <div className="search-field">
               <Search size={16} />
               <input
-                placeholder="스킬 검색…"
-                aria-label="스킬 검색"
+                placeholder={t("modal.searchSkillsPlaceholder")}
+                aria-label={t("modal.searchSkills")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -140,10 +139,7 @@ export function AppModal(props: AppModalProps) {
                   </label>
                 ))}
               {!props.availableSkills.length && (
-                <p>
-                  스킬을 찾을 수 없습니다. ./skills 또는 에이전트의 스킬 폴더에
-                  SKILL.md 파일을 추가한 뒤 새로고침하세요.
-                </p>
+                <p>{t("modal.noSkills")}</p>
               )}
             </div>
             <button
@@ -153,7 +149,7 @@ export function AppModal(props: AppModalProps) {
                 props.setSkillReturn(undefined);
               }}
             >
-              스킬 {skills.length}개 사용 <Check size={15} />
+              {t("modal.useSkills", { n: skills.length })} <Check size={15} />
             </button>
           </>
         )}
@@ -163,30 +159,31 @@ export function AppModal(props: AppModalProps) {
           <>
             {modal === "bot" && (
               <label>
-                봇 이름
+                {t("modal.botName")}
                 <input
                   value={props.botName}
                   onChange={(e) => props.setBotName(e.target.value)}
-                  placeholder="예: 꼼꼼한 코드 검토자"
+                  placeholder={t("modal.botNamePlaceholder")}
                 />
               </label>
             )}
             <label>
-              에이전트
-              <GlassSelect label="에이전트" value={agent} disabled={busy} onChange={(value) => props.chooseAgent(value as AgentId)} options={(["codex", "claude", "grok"] as AgentId[]).map((id) => ({ value: id, label: names[id], icon: <><AgentMark agent={id} size="small" /><RemainingChip agent={id} /></>, disabled: !allowedAgents.includes(id), title: workspaceId === "company" && id === "codex" ? "회사 공간에서는 사용 안 함" : undefined }))} />
+              {t("modal.agent")}
+              <GlassSelect label={t("modal.agent")} value={agent} disabled={busy} onChange={(value) => props.chooseAgent(value as AgentId)} options={(["codex", "claude", "grok"] as AgentId[]).map((id) => ({ value: id, label: names[id], icon: <><AgentMark agent={id} size="small" /><RemainingChip agent={id} /></>, disabled: !allowedAgents.includes(id), title: workspaceId === "company" && id === "codex" ? t("allowed.codexOffAtWork") : undefined }))} />
             </label>
-            <ModelChoice disabled={busy} label="세션 모델" value={{ agent, model, reasoningEffort }} settings={routingSettings} chooseAgent={false} onChange={(next) => props.onModelChange(next.model ?? "", next.reasoningEffort ?? "")} />
+            <ModelChoice disabled={busy} label={t("modal.sessionModel")} value={{ agent, model, reasoningEffort }} settings={routingSettings} chooseAgent={false} onChange={(next) => props.onModelChange(next.model ?? "", next.reasoningEffort ?? "")} />
             {modal === "settings" && <label className="auto-switch-setting">
-              <span><strong>대화 중 자동 전환</strong><small>자동 모드에서 작업 종류가 명확히 바뀌면 알맞은 오케스트라로 전환합니다.</small></span>
+              <span><strong>{t("modal.autoSwitch")}</strong><small>{t("modal.autoSwitchHint")}</small></span>
               <input type="checkbox" checked={autoSwitch} disabled={busy} onChange={(event) => setAutoSwitch(event.target.checked)} />
             </label>}
-            {modal === "settings" && <button className="button light" onClick={props.onOpenRouting}>자동 라우팅 규칙과 모델 목록 편집</button>}
-            {modal === "settings" && <button className="button light" onClick={() => reopenOnboarding(close)}>설정 도우미 다시 열기</button>}
+            {modal === "settings" && <AppearanceSettings />}
+            {modal === "settings" && <button className="button light" onClick={props.onOpenRouting}>{t("modal.editRouting")}</button>}
+            {modal === "settings" && <button className="button light" onClick={() => reopenOnboarding(close)}>{t("modal.reopenOnboarding")}</button>}
             <label>
-              시스템 지침
+              {t("modal.systemPrompt")}
               <textarea
                 rows={5}
-                placeholder="이 에이전트가 어떤 방식으로 작업하면 좋을까요?"
+                placeholder={t("modal.systemPromptPlaceholder")}
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
               />
@@ -199,30 +196,23 @@ export function AppModal(props: AppModalProps) {
               }}
             >
               <WandSparkles size={15} />
-              스킬 {skills.length}개 선택됨
+              {t("modal.skillsSelected", { n: skills.length })}
             </button>
-            <p className="muted">
-              설정은 새 세션에 적용됩니다. 팀, 스킬, 폴더를
-              변경하려면 새 세션을 시작하세요.
-            </p>
+            <p className="muted">{t("modal.appliesToNew")}</p>
             <button
               className="button primary"
               disabled={busy || (modal === "bot" && !props.botName.trim())}
               onClick={() => modal === "bot" ? props.onSaveBot() : close()}
             >
-              {modal === "bot" ? "봇 저장" : "완료"}
+              {modal === "bot" ? t("modal.saveBot") : t("modal.done")}
               <Check size={15} />
             </button>
           </>
         )}
         {modal === "help" && (
           <>
-            <button className="button primary onboarding-reopen" onClick={() => reopenOnboarding(close)}>설정 도우미 다시 열기</button>
-            <p>
-              오케스트라는 설치된 에이전트 CLI를 실행하고
-              활동 내역을 하나의 작업 공간에 실시간으로 표시합니다.
-              총괄 에이전트와 작업 에이전트를 선택한 뒤 작업을 요청하세요.
-            </p>
+            <button className="button primary onboarding-reopen" onClick={() => reopenOnboarding(close)}>{t("modal.reopenOnboarding")}</button>
+            <p>{t("modal.helpBody")}</p>
             <div className="cli-status-list">
               {props.agents.map((a) => (
                 <div key={a.id}>
@@ -233,19 +223,13 @@ export function AppModal(props: AppModalProps) {
                       a.available ? "available" : "unavailable"
                     }
                   >
-                    {a.available ? "설치됨" : "사용 불가"}
+                    {a.available ? t("modal.installed") : t("modal.unavailable")}
                   </span>
                 </div>
               ))}
             </div>
-            <p>
-              CLI 인증은 터미널에서 완료해야 합니다.
-              도구 권한은 각 CLI의 설정을 따르며,
-              권한을 우회하지 않습니다.
-            </p>
-            <p className="muted">
-              서버: 127.0.0.1:3001 · 화면: {location.host}
-            </p>
+            <p>{t("modal.authNote")}</p>
+            <p className="muted">{t("modal.serverInfo", { host: location.host })}</p>
           </>
         )}
       </div>

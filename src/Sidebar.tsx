@@ -9,8 +9,10 @@ import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Fold
 import { workspaceTargetLabel } from "./WorkspacePill";
 import { searchWorkspace } from "./workspaces";
 import { railToggleLabel } from "./sidebar-rail";
+import { Beat } from "./Beat";
+import { t, translatedMap } from "./i18n";
 
-const statusLabels: Record<SessionStatus, string> = { running: "진행 중", done: "완료", error: "오류", stopped: "중지됨" };
+const statusLabels = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
 type SidebarProps = {
   collapsed: boolean; /** Rail is off-screen until the edge button or this toggle opens it. Hover does not reveal it. */ hiddenRail?: boolean; onToggle: () => void; tab: string; onNavigate: (tab: string) => void; onSkills: () => void; connected: boolean;
   selectedWorker?: string; onSelectWorker?: (sessionId: string, workerId: string) => void;
@@ -153,13 +155,13 @@ export function Sidebar(props: SidebarProps) {
     if (ok) setEditor(undefined);
   };
   const editForm = (current: Editor) => <form className="sidebar-edit" onSubmit={(event) => void save(event)}>
-    <input autoFocus aria-label={current.kind === "session" ? "채팅 이름" : "프로젝트 이름"} maxLength={100} value={current.value} onChange={(event) => setEditor({ ...current, value: event.target.value })} />
-    <button aria-label="이름 저장" disabled={busy || !current.value.trim()}><Check size={14} /></button>
-    <button type="button" aria-label="이름 변경 취소" onClick={() => setEditor(undefined)}><X size={14} /></button>
+    <input autoFocus aria-label={current.kind === "session" ? t("side.chatName") : t("side.projectName")} maxLength={100} value={current.value} onChange={(event) => setEditor({ ...current, value: event.target.value })} />
+    <button aria-label={t("side.saveName")} disabled={busy || !current.value.trim()}><Check size={14} /></button>
+    <button type="button" aria-label={t("side.cancelRename")} onClick={() => setEditor(undefined)}><X size={14} /></button>
   </form>;
   const confirmDelete = (kind: "group" | "session", id: string) => deleting?.kind === kind && deleting.id === id && <div className="sidebar-confirm" role="alert">
-    <p>{kind === "group" ? "프로젝트를 삭제할까요? 채팅은 최근으로 이동합니다." : `‘${deleting.name}’ 채팅을 삭제할까요?`}</p>
-    <div><button disabled={busy} onClick={async () => { if (await (kind === "group" ? props.onDeleteGroup(id) : props.onDeleteSession(id))) setDeleting(undefined); }}>삭제</button><button onClick={() => setDeleting(undefined)}>취소</button></div>
+    <p>{kind === "group" ? t("side.deleteProjectConfirm") : t("side.deleteChatConfirm", { name: deleting.name })}</p>
+    <div><button disabled={busy} onClick={async () => { if (await (kind === "group" ? props.onDeleteGroup(id) : props.onDeleteSession(id))) setDeleting(undefined); }}>{t("side.delete")}</button><button onClick={() => setDeleting(undefined)}>{t("side.cancel")}</button></div>
   </div>;
   const sessionRow = (session: Session) => {
     const workers = delegationWorkers(session, Date.now());
@@ -170,51 +172,51 @@ export function Sidebar(props: SidebarProps) {
     {editor?.kind === "session" && editor.id === session.id ? editForm(editor) : <div className={`sidebar-row${drag?.id === session.id ? " dragging" : ""}`} draggable={false} data-draggable={!busy}
       onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}
       onPointerDown={(event) => startDrag(event, session)}>
-      <button className="sidebar-chat-toggle" aria-label={`${session.title} 작업 ${open ? "접기" : "펼치기"}`} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={12} className={`folder-chevron ${open ? "open" : ""}`} /></button>
+      <button className="sidebar-chat-toggle" aria-label={t(open ? "side.collapseWorkers" : "side.expandWorkers", { title: session.title })} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={12} className={`folder-chevron ${open ? "open" : ""}`} /></button>
       <button className={`sidebar-chat-open ${parentActive ? "active" : ""}`} aria-current={parentActive ? "page" : undefined} title={`${session.title} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
-        <AgentMark agent={session.agent} size="small" /><span className="sidebar-chat-copy"><span className="sidebar-session-title">{session.title}</span><small>{session.agent === "claude" ? "Claude" : session.agent === "codex" ? "Codex" : "Grok Build"}</small></span><span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />
+        <AgentMark agent={session.agent} size="small" /><span className="sidebar-chat-copy"><span className="sidebar-session-title">{session.title}</span><small>{session.agent === "claude" ? "Claude" : session.agent === "codex" ? "Codex" : "Grok Build"}</small></span>{session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}
       </button>
-      <button className="sidebar-row-action" aria-label={`${session.title} 메뉴`} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
+      <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: session.title })} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
     </div>}
     {confirmDelete("session", session.id)}
-    <ul className="sidebar-workers" id={`workers-${session.id}`} aria-label={`${session.title} 작업 세션`} hidden={!open}>
+    <ul className="sidebar-workers" id={`workers-${session.id}`} aria-label={t("side.workerSessions", { title: session.title })} hidden={!open}>
       {workers.map((worker) => {
         const latest = worker.tasks.at(-1)!;
         const event = latest.event;
         const config = session.workerConfigs?.find((item) => item.id === worker.id || (!item.id && item.agent === worker.agent));
-        const model = config?.model || event.model || "CLI 기본 모델";
+        const model = config?.model || event.model || t("usage.cliDefaultModel");
         const workerActive = selected === session.id && props.selectedWorker === worker.id && tab === "workspace";
         const name = worker.label;
         const confirming = deletingWorker?.sessionId === session.id && deletingWorker.workerId === worker.id;
-        return <li key={worker.id} className="sidebar-worker-item" onContextMenu={(event) => { if (!props.onDeleteWorker) return; event.preventDefault(); openMenu("worker", session.id, event, false, worker.id); }}><button id={`sidebar-worker-${session.id}-${worker.id}`} className={`sidebar-worker ${workerActive ? "active" : ""}`} aria-current={workerActive ? "page" : undefined} title={`${name} · ${model} · 작업 ${worker.tasks.length}개 · ${event.text}`} onClick={() => props.onSelectWorker?.(session.id, worker.id)}>
-          <AgentMark agent={worker.agent} size="small" /><span className="sidebar-chat-copy"><span className="sidebar-session-title">{name}</span><small title={model}>{model} · 작업 {worker.tasks.length}개</small></span><span className={`status-dot ${worker.status}`} role="img" aria-label={statusLabels[worker.status]} />
+        return <li key={worker.id} className="sidebar-worker-item" onContextMenu={(event) => { if (!props.onDeleteWorker) return; event.preventDefault(); openMenu("worker", session.id, event, false, worker.id); }}><button id={`sidebar-worker-${session.id}-${worker.id}`} className={`sidebar-worker ${workerActive ? "active" : ""}`} aria-current={workerActive ? "page" : undefined} title={t("side.workerTitle", { name, model, n: worker.tasks.length, text: event.text })} onClick={() => props.onSelectWorker?.(session.id, worker.id)}>
+          <AgentMark agent={worker.agent} size="small" /><span className="sidebar-chat-copy"><span className="sidebar-session-title">{name}</span><small title={model}>{model} · {t("side.workerTasks", { n: worker.tasks.length })}</small></span>{worker.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${worker.status}`} role="img" aria-label={statusLabels[worker.status]} />}
         </button>
-        {props.onDeleteWorker && <button className="sidebar-worker-delete" aria-label={`${name} 워커 삭제`} title="워커 삭제" disabled={busy} onClick={() => setDeletingWorker({ sessionId: session.id, workerId: worker.id, name, running: worker.status === "running" })}><Trash2 size={14} /></button>}
+        {props.onDeleteWorker && <button className="sidebar-worker-delete" aria-label={t("side.deleteWorkerNamed", { name })} title={t("side.deleteWorker")} disabled={busy} onClick={() => setDeletingWorker({ sessionId: session.id, workerId: worker.id, name, running: worker.status === "running" })}><Trash2 size={14} /></button>}
         {confirming && <div className="sidebar-confirm worker-confirm" role="alert">
-          <p>‘{name}’ 워커를 삭제할까요?<br /><small>{worker.status === "running" ? "진행 중인 작업이 먼저 중지됩니다. " : ""}작업 로그가 지워지고, 다음 위임은 새 세션으로 시작합니다. 대화에는 ‘삭제된 워커’로 남습니다.</small></p>
-          <div><button disabled={busy} onClick={async () => { if (await props.onDeleteWorker!(session.id, worker.id)) setDeletingWorker(undefined); }}>삭제</button><button onClick={() => setDeletingWorker(undefined)}>취소</button></div>
+          <p>{t("side.deleteWorkerConfirm", { name })}<br /><small>{worker.status === "running" ? t("side.runningStopsFirst") : ""}{t("side.deleteWorkerBody")}</small></p>
+          <div><button disabled={busy} onClick={async () => { if (await props.onDeleteWorker!(session.id, worker.id)) setDeletingWorker(undefined); }}>{t("side.delete")}</button><button onClick={() => setDeletingWorker(undefined)}>{t("side.cancel")}</button></div>
         </div>}</li>;
       })}
-      {!workers.length && <li className="sidebar-empty">{session.status === "running" ? "오케스트라가 직접 처리 중" : "아직 작업 세션이 없습니다."}</li>}
+      {!workers.length && <li className="sidebar-empty">{session.status === "running" ? t("side.orchestratorHandling") : t("side.noWorkers")}</li>}
     </ul>
   </div>;
   };
   const ungrouped = visibleSessions.filter((session) => !visibleGroups.some((group) => group.id === session.groupId));
   const desktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  return <aside className={`rail ${collapsed ? "collapsed" : "expanded"}${desktop ? " desktop" : ""}`} aria-label="사이드바">
+  return <aside className={`rail ${collapsed ? "collapsed" : "expanded"}${desktop ? " desktop" : ""}`} aria-label={t("side.label")}>
     {(() => {
       const closed = Boolean(collapsed || hiddenRail);
       const label = railToggleLabel(closed);
-      return <button className="rail-toggle" onClick={onToggle} aria-expanded={!closed} aria-controls="sidebar-links" aria-label={label} title={`${label} (⌘ / Ctrl+B)`}>{closed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}<span className="rail-label">{label}</span></button>;
+      return <button className="rail-toggle" onClick={onToggle} aria-expanded={!closed} aria-controls="sidebar-links" aria-label={label} title={t("side.toggleTitle", { label })}>{closed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}<span className="rail-label">{label}</span></button>;
     })()}
-    <button className="sidebar-new" onClick={() => onNew()} aria-label="새 채팅" title="새 채팅"><Plus size={19} /><span className="rail-label">새 채팅</span></button>
-    {!collapsed && <label className="sidebar-search"><Search size={15} aria-hidden="true" /><input type="search" aria-label="채팅 및 프로젝트 검색" placeholder="채팅 및 프로젝트 검색" value={query} onChange={(event) => setQuery(event.target.value)} /></label>}
-    <nav id="sidebar-links" className="rail-main" aria-label="채팅 목록" hidden={collapsed}>
-      {searching && !visibleGroups.length && !visibleSessions.length && <p className="sidebar-search-empty" role="status">검색 결과가 없습니다.</p>}
-      <section className="sidebar-projects" aria-label="프로젝트">
-        <div className="sidebar-section-heading"><h2>프로젝트</h2><button aria-label="프로젝트 만들기" title="프로젝트 만들기" disabled={busy} onClick={() => { setEditor({ kind: "create", id: "", value: "" }); setMenu(undefined); }}><Plus size={15} /></button></div>
+    <button className="sidebar-new" onClick={() => onNew()} aria-label={t("common.newChat")} title={t("common.newChat")}><Plus size={19} /><span className="rail-label">{t("common.newChat")}</span></button>
+    {!collapsed && <label className="sidebar-search"><Search size={15} aria-hidden="true" /><input type="search" aria-label={t("side.search")} placeholder={t("side.search")} value={query} onChange={(event) => setQuery(event.target.value)} /></label>}
+    <nav id="sidebar-links" className="rail-main" aria-label={t("side.chatList")} hidden={collapsed}>
+      {searching && !visibleGroups.length && !visibleSessions.length && <p className="sidebar-search-empty" role="status">{t("side.noResults")}</p>}
+      <section className="sidebar-projects" aria-label={t("side.projects")}>
+        <div className="sidebar-section-heading"><h2>{t("side.projects")}</h2><button aria-label={t("ob.createProject")} title={t("ob.createProject")} disabled={busy} onClick={() => { setEditor({ kind: "create", id: "", value: "" }); setMenu(undefined); }}><Plus size={15} /></button></div>
         {editor?.kind === "create" && editForm(editor)}
-        {!searching && !visibleGroups.length && <p className="sidebar-empty">프로젝트로 채팅을 모아 보세요.</p>}
+        {!searching && !visibleGroups.length && <p className="sidebar-empty">{t("side.projectsEmpty")}</p>}
         {visibleGroups.map((group) => {
           const open = searching || !closed.has(group.id);
           const chats = visibleSessions.filter((session) => session.groupId === group.id);
@@ -223,21 +225,21 @@ export function Sidebar(props: SidebarProps) {
               <button className="sidebar-folder" aria-expanded={open} aria-controls={`project-${group.id}`} title={group.name} onClick={() => setClosed((old) => { const next = new Set(old); if (open) next.add(group.id); else next.delete(group.id); return next; })}>
                 <ChevronRight size={12} className={open ? "folder-chevron open" : "folder-chevron"} />{open ? <FolderOpen size={16} /> : <Folder size={16} />}<span className="sidebar-session-title">{group.name}</span><small>{chats.length}</small>
               </button>
-              <button className="sidebar-row-action" aria-label={`${group.name} 프로젝트 메뉴`} aria-haspopup="menu" aria-expanded={menu === group.id} onClick={(event) => menu === group.id ? setMenu(undefined) : openMenu("group", group.id, event, true)}><MoreHorizontal size={15} /></button>
+              <button className="sidebar-row-action" aria-label={t("side.projectMenu", { name: group.name })} aria-haspopup="menu" aria-expanded={menu === group.id} onClick={(event) => menu === group.id ? setMenu(undefined) : openMenu("group", group.id, event, true)}><MoreHorizontal size={15} /></button>
             </div>}
             {confirmDelete("group", group.id)}
-            <div id={`project-${group.id}`} className="sidebar-project-chats" hidden={!open}>{dropTarget === group.id && drag && <div className="drop-slot" aria-hidden="true">‘{drag.title}’ 여기에 놓기</div>}{chats.length ? chats.map(sessionRow) : <p className="sidebar-empty">채팅을 끌어 놓거나 <button onClick={() => onNew(group.id)}>새로 시작하세요.</button></p>}</div>
+            <div id={`project-${group.id}`} className="sidebar-project-chats" hidden={!open}>{dropTarget === group.id && drag && <div className="drop-slot" aria-hidden="true">{t("side.dropHere", { title: drag.title })}</div>}{chats.length ? chats.map(sessionRow) : <p className="sidebar-empty">{t("side.dropOrStart1")}<button onClick={() => onNew(group.id)}>{t("side.dropOrStart2")}</button></p>}</div>
           </div>;
         })}
       </section>
-      <section className={`sidebar-recents${dropClass(UNGROUPED)}`} aria-label="최근 채팅" data-drop-group={UNGROUPED}><div className="sidebar-section-heading"><h2>최근</h2>{drag && <small className="drop-hint">미분류로 놓기</small>}</div>{dropTarget === UNGROUPED && drag && <div className="drop-slot" aria-hidden="true">‘{drag.title}’ 미분류로 이동</div>}{ungrouped.length ? ungrouped.map(sessionRow) : !searching ? <p className="sidebar-empty">아직 채팅이 없습니다.</p> : null}</section>
+      <section className={`sidebar-recents${dropClass(UNGROUPED)}`} aria-label={t("side.recentChats")} data-drop-group={UNGROUPED}><div className="sidebar-section-heading"><h2>{t("side.recent")}</h2>{drag && <small className="drop-hint">{t("side.dropUnsorted")}</small>}</div>{dropTarget === UNGROUPED && drag && <div className="drop-slot" aria-hidden="true">{t("side.moveUnsorted", { title: drag.title })}</div>}{ungrouped.length ? ungrouped.map(sessionRow) : !searching ? <p className="sidebar-empty">{t("side.noChats")}</p> : null}</section>
     </nav>
-    <div className="sidebar-tools" aria-label="관리 도구">
-      {props.onUsage && <button aria-label="사용량" title="사용량" onClick={props.onUsage}><BarChart3 size={18} /></button>}
-      {([[Wrench, "tools", "도구 관리"], [Settings2, "routing", "설정"], [Bot, "bots", "봇"], [WandSparkles, "skills", "스킬"], [CircleHelp, "help", "도움말"]] as const).map(([Icon, key, label]) => <button key={key} aria-label={label} title={key === "tools" ? "도구 관리 (⌘⇧T · F3)" : label} className={tab === key ? "active" : ""} aria-current={tab === key ? "page" : undefined} onClick={() => key === "skills" ? onSkills() : key === "help" ? onHelp() : onNavigate(key)}><Icon size={18} /></button>)}
+    <div className="sidebar-tools" aria-label={t("side.tools")}>
+      {props.onUsage && <button aria-label={t("side.usage")} title={t("side.usage")} onClick={props.onUsage}><BarChart3 size={18} /></button>}
+      {([[Wrench, "tools", t("header.tools")], [Settings2, "routing", t("side.settings")], [Bot, "bots", t("side.bots")], [WandSparkles, "skills", t("side.skills")], [CircleHelp, "help", t("side.help")]] as const).map(([Icon, key, label]) => <button key={key} aria-label={label} title={key === "tools" ? t("header.toolsTitle") : label} className={tab === key ? "active" : ""} aria-current={tab === key ? "page" : undefined} onClick={() => key === "skills" ? onSkills() : key === "help" ? onHelp() : onNavigate(key)}><Icon size={18} /></button>)}
     </div>
-    <div className="rail-connection" role="status" aria-label={connected ? "로컬 연결됨" : "다시 연결 중"}><span className={`rail-status ${connected ? "online" : "offline"}`} /><span className="rail-label">{connected ? "로컬 연결됨" : "다시 연결 중"}</span></div>
-    {menuState && <ContextMenu x={menuState.x} y={menuState.y} label="채팅 메뉴" onClose={() => setMenuState(undefined)} items={menuItems(menuState)} />}
+    <div className="rail-connection" role="status" aria-label={connected ? t("side.connected") : t("side.reconnecting")}><span className={`rail-status ${connected ? "online" : "offline"}`} /><span className="rail-label">{connected ? t("side.connected") : t("side.reconnecting")}</span></div>
+    {menuState && <ContextMenu x={menuState.x} y={menuState.y} label={t("side.chatMenu")} onClose={() => setMenuState(undefined)} items={menuItems(menuState)} />}
     {drag && createPortal(<div className="sidebar-drag-ghost" style={{ left: drag.x + 14, top: drag.y + 10 }} aria-hidden="true"><AgentMark agent={drag.agent} size="small" /><span>{drag.title}</span></div>, document.body)}
   </aside>;
 
@@ -247,30 +249,30 @@ export function Sidebar(props: SidebarProps) {
       const worker = session ? delegationWorkers(session, Date.now()).find((item) => item.id === state.workerId) : undefined;
       if (!session || !worker) return [];
       return [
-        { kind: "action", label: "작업 보기", icon: <Eye size={15} />, onSelect: () => props.onSelectWorker?.(session.id, worker.id) },
+        { kind: "action", label: t("deleg.view"), icon: <Eye size={15} />, onSelect: () => props.onSelectWorker?.(session.id, worker.id) },
         { kind: "separator" },
-        { kind: "action", label: "워커 삭제", icon: <Trash2 size={15} />, danger: true, disabled: busy, onSelect: () => setDeletingWorker({ sessionId: session.id, workerId: worker.id, name: worker.label, running: worker.status === "running" }) },
+        { kind: "action", label: t("side.deleteWorker"), icon: <Trash2 size={15} />, danger: true, disabled: busy, onSelect: () => setDeletingWorker({ sessionId: session.id, workerId: worker.id, name: worker.label, running: worker.status === "running" }) },
       ];
     }
     if (state.kind === "group") {
       const group = scoped.groups.find((item) => item.id === state.id);
       if (!group) return [];
       return [
-        { kind: "action", label: "새 채팅", icon: <Plus size={15} />, onSelect: () => { onNew(group.id); expand(group.id); } },
-        { kind: "action", label: "이름 변경", icon: <Pencil size={15} />, disabled: busy, onSelect: () => setEditor({ kind: "group", id: group.id, value: group.name }) },
+        { kind: "action", label: t("common.newChat"), icon: <Plus size={15} />, onSelect: () => { onNew(group.id); expand(group.id); } },
+        { kind: "action", label: t("side.rename"), icon: <Pencil size={15} />, disabled: busy, onSelect: () => setEditor({ kind: "group", id: group.id, value: group.name }) },
         ...(props.workspaceId && props.onMoveGroup ? [{ kind: "action" as const, label: workspaceTargetLabel(props.workspaceId), icon: <ArrowLeftRight size={15} />, disabled: busy, onSelect: () => void props.onMoveGroup!(group.id) }] : []),
         { kind: "separator" },
-        { kind: "action", label: "프로젝트 삭제", icon: <Trash2 size={15} />, danger: true, disabled: busy, onSelect: () => setDeleting({ kind: "group", id: group.id, name: group.name }) },
+        { kind: "action", label: t("side.deleteProject"), icon: <Trash2 size={15} />, danger: true, disabled: busy, onSelect: () => setDeleting({ kind: "group", id: group.id, name: group.name }) },
       ];
     }
     const session = sessions.find((item) => item.id === state.id);
     if (!session) return [];
     return [
-      { kind: "action", label: "이름 변경", icon: <Pencil size={15} />, disabled: busy, onSelect: () => setEditor({ kind: "session", id: session.id, value: session.title }) },
-      { kind: "submenu", label: "그룹으로 이동", icon: <FolderInput size={15} />, disabled: busy, items: moveTree(session), onPick: (id) => void props.onAssign(session.id, id).then((ok) => { if (ok && id) expand(id); }) },
+      { kind: "action", label: t("side.rename"), icon: <Pencil size={15} />, disabled: busy, onSelect: () => setEditor({ kind: "session", id: session.id, value: session.title }) },
+      { kind: "submenu", label: t("side.moveToGroup"), icon: <FolderInput size={15} />, disabled: busy, items: moveTree(session), onPick: (id) => void props.onAssign(session.id, id).then((ok) => { if (ok && id) expand(id); }) },
       ...(props.workspaceId && props.onMoveSession ? [{ kind: "action" as const, label: workspaceTargetLabel(props.workspaceId), icon: <ArrowLeftRight size={15} />, disabled: busy, onSelect: () => void props.onMoveSession!(session.id) }] : []),
       { kind: "separator" },
-      { kind: "action", label: "채팅 삭제", icon: <Trash2 size={15} />, danger: true, disabled: busy || session.status === "running", title: session.status === "running" ? "진행 중인 채팅은 먼저 중지하세요." : undefined, onSelect: () => setDeleting({ kind: "session", id: session.id, name: session.title }) },
+      { kind: "action", label: t("side.deleteChat"), icon: <Trash2 size={15} />, danger: true, disabled: busy || session.status === "running", title: session.status === "running" ? t("side.stopFirst") : undefined, onSelect: () => setDeleting({ kind: "session", id: session.id, name: session.title }) },
     ];
   }
 }

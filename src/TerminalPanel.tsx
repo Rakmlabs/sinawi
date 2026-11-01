@@ -13,6 +13,7 @@ import {
   type OpenTerminalOptions,
   type TerminalNotice,
 } from "./terminal-events";
+import { t } from "./i18n";
 const HEIGHT_KEY = "orchestra.terminal.height";
 const DEFAULT_HEIGHT = 320;
 const MIN_HEIGHT = 180;
@@ -46,6 +47,25 @@ function createTabId(): string {
 }
 
 type RestoredTerminalState = { tabs: TerminalTab[]; activeId?: string };
+
+
+/** xterm colours from the --terminal-* tokens (tokens.css), so the terminal follows the app theme. */
+function terminalTheme() {
+  const style = getComputedStyle(document.documentElement);
+  const token = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  const background = token("--terminal-bg", "#0f1012");
+  const cursor = token("--terminal-cursor", "#5bd6a0");
+  return { background, foreground: token("--terminal-fg", "#d7dade"), cursor, cursorAccent: background, selectionBackground: token("--terminal-selection", "rgba(91, 214, 160, 0.28)") };
+}
+
+/** Calls `onChange` when the theme may have changed: html[data-theme] or the OS colour scheme. */
+function watchTheme(onChange: () => void): () => void {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  const media = window.matchMedia("(prefers-color-scheme: light)");
+  media.addEventListener("change", onChange);
+  return () => { observer.disconnect(); media.removeEventListener("change", onChange); };
+}
 
 export function restoreTerminalState(raw: string | null, makeId: () => string = createTabId): RestoredTerminalState {
   if (!raw) return { tabs: [], activeId: undefined };
@@ -92,13 +112,13 @@ export function resolveModuleConstructor<T>(module: unknown, name: string): T {
   const fallback = exports.default;
   const value = exports[name]
     ?? (fallback && typeof fallback === "object" ? (fallback as Record<string, unknown>)[name] : fallback);
-  if (typeof value !== "function") throw new Error(`${name} 모듈을 불러오지 못했습니다.`);
+  if (typeof value !== "function") throw new Error(t("term.moduleFailed", { name }));
   return value as T;
 }
 
 function basename(path: string): string {
   const cleaned = path.replace(/\/+$/, "");
-  return cleaned.split("/").pop() || "터미널";
+  return cleaned.split("/").pop() || t("term.default");
 }
 
 function initialHeight(): number {
@@ -126,7 +146,7 @@ async function runInTerminal(id: string, command: string): Promise<void> {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string };
-    throw new Error(body.error || "명령을 실행하지 못했습니다.");
+    throw new Error(body.error || t("term.runFailed"));
   }
 }
 
@@ -170,18 +190,9 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
         fontFamily: '"SF Mono", Menlo, "D2Coding", monospace',
         fontSize: 14,
         lineHeight: 1.25,
-        theme: {
-          background: "rgba(24, 29, 26, 0.72)",
-          foreground: "#f4f5ef",
-          cursor: "#c4dfb1",
-          cursorAccent: "#263424",
-          selectionBackground: "rgba(196, 223, 177, 0.34)",
-          black: "#20251f",
-          brightBlack: "#7f897b",
-          green: "#c4dfb1",
-          brightGreen: "#d9edcb",
-        },
+        theme: terminalTheme(),
       });
+      const stopThemeWatch = watchTheme(() => { terminal.options.theme = terminalTheme(); });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
       terminal.loadAddon(new WebLinksAddon());
@@ -226,7 +237,7 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
               if (message.type === "exit") {
                 exited = true;
                 onExit(tab.id);
-                terminal.writeln(`\r\n[프로세스 종료${message.code === undefined ? "" : `: ${message.code}`}]`);
+                terminal.writeln(`\r\n${t("term.exited", { code: message.code === undefined ? "" : `: ${message.code}` })}`);
                 requestAuthRefresh();
                 return;
               }
@@ -237,9 +248,9 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
               if (message.type === "error") {
                 exited = true;
                 onExit(tab.id);
-                const body = message.error || message.message || "터미널을 시작하지 못했습니다.";
-                terminal.writeln(`\r\n[오류] ${body}`);
-                onNotice({ type: "error", key: "terminal:load", title: "터미널을 열 수 없음", body });
+                const body = message.error || message.message || t("term.startFailed");
+                terminal.writeln(`\r\n${t("term.errorLine", { body })}`);
+                onNotice({ type: "error", key: "terminal:load", title: t("term.cantOpen"), body });
                 socket?.close();
                 return;
               }
@@ -255,8 +266,8 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
             onNotice({
               type: "error",
               key: "terminal:load",
-              title: "터미널을 열 수 없음",
-              body: event.reason || "터미널 프로세스를 시작하지 못했습니다.",
+              title: t("term.cantOpen"),
+              body: event.reason || t("term.processFailed"),
             });
             return;
           }
@@ -267,8 +278,8 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
           if (reconnectAttempt === 0) onNotice({
             type: "error",
             key: "terminal:connection",
-            title: "터미널 연결 실패",
-            body: "통합 터미널에 연결하지 못했습니다. 잠시 후 다시 시도합니다.",
+            title: t("term.connectFailed"),
+            body: t("term.connectFailedBody"),
           });
         });
       };
@@ -294,6 +305,7 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
           disposed = true;
           if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
           resizeObserver?.disconnect();
+          stopThemeWatch();
           socket?.close();
           terminal.dispose();
         },
@@ -303,7 +315,7 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
     }).catch((error: unknown) => {
       if (disposed) return;
       const body = error instanceof Error ? error.message : String(error);
-      onNotice({ type: "error", key: "terminal:load", title: "터미널을 열 수 없음", body });
+      onNotice({ type: "error", key: "terminal:load", title: t("term.cantOpen"), body });
     });
 
     return () => {
@@ -326,7 +338,7 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
     return () => cancelAnimationFrame(frame);
   }, [visible]);
 
-  return <div ref={elementRef} className="terminal-surface" aria-label={`${basename(tab.cwd)} 터미널`} />;
+  return <div ref={elementRef} className="terminal-surface" aria-label={t("term.surface", { name: basename(tab.cwd) })} />;
 }
 
 export function TerminalPanel({
@@ -413,7 +425,7 @@ export function TerminalPanel({
     pendingCommands.current.delete(id);
     for (const command of commands) {
       void runInTerminal(id, command).catch((error: unknown) => emitNotice({
-        type: "error", title: "명령 실행 실패", body: error instanceof Error ? error.message : String(error),
+        type: "error", title: t("term.commandFailed"), body: error instanceof Error ? error.message : String(error),
       }));
     }
   }, [emitNotice]);
@@ -427,7 +439,7 @@ export function TerminalPanel({
     if (options.command) {
       if (runtimes.current.has(tab.id)) {
         void runInTerminal(tab.id, options.command).catch((error: unknown) => emitNotice({
-          type: "error", title: "명령 실행 실패", body: error instanceof Error ? error.message : String(error),
+          type: "error", title: t("term.commandFailed"), body: error instanceof Error ? error.message : String(error),
         }));
       } else {
         pendingCommands.current.set(tab.id, [...(pendingCommands.current.get(tab.id) ?? []), options.command]);
@@ -514,25 +526,25 @@ export function TerminalPanel({
     <section className={`terminal-panel${visible ? " terminal-panel-visible" : ""}`} style={{ height }} aria-hidden={!visible}>
       <div className="terminal-resize-handle" onPointerDown={startResize} aria-hidden="true" />
       <header className="terminal-toolbar">
-        <div className="terminal-tabs" role="tablist" aria-label="터미널 탭">
+        <div className="terminal-tabs" role="tablist" aria-label={t("term.tabs")}>
           <SquareTerminal size={15} className="terminal-mark" aria-hidden="true" />
           {tabs.map((tab, index) => <div className={`terminal-tab${tab.id === activeId ? " active" : ""}`} key={tab.id}>
             <button type="button" role="tab" aria-selected={tab.id === activeId} onClick={() => setActiveId(tab.id)}>
               {basename(tab.cwd)} {index + 1}
             </button>
-            <button type="button" className="terminal-tab-close" aria-label={`${basename(tab.cwd)} 터미널 닫기`} onClick={() => closeTab(tab.id)}><X size={12} /></button>
+            <button type="button" className="terminal-tab-close" aria-label={t("term.closeTab", { name: basename(tab.cwd) })} onClick={() => closeTab(tab.id)}><X size={12} /></button>
           </div>)}
-          <button type="button" className="terminal-add" aria-label="새 터미널" title="새 터미널 (⌃⇧`)" onClick={() => addTab()}><Plus size={15} /></button>
+          <button type="button" className="terminal-add" aria-label={t("term.new")} title={t("term.newTitle")} onClick={() => addTab()}><Plus size={15} /></button>
         </div>
         <div className="terminal-actions">
           <button type="button" disabled={!active} onClick={() => {
             if (!active) return;
             void fetch("/api/terminal/external", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd: active.cwd }) })
-              .then(async (response) => { if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error || "외부 터미널을 열지 못했습니다."); })
-              .catch((error: unknown) => emitNotice({ type: "error", title: "외부 터미널 열기 실패", body: error instanceof Error ? error.message : String(error) }));
-          }}><ExternalLink size={13} />외부 터미널에서 열기</button>
-          <button type="button" disabled={!active} aria-label="터미널 지우기" title="터미널 지우기" onClick={() => active && runtimes.current.get(active.id)?.terminal.clear()}><Eraser size={14} /></button>
-          <button type="button" aria-label="터미널 패널 닫기" title="터미널 패널 닫기 (⌃`)" onClick={() => setPanelVisible(false)}><X size={15} /></button>
+              .then(async (response) => { if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error || t("term.externalFailed")); })
+              .catch((error: unknown) => emitNotice({ type: "error", title: t("term.externalFailedTitle"), body: error instanceof Error ? error.message : String(error) }));
+          }}><ExternalLink size={13} />{t("term.openExternal")}</button>
+          <button type="button" disabled={!active} aria-label={t("term.clear")} title={t("term.clear")} onClick={() => active && runtimes.current.get(active.id)?.terminal.clear()}><Eraser size={14} /></button>
+          <button type="button" aria-label={t("term.closePanel")} title={t("term.closePanelTitle")} onClick={() => setPanelVisible(false)}><X size={15} /></button>
         </div>
       </header>
       <div className="terminal-body">

@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /** Device frame for the in-app browser. Desktop is the full panel; other presets are a centered frame. */
 
 export const VIEWPORT_STORE = "orchestra.browser.viewport";
@@ -116,9 +117,9 @@ export function deviceViewportMeta(width: number): string {
 }
 
 export function viewportLabel(choice: ViewportChoice): string {
-  if (choice.mode === "desktop") return "데스크톱";
+  if (choice.mode === "desktop") return t("viewport.desktop");
   if (choice.preset === "iphone") return "iPhone";
-  if (choice.preset === "tablet") return "태블릿";
+  if (choice.preset === "tablet") return t("viewport.tablet");
   return `${choice.width}×${choice.height}`;
 }
 

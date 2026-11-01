@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "./i18n";
 
 type Pdfjs = typeof import("pdfjs-dist");
 
@@ -15,7 +16,7 @@ function loadPdfjs(): Promise<Pdfjs> {
   return workerReady;
 }
 
-export const PDF_RENDER_ERROR = "PDF를 표시하지 못했습니다.";
+export const pdfRenderError = () => t("pdf.renderError");
 
 export function PdfCanvas({ url, page, scale, onPages, onError }: {
   url: string;
@@ -60,8 +61,8 @@ export function PdfCanvas({ url, page, scale, onPages, onError }: {
     return () => { cancelled = true; task?.cancel(); void destroy?.(); };
   }, [url, page, scale, failed]);
   if (failed) return <div className="viewer-pdf-fallback">
-    <p role="alert">{PDF_RENDER_ERROR}</p>
-    <a href={url} target="_blank" rel="noopener noreferrer">외부로 열기</a>
+    <p role="alert">{pdfRenderError()}</p>
+    <a href={url} target="_blank" rel="noopener noreferrer">{t("pdf.openExternal")}</a>
     <iframe className="viewer-pdf-frame" title="PDF" src={url} />
   </div>;
   return <canvas ref={canvasRef} className="viewer-pdf-canvas" />;

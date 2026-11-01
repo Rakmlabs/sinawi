@@ -1,5 +1,6 @@
 import { useLayoutEffect, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { t } from "./i18n";
 
 /** Keep slash suggestions outside the conversation's scrolling and glass layers. */
 export function ComposerPopover({ anchor, children }: { anchor: RefObject<HTMLTextAreaElement | null>; children: ReactNode }) {
@@ -16,5 +17,5 @@ export function ComposerPopover({ anchor, children }: { anchor: RefObject<HTMLTe
     window.addEventListener("scroll", place, true);
     return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
   }, [anchor]);
-  return position ? createPortal(<div className="slash-popup composer-popover" style={position} id="slash-skills" role="listbox" aria-label="메시지에 첨부할 스킬">{children}</div>, document.body) : null;
+  return position ? createPortal(<div className="slash-popup composer-popover" style={position} id="slash-skills" role="listbox" aria-label={t("composer.skillListLabel")}>{children}</div>, document.body) : null;
 }

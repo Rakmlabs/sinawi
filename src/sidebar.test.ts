@@ -80,7 +80,8 @@ test("active conversation expands one sidebar child per worker with task count a
   assert.match(html, /작업 2개/);
   assert.match(html, /claude-opus-4-6/);
   assert.match(html, /assets\/agents\/claude-color.svg/);
-  assert.match(html, /status-dot running/);
+  assert.match(html, /status-beat" role="img" aria-label="진행 중"><span class="beat" aria-hidden="true">/);
+  assert.doesNotMatch(html, /status-dot running/);
   assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1);
   const parent = render({ sessions: [chat], selected: chat.id });
   assert.match(parent, /sidebar-chat-open active" aria-current="page"/);

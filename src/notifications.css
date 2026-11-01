@@ -13,17 +13,17 @@
   justify-content: center;
   padding: 0;
   border-radius: 6px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 .notifications-trigger:hover,
 .notifications-trigger[aria-expanded="true"] {
-  color: #f4f6ef;
-  background: var(--line);
+  color: var(--text);
+  background: var(--border);
 }
 
 .notifications-trigger:focus-visible {
-  outline: 2px solid var(--sage);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -36,11 +36,11 @@
   height: 19px;
   place-items: center;
   padding: 0 4px;
-  border: 2px solid #202722;
+  border: 2px solid var(--border);
   border-radius: 20px;
-  color: #1d261d;
-  background: var(--sage);
-  font-size: 12px;
+  color: var(--accent-text);
+  background: var(--accent);
+  font-size: calc(12px * var(--font-scale));
   font-weight: 750;
   line-height: 1;
 }
@@ -51,12 +51,11 @@
   right: -42px;
   width: min(370px, calc(100vw - 24px));
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--border);
   border-radius: 16px;
-  color: var(--text-primary, #fafaf5);
-  background: rgba(40, 46, 40, 0.94);
-  box-shadow: 0 12px 32px #14201512;
-  backdrop-filter: blur(28px) saturate(130%);
+  color: var(--text);
+  background: var(--bg-overlay);
+  box-shadow: 0 12px 32px var(--shadow-color);
   user-select: text;
 }
 
@@ -67,7 +66,7 @@
   justify-content: space-between;
   gap: 16px;
   padding: 10px 12px 10px 15px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--border);
 }
 
 .notifications-heading > div:first-child {
@@ -76,13 +75,13 @@
 }
 
 .notifications-heading strong {
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale));
   font-weight: 650;
 }
 
 .notifications-heading span {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale));
 }
 
 .notifications-controls {
@@ -95,8 +94,8 @@
   min-height: 27px;
   padding: 0 7px;
   border-radius: 6px;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale));
 }
 
 .notifications-list {
@@ -113,7 +112,7 @@
   gap: 9px;
   align-items: start;
   padding: 12px 12px 12px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  border-bottom: 1px solid var(--border-subtle);
   border-radius: 0;
   text-align: left;
 }
@@ -123,12 +122,12 @@
 }
 
 .notification-item:hover {
-  background: rgba(255, 255, 255, 0.055);
+  background: var(--bg-active);
 }
 
 .notification-item.is-read {
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  background: var(--bg-active);
 }
 
 .notification-type-icon {
@@ -138,23 +137,23 @@
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  color: #cbd5c4;
-  background: rgba(196, 223, 177, 0.1);
+  color: var(--text-muted);
+  background: var(--accent-tint);
 }
 
 .notification-auth .notification-type-icon,
 .notification-permission .notification-type-icon {
-  color: #e4af77;
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--warn-fg);
+  background: var(--bg-active);
 }
 
 .notification-error .notification-type-icon {
-  color: #f2b8a1;
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--danger-fg);
+  background: var(--bg-active);
 }
 
 .notification-run-finished .notification-type-icon {
-  color: var(--sage);
+  color: var(--accent-fg);
 }
 
 .notification-copy {
@@ -173,8 +172,8 @@
 
 .notification-title-row strong {
   overflow: hidden;
-  color: var(--text-primary, #fafaf5);
-  font-size: 15px;
+  color: var(--text);
+  font-size: calc(15px * var(--font-scale));
   font-weight: 600;
   line-height: 1.45;
   text-overflow: ellipsis;
@@ -182,21 +181,21 @@
 }
 
 .is-read .notification-title-row strong {
-  color: var(--muted);
+  color: var(--text-muted);
   font-weight: 500;
 }
 
 .notification-title-row time {
   flex-shrink: 0;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale));
 }
 
 .notification-body {
   display: -webkit-box;
   overflow: hidden;
-  color: var(--muted);
-  font-size: 15px;
+  color: var(--text-muted);
+  font-size: calc(15px * var(--font-scale));
   line-height: 1.48;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
@@ -208,8 +207,8 @@
   align-items: center;
   gap: 5px;
   margin-top: 2px;
-  color: var(--sage);
-  font-size: 12px;
+  color: var(--accent-fg);
+  font-size: calc(12px * var(--font-scale));
   font-weight: 550;
 }
 
@@ -218,8 +217,8 @@
   height: 6px;
   margin-top: 6px;
   border-radius: 50%;
-  background: var(--sage);
-  box-shadow: 0 0 0 3px rgba(196, 223, 177, 0.08);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--selection);
 }
 
 .notifications-empty {
@@ -229,8 +228,8 @@
   align-items: center;
   justify-content: center;
   gap: 9px;
-  color: var(--muted);
-  font-size: 15px;
+  color: var(--text-muted);
+  font-size: calc(15px * var(--font-scale));
 }
 
 .notification-toasts {
@@ -250,12 +249,11 @@
   gap: 9px;
   align-items: start;
   padding: 11px 8px 11px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  color: var(--text-primary, #fafaf5);
-  background: rgba(40, 46, 40, 0.94);
-  box-shadow: 0 12px 32px #14201512;
-  backdrop-filter: blur(24px) saturate(125%);
+  color: var(--text);
+  background: var(--bg-overlay);
+  box-shadow: 0 12px 32px var(--shadow-color);
   pointer-events: auto;
   animation: notification-toast-in 180ms ease-out;
 }
@@ -274,7 +272,7 @@
 
 .notification-toast-copy strong {
   overflow: hidden;
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale));
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -283,8 +281,8 @@
 .notification-toast-copy span {
   display: -webkit-box;
   overflow: hidden;
-  color: var(--muted);
-  font-size: 15px;
+  color: var(--text-muted);
+  font-size: calc(15px * var(--font-scale));
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -298,7 +296,7 @@
   justify-content: center;
   padding: 0;
   border-radius: 6px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 
 @keyframes notification-toast-in {

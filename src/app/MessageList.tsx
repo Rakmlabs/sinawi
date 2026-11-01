@@ -1,5 +1,6 @@
 import type { RefObject } from "react";
-import { ArrowRight, LoaderCircle } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+import { Beat } from "../Beat";
 import { AgentMark } from "../AgentMark";
 import { CopyButton } from "../CopyButton";
 import { Markdown } from "../Markdown";
@@ -9,6 +10,7 @@ import { parseAttachmentMessage } from "../viewer-model";
 import { Elapsed } from "./Elapsed";
 import { names, statusLabels } from "./labels";
 import type { Session, SessionEvent } from "../../server/types";
+import { t } from "../i18n";
 
 export type MessageListProps = {
   active: Session;
@@ -30,16 +32,16 @@ const delegationTitle = (text: string) => text.replace(/^.*?에게 위임:\s*/, 
 
 function DelegationCard({ e, task, active, onOpenWorker }: { e: SessionEvent; task: DelegationTask; active: Session; onOpenWorker: (workerId: string) => void }) {
   const config = task.event.role ? task.event : active.workerConfigs?.find((item) => item.agent === task.event.agent);
-  if (e.metadata?.deletedWorker) return <article className="delegation-card deleted-worker" aria-label="삭제된 워커의 작업 위임">
-    <div className="delegation-heading"><AgentMark agent={task.event.agent} /><div><span>작업 위임 · 삭제된 워커</span><strong>{task.event.workerLabel ?? names[task.event.agent]} <em>(삭제된 워커)</em></strong></div><span className="status-label stopped">삭제됨</span></div>
+  if (e.metadata?.deletedWorker) return <article className="delegation-card deleted-worker" aria-label={t("deleg.deletedLabel")}>
+    <div className="delegation-heading"><AgentMark agent={task.event.agent} /><div><span>{t("deleg.deletedHeading")}</span><strong>{task.event.workerLabel ?? names[task.event.agent]} <em>{t("deleg.deletedWorker")}</em></strong></div><span className="status-label stopped">{t("deleg.deleted")}</span></div>
     <h3>{delegationTitle(e.text)}</h3>
-    <div className="delegation-bottom"><p>작업 로그가 삭제되었습니다. 다음 위임은 새 세션으로 시작합니다.</p></div>
+    <div className="delegation-bottom"><p>{t("deleg.logDeleted")}</p></div>
   </article>;
   const workerId = task.event.workerId ?? task.event.agent;
-  return <article className="delegation-card" aria-label="작업 위임">
-    <div className="delegation-heading"><AgentMark agent={task.event.agent} /><div><span>작업 위임</span><strong>{task.event.workerLabel ?? names[task.event.agent]} · {config?.model || "CLI 기본 모델"} · {config?.reasoningEffort || "기본 추론"}</strong></div><span className={`status-label ${task.status}`}>{statusLabels[task.status]}</span><Elapsed start={task.startedAt} end={task.endedAt} /></div>
+  return <article className="delegation-card" aria-label={t("deleg.label")}>
+    <div className="delegation-heading"><AgentMark agent={task.event.agent} /><div><span>{t("deleg.label")}</span><strong>{task.event.workerLabel ?? names[task.event.agent]} · {config?.model || t("usage.cliDefaultModel")} · {config?.reasoningEffort || t("team.defaultReasoning")}</strong></div><span className={`status-label ${task.status}`}>{task.status === "running" && <Beat />}{statusLabels[task.status]}</span><Elapsed start={task.startedAt} end={task.endedAt} /></div>
     <h3>{delegationTitle(e.text)}</h3>
-    <div className="delegation-bottom"><p title={task.activity}>{task.activity}</p><button className="button light" aria-controls={`sidebar-worker-${active.id}-${workerId}`} onClick={() => onOpenWorker(workerId)}>작업 보기<ArrowRight size={13} /></button></div>
+    <div className="delegation-bottom"><p title={task.activity}>{task.activity}</p><button className="button light" aria-controls={`sidebar-worker-${active.id}-${workerId}`} onClick={() => onOpenWorker(workerId)}>{t("deleg.view")}<ArrowRight size={13} /></button></div>
   </article>;
 }
 
@@ -49,7 +51,7 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
     {events.map((e) => {
       if (e.type === "handoff") return <div className="handoff-divider" key={e.id}>
         <span className="agent-label"><AgentMark agent={e.agent} size="small" />{e.text}</span>
-        {e.metadata?.auto && !e.metadata.quotaFallback && e.id === latestHandoffId && <button className="handoff-undo" disabled={busy || !canUndoAutoHandoff(e, active.status, latestHandoffId)} onClick={() => onUndoHandoff(e.id)}>{e.metadata.undone ? "되돌림" : "되돌리기"}</button>}
+        {e.metadata?.auto && !e.metadata.quotaFallback && e.id === latestHandoffId && <button className="handoff-undo" disabled={busy || !canUndoAutoHandoff(e, active.status, latestHandoffId)} onClick={() => onUndoHandoff(e.id)}>{e.metadata.undone ? t("msg.undone") : t("msg.undo")}</button>}
       </div>;
       if (e.type === "delegation") return <DelegationCard key={e.id} e={e} task={tasksById.get(e.id)!} active={active} onOpenWorker={onOpenWorker} />;
       const isUser = e.agent === "user";
@@ -58,22 +60,22 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
       const liveBadge = liveBadgeLabel(e);
       return <article className={`message ${isUser ? "user-message" : "assistant-message"}${streamingMessageId === e.id ? " streaming-message" : ""}`} key={e.id}>
         <div className="message-author">
-          {isUser ? <span className="user-avatar">나</span> : <AgentMark agent={e.agent} />}
+          {isUser ? <span className="user-avatar">{t("names.user")}</span> : <AgentMark agent={e.agent} />}
           <strong>{names[e.agent] || e.agent}</strong>
-          {liveBadge && <em className={`live-status-badge${liveBadge === "지시" ? " directive" : ""}`}>{liveBadge}</em>}
+          {liveBadge && <em className={`live-status-badge${e.metadata?.live === "directive" ? " directive" : ""}`}>{liveBadge}</em>}
           <time>{new Date(e.time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</time>
-          <CopyButton text={copied} className="message-copy" ariaLabel={`${names[e.agent] || e.agent} 메시지 복사`} />
+          <CopyButton text={copied} className="message-copy" ariaLabel={t("msg.copy", { agent: names[e.agent] || e.agent })} />
         </div>
         <div className={`message-text ${e.type === "error" ? "error-banner" : e.type === "warning" ? "warning-banner" : ""}`} role={e.type === "error" || e.type === "warning" ? "alert" : undefined}>{isUser ? <UserMessageBody text={text} /> : <MessageFold text={text} streaming={streamingMessageId === e.id}><Markdown text={text} /></MessageFold>}</div>
-        {canPromoteLive(e) && <button type="button" className="button light live-promote" onClick={() => onPromote(e.id)}>지시로 넣을까요?</button>}
-        {!isUser && e.id === latestAssistantId && choiceOptions.length > 0 && <div className="message-options" aria-label="응답 선택지">
+        {canPromoteLive(e) && <button type="button" className="button light live-promote" onClick={() => onPromote(e.id)}>{t("msg.promote")}</button>}
+        {!isUser && e.id === latestAssistantId && choiceOptions.length > 0 && <div className="message-options" aria-label={t("msg.options")}>
           {choiceOptions.map((option, index) => <button type="button" key={option} onClick={() => onChoose(option)}><span>{index + 1}</span>{option}</button>)}
         </div>}
       </article>;
     })}
     {active.status === "running" && (
       <div className="thinking" role="status">
-        <LoaderCircle size={14} className="spin" /> 팀이 작업 중입니다…
+        <Beat /> {t("msg.teamWorking")}
       </div>
     )}
     <div ref={bottomRef} />

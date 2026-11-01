@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { CopyButton } from "./CopyButton";
 import { FileChip, ImageGrid, LinkCard } from "./media-ui";
 import { clusterGallery, imageMedia, isUnfurlLink, localMediaRef, parseGalleryPayload } from "./viewer-model";
+import { t, useLang } from "./i18n";
 
 type CodeProps = { className?: string; children?: ReactNode };
 
@@ -13,7 +14,7 @@ function CodeBlock({ className, children }: CodeProps) {
   return <div className="code-block">
     <div className="code-toolbar">
       <span className="code-language">{language ?? "text"}</span>
-      <CopyButton text={code} ariaLabel="코드 복사" showLabel />
+      <CopyButton text={code} ariaLabel={t("markdown.copyCode")} showLabel />
     </div>
     <pre><code className={className}>{code}{"\n"}</code></pre>
   </div>;
@@ -59,5 +60,6 @@ const components = { img: MarkdownImage, a: MarkdownLink, pre: MarkdownPre };
 const urlTransform = (url: string, key: string) => key === "src" && url.startsWith("file:///") ? url : defaultUrlTransform(url);
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
+  useLang(); // memo would otherwise skip the re-render a language switch needs
   return <div className="markdown"><ReactMarkdown remarkPlugins={remarkPlugins} urlTransform={urlTransform} components={components}>{clusterGallery(text)}</ReactMarkdown></div>;
 });

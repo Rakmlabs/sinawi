@@ -1,5 +1,6 @@
 import type { UsageRun } from "../server/usage";
 import type { WorkspaceId } from "../server/types";
+import { t } from "./i18n";
 
 export type UsagePeriod = "today" | "7d" | "30d";
 export type UsageWorkspace = WorkspaceId | "all";
@@ -60,7 +61,7 @@ function totalsFor(runs: UsageRunRecord[]): UsageTotals {
 function groupUsage(runs: UsageRunRecord[], keyOf: (run: UsageRunRecord) => string): UsageRow[] {
   const groups = new Map<string, UsageRunRecord[]>();
   for (const run of runs) {
-    const key = keyOf(run) || "CLI 기본 모델";
+    const key = keyOf(run) || t("usage.cliDefaultModel");
     groups.set(key, [...(groups.get(key) ?? []), run]);
   }
   return [...groups].map(([key, values]) => {

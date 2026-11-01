@@ -3,6 +3,7 @@ import { AgentMark } from "../AgentMark";
 import { GlassSelect } from "../GlassSelect";
 import { names } from "./labels";
 import type { Bot as Preset } from "../../server/types";
+import { t } from "../i18n";
 
 export type BotsViewProps = {
   bots: Preset[];
@@ -25,28 +26,25 @@ export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, 
   return <div className="bots-grid">
     <section className="glass full-panel">
       <div className="panel-header">
-        <h2>내 봇</h2>
+        <h2>{t("bots.title")}</h2>
         <button
           className="button light small"
           onClick={onCreate}
         >
           <Plus size={14} />
-          봇 만들기
+          {t("bots.create")}
         </button>
       </div>
       {!bots.length ? (
         <div className="page-empty">
           <Bot size={36} />
-          <h2>에이전트마다 알맞은 역할을.</h2>
-          <p>
-            에이전트, 모델, 스킬, 지침을 봇으로 저장하고
-            언제든 다시 활용하세요.
-          </p>
+          <h2>{t("bots.emptyTitle")}</h2>
+          <p>{t("bots.emptyBody")}</p>
           <button
             className="button primary"
             onClick={onCreate}
           >
-            첫 봇 만들기 <ArrowRight size={15} />
+            {t("bots.createFirst")} <ArrowRight size={15} />
           </button>
         </div>
       ) : (
@@ -56,20 +54,20 @@ export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, 
             <div>
               <strong>{b.name}</strong>
               <small>
-                {names[b.agent]} · {b.model || "CLI 기본값"} ·{" "}
-                스킬 {b.skills.length}개
+                {names[b.agent]} · {b.model || t("bots.cliDefault")} ·{" "}
+                {t("bots.skillCount", { n: b.skills.length })}
               </small>
             </div>
             <button
               className="icon-button"
-              title="봇 사용"
+              title={t("bots.use")}
               onClick={() => onUse(b)}
             >
               <ArrowRight size={17} />
             </button>
             <button
               className="icon-button"
-              title="봇 삭제"
+              title={t("bots.delete")}
               onClick={() => onDelete(b)}
             >
               <Trash2 size={15} />
@@ -79,22 +77,22 @@ export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, 
       )}
     </section>
     <section className="glass bot-conversation">
-      <h2>대화 시작하기</h2>
+      <h2>{t("bots.convTitle")}</h2>
       <p>
-        두 봇이 함께 아이디어를 발전시켜 보세요.
+        {t("bots.convBody1")}
         <br />
-        대화의 방향과 발언 횟수를 정해 주세요.
+        {t("bots.convBody2")}
       </p>
       <label>
-        첫 번째 봇
-        <GlassSelect label="첫 번째 봇" value={botA} onChange={setBotA} options={[{ value: "", label: "봇 선택" }, ...bots.map((bot) => ({ value: bot.id, label: bot.name }))]} />
+        {t("bots.first")}
+        <GlassSelect label={t("bots.first")} value={botA} onChange={setBotA} options={[{ value: "", label: t("bots.pick") }, ...bots.map((bot) => ({ value: bot.id, label: bot.name }))]} />
       </label>
       <label>
-        두 번째 봇
-        <GlassSelect label="두 번째 봇" value={botB} onChange={setBotB} options={[{ value: "", label: "봇 선택" }, ...bots.map((bot) => ({ value: bot.id, label: bot.name }))]} />
+        {t("bots.second")}
+        <GlassSelect label={t("bots.second")} value={botB} onChange={setBotB} options={[{ value: "", label: t("bots.pick") }, ...bots.map((bot) => ({ value: bot.id, label: bot.name }))]} />
       </label>
       <label>
-        발언 횟수
+        {t("bots.turns")}
         <input
           type="number"
           min={1}
@@ -104,11 +102,11 @@ export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, 
         />
       </label>
       <label>
-        대화 주제
+        {t("bots.topic")}
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="봇이 함께 논의할 주제를 입력하세요"
+          placeholder={t("bots.topicPlaceholder")}
         />
       </label>
       <button
@@ -134,7 +132,7 @@ export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, 
         onClick={onStart}
       >
         <Users size={16} />
-        대화 시작
+        {t("bots.start")}
       </button>
     </section>
   </div>;

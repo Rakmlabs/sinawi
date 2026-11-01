@@ -7,19 +7,19 @@
   justify-content: center;
   flex: 0 0 auto;
   vertical-align: middle;
-  border: 1px solid var(--agent-ring, #ffffff66);
+  border: 1px solid var(--agent-ring, var(--border-strong));
   border-radius: 8px;
-  background: rgba(255, 255, 255, .065);
-  color: #fff;
+  background: var(--bg-active);
+  color: var(--text);
 }
-.agent-mark.codex { --agent-ring: #10a37f; }
-.agent-mark.claude { --agent-ring: #d97757; }
-.agent-mark.grok { --agent-ring: #a3a3a3; }
+.agent-mark.codex { --agent-ring: var(--agent-codex); }
+.agent-mark.claude { --agent-ring: var(--agent-claude); }
+.agent-mark.grok { --agent-ring: var(--agent-grok); }
 .agent-mark img { display: block; width: 65%; height: 65%; object-fit: contain; }
 /* External SVG currentColor resolves to black; whiten only monochrome brands. */
-.agent-mark.codex img, .agent-mark.grok img { filter: brightness(0) invert(1); }
+.agent-mark.codex img, .agent-mark.grok img { filter: var(--mono-logo-filter); }
 .agent-mark.small { width: 22px; height: 22px; border-radius: 6px; }
-.agent-mark-fallback { font-size: 12px; font-weight: 600; line-height: 1; }
+.agent-mark-fallback { font-size: calc(12px * var(--font-scale)); font-weight: 600; line-height: 1; }
 .agent-label { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
 .glass-select-icon { display: inline-flex; flex: 0 0 auto; margin-left: 9px; }
 .glass-select-icon + input { padding-left: 7px; }

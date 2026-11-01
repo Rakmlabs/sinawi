@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight, Folder, Inbox } from "lucide-react";
+import { t } from "./i18n";
 
 export type MenuItem =
   | { kind: "action"; label: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; title?: string; onSelect: () => void }
@@ -12,7 +13,7 @@ export type TreeOption = { id: string | null; label: string; depth: number; chec
 export function groupTree(groups: Array<{ id: string; name: string; parentId?: string }>, currentId: string | undefined): TreeOption[] {
   const ids = new Set(groups.map((group) => group.id));
   const children = (parent?: string) => groups.filter((group) => (group.parentId && ids.has(group.parentId) ? group.parentId : undefined) === parent);
-  const out: TreeOption[] = [{ id: null, label: "미분류", depth: 0, checked: !currentId || !ids.has(currentId) }];
+  const out: TreeOption[] = [{ id: null, label: t("sidebarMenu.unsorted"), depth: 0, checked: !currentId || !ids.has(currentId) }];
   const walk = (parent: string | undefined, depth: number, seen: Set<string>) => {
     for (const group of children(parent)) {
       if (seen.has(group.id)) continue;
@@ -92,7 +93,7 @@ export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: num
         <span className="ctx-icon">{option.folder ? <Folder size={15} /> : <Inbox size={15} />}</span><span className="ctx-label">{option.label}</span>
         <span className="ctx-check">{option.checked && <Check size={15} />}</span>
       </button>)}
-      {submenu.items.length === 1 && <p className="ctx-empty">프로젝트가 없습니다</p>}
+      {submenu.items.length === 1 && <p className="ctx-empty">{t("sidebarMenu.noProjects")}</p>}
     </div>}
   </>, document.body);
 }

@@ -46,6 +46,7 @@ import { useComposerCompletion } from "./useComposerCompletion";
 import { useModalFocusTrap } from "./useModalFocusTrap";
 import { ActivityPanel } from "./ActivityPanel";
 import { AllowedAgentsSettings } from "./AllowedAgentsSettings";
+import { AppearanceSettings } from "./AppearanceSettings";
 import { AppModal } from "./AppModal";
 import { BotsView } from "./BotsView";
 import { Composer } from "./Composer";
@@ -53,6 +54,7 @@ import { MessageList } from "./MessageList";
 import { QuotaReturnBanner } from "./QuotaReturnBanner";
 import { SessionsView } from "./SessionsView";
 import { TeamBarSlot } from "./TeamBarSlot";
+import { t } from "../i18n";
 
 /** One workspace (personal/company): sessions, chat, browser desktop, terminal and dialogs. */
 export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitchWorkspace }: {
@@ -267,7 +269,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     if (!error) return;
     // A dropped fetch (server restart, sleep, aborted probe) is not a request error: log it, don't notify.
     if (isNetworkFailure(error)) { console.warn("[orchestra] network request failed:", error); setError(""); return; }
-    void workspaceApi("/notifications", { workspaceId, type: "error", title: "요청 처리 오류", body: error, key: `request:${error.slice(0, 100)}` }).catch(() => undefined);
+    void workspaceApi("/notifications", { workspaceId, type: "error", title: t("ws.requestError"), body: error, key: `request:${error.slice(0, 100)}` }).catch(() => undefined);
     setError("");
   }, [error, workspaceId]);
   const onServerMessage = (message: ServerMessage) => {
@@ -359,7 +361,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     clearComposer(sentAttachments);
     setChatError("");
     livePending.current += 1;
-    setLiveNote(intent === "directive" ? "다음 턴에 넣는 중…" : "상태를 확인하고 있습니다…");
+    setLiveNote(intent === "directive" ? t("ws.queueingDirective") : t("ws.checkingStatus"));
     const run = () => api<Session>(`/sessions/${sessionId}/live`, { prompt: composed }).then((updated) => {
       adoptSession(updated);
       storeSentPrompt(visibleMessage);
@@ -485,9 +487,9 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     <ViewerContext.Provider value={viewerApi}>
     <MotionConfig reducedMotion="user">
       <div style={{ "--terminal-height": `${terminalHeight}px` } as React.CSSProperties} className={`app-shell ${railHidden ? "sidebar-collapsed" : "sidebar-expanded"}${isTauri() ? " tauri-app" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
-        <WindowHeader title={tab === "tools" ? "도구 관리" : active?.title} workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} onTools={() => setTab("tools")} toolsActive={tab === "tools"} onTerminal={() => toggleTerminal()} notifications={<NotificationsCenter workspaceId={workspaceId} cwd={shownCwd} connected={connected} onSession={selectConversation} onRefreshAuth={() => { void refreshModels(); }} />} />
+        <WindowHeader title={tab === "tools" ? t("tools.title") : active?.title} workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} onTools={() => setTab("tools")} toolsActive={tab === "tools"} onTerminal={() => toggleTerminal()} notifications={<NotificationsCenter workspaceId={workspaceId} cwd={shownCwd} connected={connected} onSession={selectConversation} onRefreshAuth={() => { void refreshModels(); }} />} />
         <TerminalPanel storageKey={workspaceId} cwd={shownCwd} homeCwd={boot.homeCwd} onHeightChange={setTerminalHeight} />
-        {railHidden && <button type="button" className="sidebar-handle" aria-label="사이드바 펼치기" title="사이드바 펼치기 (⌘ / Ctrl+B)" onClick={expandSidebar}><ChevronRight size={14} aria-hidden /></button>}
+        {railHidden && <button type="button" className="sidebar-handle" aria-label={t("sidebar.expand")} title={t("ws.sidebarExpandTitle")} onClick={expandSidebar}><ChevronRight size={14} aria-hidden /></button>}
         <Sidebar key={workspaceId} workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} collapsed={false} hiddenRail={railHidden} onToggle={toggleSidebar} tab={tab} onNavigate={setTab} onSkills={() => { setSkillReturn(undefined); setModal("skills"); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
           onNew={(id) => { newSession(); setGroupId(id ?? ""); }} selectedWorker={selectedWorker?.id} onSelectWorker={selectWorker} onSelect={selectConversation} onHelp={() => setModal("help")} onUsage={() => setModal("usage")}
           onCreateGroup={(name) => safe(async () => {
@@ -541,14 +543,15 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
           {lastAnnouncement}
         </div>
         <BrowserDesktop onAttach={addAttachments} request={desktopRequest} onModeChange={setDesktopMode} />
-        {chatCollapsed && desktopMode !== "max" && <aside className="chat-rail" aria-label="접힌 채팅">
-          <button type="button" onClick={() => setChatCollapsed(false)} aria-label="채팅 펼치기 (⌘⇧J)" title="채팅 펼치기 (⌘⇧J)"><PanelRightOpen size={18} /><MessageSquare size={18} /><span>채팅</span></button>
+        {chatCollapsed && desktopMode !== "max" && <aside className="chat-rail" aria-label={t("ws.collapsedChat")}>
+          <button type="button" onClick={() => setChatCollapsed(false)} aria-label={t("ws.expandChat")} title={t("ws.expandChat")}><PanelRightOpen size={18} /><MessageSquare size={18} /><span>{t("ws.chat")}</span></button>
         </aside>}
-        {desktopMode === "max" && !chatWidgetOpen && <button type="button" className="chat-bubble" onClick={() => setChatWidgetOpen(true)} aria-label="채팅 열기 (⌘⇧J)" title="채팅 열기 (⌘⇧J)">
+        {desktopMode === "max" && !chatWidgetOpen && <button type="button" className="chat-bubble" onClick={() => setChatWidgetOpen(true)} aria-label={t("ws.openChat")} title={t("ws.openChat")}>
           <MessageSquare size={22} />{active?.status === "running" && <span className="chat-bubble-dot" />}
         </button>}
         <main className={`${tab === "workspace" ? "chat-view" : "management-view"}${desktopMode === "max" ? (chatWidgetOpen ? " chat-float" : " chat-hidden") : ""}`}>
-          {desktopMode === "max" && chatWidgetOpen && <button type="button" className="chat-float-close" onClick={() => setChatWidgetOpen(false)} aria-label="채팅 접기 (⌘⇧J)" title="채팅 접기 (⌘⇧J)"><ChevronDown size={16} /></button>}
+          {desktopMode === "max" && chatWidgetOpen && <button type="button" className="chat-float-close" onClick={() => setChatWidgetOpen(false)} aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")}><ChevronDown size={16} /></button>}
+          {tab === "routing" && <section className="glass routing-settings"><AppearanceSettings /></section>}
           {tab === "routing" && <AllowedAgentsSettings workspaceId={workspaceId} allowedAgents={allowedAgents} busy={busy}
             quotaFallback={quotaFallback} setQuotaFallback={setQuotaFallback} quotaThreshold={quotaThreshold} setQuotaThreshold={setQuotaThreshold}
             fallbackOrder={fallbackOrder} setFallbackOrder={setFallbackOrder}
@@ -568,7 +571,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
             setRoutingSettings(next);
             setRecommendation(undefined);
             return next;
-          }} /> : <section className="glass routing-settings"><p>설정을 불러오지 못했습니다.</p><button className="button light" onClick={() => void load()}>다시 불러오기</button></section>)}
+          }} /> : <section className="glass routing-settings"><p>{t("ws.settingsLoadFailed")}</p><button className="button light" onClick={() => void load()}>{t("ws.reload")}</button></section>)}
           {tab === "tools" && <ToolsPanel workspaceId={workspaceId} cwd={shownCwd} onChange={() => {
             void api<Skill[]>(`/skills?cwd=${encodeURIComponent(shownCwd)}&workspace=${encodeURIComponent(workspaceId)}`).then((next) => {
               const available = new Set(next.map((skill) => skill.id));
@@ -582,21 +585,21 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
 
               <div className={`workspace-grid ${activityOpen ? "activity-open" : ""}`}>
                 <section className={`glass conversation${dragging ? " drop-target" : ""}`} {...dropHandlers}>
-                  {dragging && <div className="drop-overlay"><strong>여기에 놓으면 첨부됩니다</strong><span>이미지, 문서, 동영상, 음성</span></div>}
+                  {dragging && <div className="drop-overlay"><strong>{t("ws.dropHere")}</strong><span>{t("ws.dropKinds")}</span></div>}
                   <div className="panel-header">
                     <div>
                       <MessageSquare size={17} />
-                      <h2>{selectedWorker ? "작업 세션" : "대화"}</h2>
+                      <h2>{selectedWorker ? t("ws.workerSession") : t("ws.conversation")}</h2>
                       <span className="subtle-tag">
-                        {(active || mode === "manual") && <AgentMark agent={selectedWorker?.agent ?? active?.agent ?? agent} size="small" />}{selectedWorker ? selectedWorker.label : active ? names[active.agent] : mode === "auto" ? "자동 배정" : names[agent]}{(selectedWorker || active || mode === "manual") && <RemainingChip agent={selectedWorker?.agent ?? active?.agent ?? agent} />}
+                        {(active || mode === "manual") && <AgentMark agent={selectedWorker?.agent ?? active?.agent ?? agent} size="small" />}{selectedWorker ? selectedWorker.label : active ? names[active.agent] : mode === "auto" ? t("ws.autoAssign") : names[agent]}{(selectedWorker || active || mode === "manual") && <RemainingChip agent={selectedWorker?.agent ?? active?.agent ?? agent} />}
                       </span>
                     </div>
                     <div className="chat-actions">
-                      {selectedWorker && active && <button className="button light" onClick={() => selectConversation(active.id)}>대화로 돌아가기</button>}
-                      {active?.status === "running" && <button className="button light" disabled={busy} onClick={() => stopSession(active.id)}><Square size={12} />중지</button>}
-                      <button className="icon-button" aria-label="브라우저 (⌘⇧B)" title="브라우저 (⌘⇧B) · 요소 선택 ⌘⇧C · 창 배치 ⌃⌥←/→/↑" onClick={() => showBrowser(false)}><Globe size={18} /></button>
-                      {desktopMode !== "max" && <button className="icon-button" aria-label="채팅 접기 (⌘⇧J)" title="채팅 접기 (⌘⇧J)" onClick={() => setChatCollapsed(true)}><PanelRightClose size={18} /></button>}
-                      <button className="icon-button" aria-label="실시간 활동" aria-expanded={activityOpen} aria-controls="activity-panel" onClick={() => setActivityOpen((value) => !value)}><Activity size={18} /></button>
+                      {selectedWorker && active && <button className="button light" onClick={() => selectConversation(active.id)}>{t("ws.backToConversation")}</button>}
+                      {active?.status === "running" && <button className="button light" disabled={busy} onClick={() => stopSession(active.id)}><Square size={12} />{t("ws.stop")}</button>}
+                      <button className="icon-button" aria-label={t("ws.browser")} title={t("ws.browserTitle")} onClick={() => showBrowser(false)}><Globe size={18} /></button>
+                      {desktopMode !== "max" && <button className="icon-button" aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")} onClick={() => setChatCollapsed(true)}><PanelRightClose size={18} /></button>}
+                      <button className="icon-button" aria-label={t("activity.label")} aria-expanded={activityOpen} aria-controls="activity-panel" onClick={() => setActivityOpen((value) => !value)}><Activity size={18} /></button>
                     </div>
                   </div>
                   <TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
@@ -617,13 +620,13 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
                   <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} onScroll={onChatScroll}>
                     {selectedWorker ? <><WorkerThread key={`${active?.id}-${selectedWorker.id}`} worker={selectedWorker} /><div ref={bottom} /></> : !active ? (
                       pendingRecommendation ? <div className="messages routing-message">
-                        <div className="message user-message"><div className="message-author"><strong>나</strong></div><div className="message-text">{prompt}</div></div>
+                        <div className="message user-message"><div className="message-author"><strong>{t("names.user")}</strong></div><div className="message-text">{prompt}</div></div>
                         <RecommendationCard value={pendingRecommendation} settings={routingSettings} skills={boot.skills} editing={editingRecommendation} busy={busy} runDisabled={!canSend || Boolean(unavailableWarning)} availableAgents={teamAgents} onEdit={() => setEditingRecommendation((old) => !old)} onChange={(value) => setRecommendation({ key: routingKey, value })} onRun={() => void send(true)} />
                         <div ref={bottom} />
                       </div> : <div className="minimal-empty">
-                        <h2>무엇을 도와드릴까요?</h2>
+                        <h2>{t("ws.emptyTitle")}</h2>
                         <div className="prompt-chips">
-                          {promptChips.map(([label, text]) => <button key={label} onClick={() => { setPrompt(text); composerInput.current?.focus(); }}>{label}</button>)}
+                          {promptChips().map(([label, text]) => <button key={label} onClick={() => { setPrompt(text); composerInput.current?.focus(); }}>{label}</button>)}
                         </div>
                       </div>
                     ) : (
@@ -635,7 +638,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
                         onChoose={(option) => void send(false, option)} />
                     )}
                   </div>
-                  {showChatBottom && !selectedWorker && <button type="button" className="chat-bottom-button" onClick={() => scrollToChatBottom()}><ArrowDown size={15} />맨 아래로</button>}
+                  {showChatBottom && !selectedWorker && <button type="button" className="chat-bottom-button" onClick={() => scrollToChatBottom()}><ArrowDown size={15} />{t("ws.toBottom")}</button>}
                   {!selectedWorker && <Composer completion={completion} attachments={attachmentState} prompt={prompt} setPrompt={setPrompt}
                     skills={skills} messageSkills={messageSkills} setMessageSkills={setMessageSkills} availableSkills={boot.skills}
                     active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning}

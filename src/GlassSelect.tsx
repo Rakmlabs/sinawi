@@ -12,6 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Search } from "lucide-react";
 import "./glass-select.css";
+import { t } from "./i18n";
 
 export type GlassSelectOption = {
   value: string;
@@ -49,7 +50,7 @@ export function GlassSelect({
   label,
   disabled = false,
   allowCustom = false,
-  placeholder = "선택하세요",
+  placeholder = t("select.placeholder"),
   className = "",
 }: GlassSelectProps) {
   const id = useId();
@@ -264,7 +265,7 @@ export function GlassSelect({
           type="button"
           className="glass-select-toggle"
           tabIndex={-1}
-          aria-label={`${label} 목록 ${open ? "닫기" : "열기"}`}
+          aria-label={t(open ? "select.toggleClose" : "select.toggleOpen", { label })}
           disabled={disabled}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => {
@@ -284,7 +285,7 @@ export function GlassSelect({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
-          <div id={listboxId} role="listbox" aria-label={`${label} 선택 항목`}>
+          <div id={listboxId} role="listbox" aria-label={t("select.options", { label })}>
             {filteredOptions.map((option, index) => (
               <button
                 type="button"
@@ -306,7 +307,7 @@ export function GlassSelect({
             ))}
             {!filteredOptions.length && (
               <p className="glass-select-empty">
-                {allowCustom ? "입력한 값을 직접 사용할 수 있습니다." : "일치하는 항목이 없습니다."}
+                {allowCustom ? t("select.customHint") : t("select.noMatch")}
               </p>
             )}
           </div>
@@ -321,7 +322,7 @@ export function GlassSelect({
                 closeMenu(true);
               }}
             >
-              “{query.trim()}” 사용
+              {t("select.useCustom", { value: query.trim() })}
             </button>
           )}
         </div>,

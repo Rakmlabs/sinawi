@@ -15,19 +15,20 @@ import type { AppNotification, NotificationType } from "../server/notification-t
 import type { WorkspaceId } from "../server/types";
 import { openTerminal, terminalOwnsKeyboardEvent } from "./terminal-events";
 import { useNow } from "./app/clock";
+import { t, translatedMap } from "./i18n";
 
 const NOTIFICATIONS_EVENT = "orchestra:notifications";
 const criticalTypes = new Set<NotificationType>(["auth", "error", "permission"]);
 const toastStoragePrefix = "orchestra:notification-toasts:v1";
 
-const typeLabels: Record<NotificationType, string> = {
-  auth: "인증",
-  quota: "사용량",
-  permission: "권한",
-  "run-finished": "작업 완료",
-  error: "오류",
-  info: "안내",
-};
+const typeLabels = translatedMap<NotificationType>({
+  auth: "noti.auth",
+  quota: "noti.quota",
+  permission: "noti.permission",
+  "run-finished": "noti.runFinished",
+  error: "noti.error",
+  info: "noti.info",
+});
 
 function NotificationIcon({ type, size = 15 }: { type: NotificationType; size?: number }) {
   const props = { size, "aria-hidden": true as const };
@@ -42,12 +43,12 @@ function NotificationIcon({ type, size = 15 }: { type: NotificationType; size?: 
 export function notificationRelativeTime(value: string, now = Date.now()): string {
   const elapsed = Math.max(0, now - new Date(value).getTime());
   const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return "방금 전";
-  if (minutes < 60) return `${minutes}분 전`;
+  if (minutes < 1) return t("time.justNow");
+  if (minutes < 60) return t("time.minutesAgo", { n: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}시간 전`;
+  if (hours < 24) return t("time.hoursAgo", { n: hours });
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}일 전`;
+  if (days < 7) return t("time.daysAgo", { n: days });
   return new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric" }).format(new Date(value));
 }
 
@@ -244,7 +245,7 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
           <button
             type="button"
             className="notification-toast-close"
-            aria-label="알림 닫기"
+            aria-label={t("noti.dismiss")}
             onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))}
           >
             <X size={14} aria-hidden="true" />
@@ -260,10 +261,10 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
         <button
         type="button"
         className="notifications-trigger"
-        aria-label={`알림${unread ? `, 읽지 않음 ${unread}개` : ""}`}
+        aria-label={unread ? t("noti.buttonUnread", { n: unread }) : t("noti.title")}
         aria-expanded={open}
         aria-controls="notifications-popover"
-        title="알림"
+        title={t("noti.title")}
         onClick={() => {
           setOpen((value) => !value);
           if (!open) void refresh();
@@ -274,15 +275,15 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
         </button>
 
         {open ? (
-          <section id="notifications-popover" className="notifications-popover" aria-label="알림 센터">
+          <section id="notifications-popover" className="notifications-popover" aria-label={t("noti.center")}>
           <header className="notifications-heading">
             <div>
-              <strong>알림</strong>
-              <span>{unread ? `읽지 않음 ${unread}개` : "새 알림 없음"}</span>
+              <strong>{t("noti.title")}</strong>
+              <span>{unread ? t("noti.unread", { n: unread }) : t("noti.none")}</span>
             </div>
             <div className="notifications-controls">
-              <button type="button" disabled={!unread} onClick={markAllRead}>모두 읽음</button>
-              <button type="button" disabled={!notifications.length} onClick={clearAll}>모두 지우기</button>
+              <button type="button" disabled={!unread} onClick={markAllRead}>{t("noti.markAllRead")}</button>
+              <button type="button" disabled={!notifications.length} onClick={clearAll}>{t("noti.clearAll")}</button>
             </div>
           </header>
           <div className="notifications-list">
@@ -311,12 +312,12 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
                     </span>
                   ) : null}
                 </span>
-                {!notification.read ? <span className="notification-unread" aria-label="읽지 않음" /> : null}
+                {!notification.read ? <span className="notification-unread" aria-label={t("noti.unreadDot")} /> : null}
               </button>
             )) : (
               <div className="notifications-empty">
                 <Bell size={18} aria-hidden="true" />
-                <span>새 알림이 없습니다.</span>
+                <span>{t("noti.empty")}</span>
               </div>
             )}
           </div>

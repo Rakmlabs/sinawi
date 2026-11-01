@@ -13,6 +13,7 @@ import {
 import type { WorkspaceId } from "../server/types";
 import { recentPaths } from "./composer";
 import "./folder-picker.css";
+import { t } from "./i18n";
 
 type DirectoryListing = {
   path: string;
@@ -50,7 +51,7 @@ function folderName(path: string) {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, init);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "폴더를 확인하지 못했습니다.");
+  if (!response.ok) throw new Error(data.error || t("folder.checkFailed"));
   return data as T;
 }
 
@@ -146,8 +147,8 @@ export function FolderPicker({ currentPath, onUse, workspaceId = "personal" }: F
       <button
         type="button"
         className={`folder-picker-pin ${favorites.includes(path) ? "active" : ""}`}
-        aria-label={favorites.includes(path) ? `${folderName(path)} 즐겨찾기 해제` : `${folderName(path)} 즐겨찾기 추가`}
-        title={favorites.includes(path) ? "즐겨찾기 해제" : "즐겨찾기 추가"}
+        aria-label={t(favorites.includes(path) ? "folder.unfavoriteNamed" : "folder.favoriteNamed", { name: folderName(path) })}
+        title={favorites.includes(path) ? t("folder.unfavorite") : t("folder.favorite")}
         onClick={() => toggleFavorite(path)}
       >
         {favorites.includes(path) ? <PinOff size={15} /> : <Pin size={15} />}
@@ -157,32 +158,32 @@ export function FolderPicker({ currentPath, onUse, workspaceId = "personal" }: F
 
   return (
     <div className="folder-picker">
-      <p className="folder-picker-intro">에이전트가 명령을 실행하고 파일을 수정할 작업 폴더를 선택하세요.</p>
+      <p className="folder-picker-intro">{t("folder.intro")}</p>
 
       <button type="button" className="folder-picker-finder" disabled={picking || loading} onClick={() => void pickInFinder()}>
         {picking ? <LoaderCircle className="spin" size={20} /> : <FolderOpen size={20} />}
-        <span><strong>{picking ? "Finder를 기다리는 중…" : "Finder에서 선택"}</strong><small>macOS 폴더 선택기 열기</small></span>
+        <span><strong>{picking ? t("folder.waitingFinder") : t("folder.pickInFinder")}</strong><small>{t("folder.openPicker")}</small></span>
         <ArrowRight size={16} />
       </button>
 
       {(favorites.length > 0 || recent.length > 0) && (
         <div className="folder-picker-saved">
           {favorites.length > 0 && <section aria-labelledby="favorite-folders-title">
-            <h3 id="favorite-folders-title">즐겨찾기</h3>
+            <h3 id="favorite-folders-title">{t("folder.favorites")}</h3>
             {favorites.map((path) => renderSavedRow(path, "favorite"))}
           </section>}
           {recent.length > 0 && <section aria-labelledby="recent-folders-title">
-            <h3 id="recent-folders-title">최근 폴더</h3>
+            <h3 id="recent-folders-title">{t("folder.recent")}</h3>
             {recent.map((path) => renderSavedRow(path, "recent"))}
           </section>}
         </div>
       )}
 
       <form className="folder-picker-path" onSubmit={(event) => { event.preventDefault(); void commit(draft.trim()); }}>
-        <label htmlFor="folder-picker-path">경로 직접 입력</label>
+        <label htmlFor="folder-picker-path">{t("folder.typePath")}</label>
         <div>
           <input id="folder-picker-path" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="/Users/me/project" spellCheck={false} />
-          <button type="submit" className="button light" disabled={loading || !draft.trim()}>{loading ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}이 경로 사용</button>
+          <button type="submit" className="button light" disabled={loading || !draft.trim()}>{loading ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{t("folder.usePath")}</button>
         </div>
       </form>
 
@@ -191,15 +192,15 @@ export function FolderPicker({ currentPath, onUse, workspaceId = "personal" }: F
       {listing && (
         <section className="folder-picker-browser" aria-labelledby="folder-browser-title" aria-busy={loading}>
           <header>
-            <div><span>현재 위치</span><h3 id="folder-browser-title">{folderName(listing.path)}</h3><small title={listing.path}>{shortPath(listing.path)}</small></div>
-            <button type="button" className={`folder-picker-pin ${favorites.includes(listing.path) ? "active" : ""}`} onClick={() => toggleFavorite(listing.path)} aria-label={favorites.includes(listing.path) ? "현재 폴더 즐겨찾기 해제" : "현재 폴더 즐겨찾기 추가"}><Pin size={16} /></button>
+            <div><span>{t("folder.current")}</span><h3 id="folder-browser-title">{folderName(listing.path)}</h3><small title={listing.path}>{shortPath(listing.path)}</small></div>
+            <button type="button" className={`folder-picker-pin ${favorites.includes(listing.path) ? "active" : ""}`} onClick={() => toggleFavorite(listing.path)} aria-label={favorites.includes(listing.path) ? t("folder.unfavoriteCurrent") : t("folder.favoriteCurrent")}><Pin size={16} /></button>
           </header>
           <div className="folder-picker-directory-list">
-            {listing.parent !== listing.path && <button type="button" onClick={() => void loadDirectory(listing.parent)}><ArrowUp size={16} /><span><strong>상위 폴더</strong><small>{shortPath(listing.parent)}</small></span></button>}
+            {listing.parent !== listing.path && <button type="button" onClick={() => void loadDirectory(listing.parent)}><ArrowUp size={16} /><span><strong>{t("folder.parent")}</strong><small>{shortPath(listing.parent)}</small></span></button>}
             {listing.directories.map((path) => <button type="button" key={path} onClick={() => void loadDirectory(path)}><Folder size={16} /><span><strong>{folderName(path)}</strong><small>{shortPath(path)}</small></span><ArrowRight size={13} /></button>)}
-            {!listing.directories.length && <p className="folder-picker-empty">표시할 하위 폴더가 없습니다.</p>}
+            {!listing.directories.length && <p className="folder-picker-empty">{t("folder.noSubfolders")}</p>}
           </div>
-          <button type="button" className="button primary folder-picker-use" disabled={loading} onClick={() => void commit(listing.path)}>이 폴더 사용 <Check size={15} /></button>
+          <button type="button" className="button primary folder-picker-use" disabled={loading} onClick={() => void commit(listing.path)}>{t("folder.useFolder")} <Check size={15} /></button>
         </section>
       )}
     </div>

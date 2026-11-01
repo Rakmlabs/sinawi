@@ -3,25 +3,27 @@ import { AgentMark } from "../AgentMark";
 import { Elapsed } from "./Elapsed";
 import { names, statusLabels } from "./labels";
 import type { Session } from "../../server/types";
+import { t } from "../i18n";
+import { Beat } from "../Beat";
 
 /** "세션 기록" tab: every session of the workspace with a live elapsed clock. */
 export function SessionsView({ sessions, onNew, onSelect, onStop }: { sessions: Session[]; onNew: () => void; onSelect: (id: string) => void; onStop: (id: string) => void }) {
   const running = sessions.filter((s) => s.status === "running").length;
   return <section className="glass full-panel">
     <div className="panel-header">
-      <h2>세션 기록</h2>
+      <h2>{t("sessions.title")}</h2>
       <span>
-        전체 {sessions.length}개 · 진행 중 {running}개
+        {t("sessions.summary", { total: sessions.length, running })}
       </span>
     </div>
     {sessions.length === 0 ? (
       <div className="page-empty">
         <Layers size={32} />
-        <h2>다음 아이디어를 여기서 시작하세요.</h2>
-        <p>세션을 시작하고 에이전트의 작업을 확인하세요.</p>
+        <h2>{t("sessions.emptyTitle")}</h2>
+        <p>{t("sessions.emptyBody")}</p>
         <button className="button primary" onClick={onNew}>
           <Plus size={16} />
-          새 세션
+          {t("sessions.new")}
         </button>
       </div>
     ) : (
@@ -37,13 +39,14 @@ export function SessionsView({ sessions, onNew, onSelect, onStop }: { sessions: 
             <small>{names[s.agent]} · {s.cwd}</small>
           </button>
           <span className={`status-label ${s.status}`}>
+            {s.status === "running" && <Beat />}
             {statusLabels[s.status]}
           </span>
           <Elapsed start={s.createdAt} end={s.endedAt} />
           {s.status === "running" && (
             <button
               className="icon-button"
-              title="세션 중지"
+              title={t("sessions.stop")}
               onClick={() => onStop(s.id)}
             >
               <Square size={14} />

@@ -7,6 +7,8 @@ import { names } from "./labels";
 import type { AttachmentsState } from "./useAttachments";
 import type { ComposerCompletion } from "./useComposerCompletion";
 import type { AgentId, Session, SkillInfo as Skill } from "../../server/types";
+import { t } from "../i18n";
+import { Beat } from "../Beat";
 
 export type ComposerProps = {
   completion: ComposerCompletion;
@@ -70,15 +72,15 @@ export function Composer(props: ComposerProps) {
   };
   const action = composerAction(sessionRunning, Boolean(prompt.trim() || attachments.length));
   return <div className="composer-area">
-    {routing && <div className="thinking" role="status"><LoaderCircle size={14} className="spin" /> 팀 고르는 중…</div>}
-    {liveNote && <div className="thinking" role="status"><LoaderCircle size={14} className="spin" /> {liveNote}</div>}
+    {routing && <div className="thinking" role="status"><Beat /> {t("comp.routing")}</div>}
+    {liveNote && <div className="thinking" role="status"><Beat /> {liveNote}</div>}
     {chatError && <div className="message error-banner" role="alert">{chatError}</div>}
     {unavailableWarning && <p className="composer-warning" role="alert">{unavailableWarning}</p>}
     <div className={`composer${dragging ? " drop-target" : ""}`}>
       {slash && (
         <ComposerPopover anchor={composerInput}>
-          {(!slash.query || "usage".startsWith(slash.query.toLowerCase())) && <button type="button" role="option" aria-selected={false} onPointerDown={(event) => event.preventDefault()} onClick={() => { openModal("usage"); setPrompt(prompt.slice(0, slash.start) + prompt.slice(slash.end)); setSlash(undefined); }}><strong>/usage</strong><small>에이전트·모델별 사용량 보기</small></button>}
-          <div className="slash-heading">스킬 선택 · ↑↓ 이동 · Enter 첨부 · Esc 닫기</div>
+          {(!slash.query || "usage".startsWith(slash.query.toLowerCase())) && <button type="button" role="option" aria-selected={false} onPointerDown={(event) => event.preventDefault()} onClick={() => { openModal("usage"); setPrompt(prompt.slice(0, slash.start) + prompt.slice(slash.end)); setSlash(undefined); }}><strong>/usage</strong><small>{t("comp.usageHint")}</small></button>}
+          <div className="slash-heading">{t("comp.skillHeading")}</div>
           {filteredSkills.length ? filteredSkills.map((skill, index) => (
             <button type="button" role="option" id={`slash-skill-${index}`} aria-selected={highlightedSkill === index}
               disabled={new Set([...skills, ...messageSkills, skill.id]).size > 20}
@@ -86,27 +88,27 @@ export function Composer(props: ComposerProps) {
               onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onClick={() => attachSkill(skill)}>
               <strong>{skill.name}</strong><small>{skill.description || skill.source}</small>
             </button>
-          )) : <p role="status">일치하는 스킬이 없습니다.</p>}
-          {new Set([...skills, ...messageSkills]).size >= 20 && <p role="status">스킬은 최대 20개까지 첨부할 수 있습니다.</p>}
+          )) : <p role="status">{t("comp.noSkillMatch")}</p>}
+          {new Set([...skills, ...messageSkills]).size >= 20 && <p role="status">{t("comp.skillLimit")}</p>}
         </ComposerPopover>
       )}
       {fileCompletion && (
         <ComposerPopover anchor={composerInput}>
-          <div className="slash-heading">파일 선택 · ↑↓ 이동 · Tab/Enter 삽입 · Esc 닫기</div>
+          <div className="slash-heading">{t("comp.fileHeading")}</div>
           {fileSuggestions.length ? fileSuggestions.map((file, index) => <button type="button" role="option" id={`file-suggestion-${index}`} aria-selected={fileIndex === index}
             className={fileIndex === index ? "highlighted" : ""} key={file}
             onPointerDown={(event) => event.preventDefault()} onMouseDown={(event) => event.preventDefault()} onClick={() => attachFile(file)}>
             <strong>@{file}</strong>
-          </button>) : <p role="status">일치하는 파일이 없습니다.</p>}
+          </button>) : <p role="status">{t("comp.noFileMatch")}</p>}
         </ComposerPopover>
       )}
-      {attachments.length > 0 && <div className="composer-attachments" aria-label="첨부">
+      {attachments.length > 0 && <div className="composer-attachments" aria-label={t("comp.attachments")}>
         {attachments.map((item) => {
           const remove = () => removeAttachment(item);
           if (item.kind === "element") return <span key={item.id} className="attachment-chip" tabIndex={0}>
             <MousePointerClick size={14} />
             <span className="attachment-chip-label">{item.label}{item.element?.comment ? ` · ${item.element.comment}` : ""}</span>
-            <button type="button" aria-label={`${item.label} 첨부 해제`} onClick={remove}><X size={13} /></button>
+            <button type="button" aria-label={t("comp.detach", { label: item.label })} onClick={remove}><X size={13} /></button>
             <span className="attachment-preview" role="tooltip">
               {item.preview && <img src={item.preview} alt="" />}
               {item.element && <><b>{item.element.selector}</b><small>{item.element.url}</small>{item.element.react?.name && <small>React: {(item.element.react.chain ?? [item.element.react.name]).join(" ← ")}{item.element.react.source ? ` · ${item.element.react.source}` : ""}</small>}{item.element.comment && <em>“{item.element.comment}”</em>}</>}
@@ -122,14 +124,14 @@ export function Composer(props: ComposerProps) {
                 <span className="file-chip-meta"><span>{item.error || kindLabel(kind === "unknown" ? "text" : kind)}</span>{item.size != null && !item.error && <span>{formatBytes(item.size)}</span>}</span>
               </span>
             </button>
-            <button type="button" className="chip-remove" aria-label={`${item.label} 첨부 해제`} onClick={remove}><X size={13} /></button>
+            <button type="button" className="chip-remove" aria-label={t("comp.detach", { label: item.label })} onClick={remove}><X size={13} /></button>
             {item.progress != null && <span className="upload-progress"><span style={{ width: `${Math.round(item.progress * 100)}%` }} /></span>}
           </span>;
         })}
       </div>}
-      {messageSkills.length > 0 && <div className="message-skills" aria-label="이 메시지의 스킬">
+      {messageSkills.length > 0 && <div className="message-skills" aria-label={t("comp.messageSkills")}>
         {messageSkills.map((id) => <button key={id} onClick={() => setMessageSkills((old) => old.filter((item) => item !== id))}
-          aria-label={`${skillName(id)} 첨부 해제`}>
+          aria-label={t("comp.detach", { label: skillName(id) })}>
           <WandSparkles size={12} />{skillName(id)}<X size={12} />
         </button>)}
       </div>}
@@ -142,8 +144,8 @@ export function Composer(props: ComposerProps) {
         aria-autocomplete="list"
         onBlur={() => { setSlash(undefined); setFileCompletion(undefined); }}
         aria-activedescendant={slash && filteredSkills.length ? `slash-skill-${highlightedSkill}` : fileCompletion && fileSuggestions.length ? `file-suggestion-${fileIndex}` : undefined}
-        aria-label="총괄 에이전트에게 보낼 메시지"
-        placeholder={sessionRunning ? "진행 중에도 물을 수 있습니다. 상태 질문, 다음 지시, 또는 중지…" : !active && mode === "auto" ? "무엇을 도와드릴까요? 요청을 입력하면 알맞은 팀이 작업을 시작합니다…" : `${active ? names[active.agent] : names[agent]}에게 구현, 탐색, 수정을 요청해 보세요…`}
+        aria-label={t("comp.inputLabel")}
+        placeholder={sessionRunning ? t("comp.placeholderRunning") : !active && mode === "auto" ? t("comp.placeholderAuto") : t("comp.placeholderAgent", { agent: active ? names[active.agent] : names[agent] })}
         value={prompt}
         onChange={(e) => {
           setPrompt(e.target.value);
@@ -229,7 +231,7 @@ export function Composer(props: ComposerProps) {
           onClick={() => openModal("directory")}
           title={
             active
-              ? "폴더를 변경하려면 새 세션을 시작하세요"
+              ? t("comp.folderLocked")
               : cwd
           }
         >
@@ -237,20 +239,20 @@ export function Composer(props: ComposerProps) {
           <span>
             {shownCwd
               ? shownCwd.split("/").filter(Boolean).at(-1) || "/"
-              : "작업 폴더 선택"}
+              : t("comp.chooseFolder")}
           </span>
           <ChevronDown size={12} />
         </button>
-        {!active && <div className="routing-mode" role="group" aria-label="배정 방식">
-          <button aria-pressed={mode === "auto"} disabled={busy} onClick={() => setMode("auto")}>자동</button>
-          <button aria-pressed={mode === "manual"} disabled={busy} onClick={() => setMode("manual")}>수동</button>
+        {!active && <div className="routing-mode" role="group" aria-label={t("comp.routingMode")}>
+          <button aria-pressed={mode === "auto"} disabled={busy} onClick={() => setMode("auto")}>{t("comp.auto")}</button>
+          <button aria-pressed={mode === "manual"} disabled={busy} onClick={() => setMode("manual")}>{t("comp.manual")}</button>
         </div>}
         <input ref={fileInput} type="file" multiple hidden onChange={(event) => { attachFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-        <button type="button" className="icon-button" aria-label="파일 첨부" title="파일 첨부" onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>
-        <button className="icon-button" aria-label="모델 및 시스템 프롬프트" onClick={() => openModal("settings")}><Settings2 size={16} /></button>
+        <button type="button" className="icon-button" aria-label={t("comp.attachFile")} title={t("comp.attachFile")} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>
+        <button className="icon-button" aria-label={t("comp.settings")} onClick={() => openModal("settings")}><Settings2 size={16} /></button>
         <button
           className="send-button"
-          aria-label={action === "stop" ? "작업 중지" : routing ? "팀 고르는 중…" : "메시지 보내기"}
+          aria-label={action === "stop" ? t("comp.stop") : routing ? t("comp.routing") : t("comp.send")}
           disabled={action === "stop" ? busy : !canSend && !isUsageCommand(prompt)}
           onClick={action === "stop" ? stopActive : () => void send()}
         >
@@ -264,6 +266,6 @@ export function Composer(props: ComposerProps) {
         </button>
       </div>
     </div>
-    <div className="composer-hints">실행 중에도 입력 · Enter 전송 · ⇧Enter 줄바꿈 · ↑↓ 기록 · Esc/⌃C 중지 · / 스킬 · @ 파일 · ⌘V·드래그 첨부 · ⌘⇧B 브라우저</div>
+    <div className="composer-hints">{t("comp.hints")}</div>
   </div>;
 }

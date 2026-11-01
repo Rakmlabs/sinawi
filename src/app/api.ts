@@ -1,4 +1,5 @@
 import type { Bot as Preset, Group, SkillInfo as Skill, WorkspaceId } from "../../server/types";
+import { t } from "../i18n";
 
 export type Bootstrap = {
   agents: {
@@ -29,8 +30,8 @@ export async function workspaceApi<T>(
   });
   const text = r.status === 204 ? "" : await r.text();
   let data: any;
-  try { data = text ? JSON.parse(text) : undefined; } catch { throw new Error("앱 서버 응답을 읽지 못했습니다. 다시 시도하면 서버에 다시 연결합니다."); }
-  if (!r.ok) throw new Error(data?.error || "요청을 처리하지 못했습니다.");
+  try { data = text ? JSON.parse(text) : undefined; } catch { throw new Error(t("api.badResponse")); }
+  if (!r.ok) throw new Error(data?.error || t("api.requestFailed"));
   return data;
 }
 

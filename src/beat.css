@@ -1,0 +1,21 @@
+/* 장단 (beat) running indicator: three 5px dots, opacity 1 / .5 / .22 rotating. */
+.beat { display: inline-flex; align-items: center; gap: 3px; flex: none; vertical-align: middle; }
+.beat i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent, #4FB08F); opacity: .22; animation: beat-pulse 1.2s steps(1, end) infinite; }
+.beat i:nth-child(1) { animation-delay: 0s; }
+.beat i:nth-child(2) { animation-delay: -.8s; }
+.beat i:nth-child(3) { animation-delay: -.4s; }
+@keyframes beat-pulse {
+  0% { opacity: 1; }
+  33.333% { opacity: .5; }
+  66.666% { opacity: .22; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .beat i { animation: none; }
+  .beat i:nth-child(1) { opacity: 1; }
+  .beat i:nth-child(2) { opacity: .5; }
+  .beat i:nth-child(3) { opacity: .22; }
+}
+.status-label .beat { margin-right: 6px; }
+
+/* Sinawi wordmark logo in the window header. */
+.window-header-brand .sinawi-mark { display: inline-block; vertical-align: -3px; margin-right: 6px; }

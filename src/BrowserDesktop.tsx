@@ -5,6 +5,7 @@ import { browserRegistry } from "./browser-registry";
 import { windowShortcut } from "./browser-shortcuts";
 import { applySnap, clampPosition, desktopMode, DESKTOP_STORE, frameOf, loadWindows, newWindow, resizeWindow, topZ, type DesktopMode, type DesktopWindow, type Edge, type Snap } from "./desktop-windows";
 import type { ComposerAttachment } from "./preview-attachments";
+import { t } from "./i18n";
 
 const EDGES: Edge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 const newId = () => Math.random().toString(36).slice(2, 10);
@@ -103,26 +104,26 @@ export function BrowserDesktop({ onAttach, request, onModeChange }: Props) {
   const minimized = windows.filter((w) => w.minimized);
 
   return (
-    <div ref={area} className={`browser-desktop desk-${mode}`} aria-label="바탕화면 브라우저">
+    <div ref={area} className={`browser-desktop desk-${mode}`} aria-label={t("desk.label")}>
       {windows.map((win) => {
         const frame = frameOf(win, size);
         const fixed = Boolean(win.maximized || win.snap);
         return (
           <section key={win.id} className={`desktop-window${win.id === activeId ? " focused" : ""}${fixed ? " snapped" : ""}`} hidden={win.minimized}
             style={{ left: frame.x, top: frame.y, width: frame.w, height: frame.h, zIndex: win.z }}
-            onPointerDownCapture={() => focus(win.id)} aria-label="브라우저 창">
+            onPointerDownCapture={() => focus(win.id)} aria-label={t("desk.window")}>
             <header className="desktop-titlebar" onPointerDown={(e) => drag(e, win)} onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest("button")) snap(win.id, "max"); }}>
               <div className="desktop-lights">
-                <button type="button" className="light close" aria-label="창 닫기" title="닫기" onClick={() => close(win.id)}><X size={9} /></button>
-                <button type="button" className="light min" aria-label="최소화" title="최소화" onClick={() => update(win.id, (w) => ({ ...w, minimized: true }))}><Minus size={9} /></button>
-                <button type="button" className="light max" aria-label={win.maximized ? "원래 크기" : "최대화"} title={win.maximized ? "원래 크기 (⌃⌥↑)" : "최대화 (⌃⌥↑)"} onClick={() => snap(win.id, "max")}>{win.maximized ? <Minimize2 size={8} /> : <Maximize2 size={8} />}</button>
+                <button type="button" className="light close" aria-label={t("desk.closeWindow")} title={t("desk.close")} onClick={() => close(win.id)}><X size={9} /></button>
+                <button type="button" className="light min" aria-label={t("desk.minimize")} title={t("desk.minimize")} onClick={() => update(win.id, (w) => ({ ...w, minimized: true }))}><Minus size={9} /></button>
+                <button type="button" className="light max" aria-label={win.maximized ? t("desk.restoreSize") : t("desk.maximize")} title={win.maximized ? t("desk.restoreSizeTitle") : t("desk.maximizeTitle")} onClick={() => snap(win.id, "max")}>{win.maximized ? <Minimize2 size={8} /> : <Maximize2 size={8} />}</button>
               </div>
-              <span className="desktop-title"><Globe size={13} />브라우저 창 {windows.indexOf(win) + 1}{win.id === activeId && windows.length > 1 && <em>AI 대상</em>}</span>
-              <div className="desktop-snaps" role="group" aria-label="창 배치">
-                <button type="button" aria-label="새 브라우저 창" title="새 브라우저 창" onClick={open}><Plus size={14} /></button>
-                <button type="button" className={win.snap === "left" ? "on" : ""} aria-label="왼쪽 절반" title="왼쪽 절반 (⌃⌥←)" onClick={() => snap(win.id, "left")}><PanelLeft size={14} /></button>
-                <button type="button" className={win.snap === "right" ? "on" : ""} aria-label="오른쪽 절반" title="오른쪽 절반 (⌃⌥→)" onClick={() => snap(win.id, "right")}><PanelRight size={14} /></button>
-                <button type="button" className={win.maximized ? "on" : ""} aria-label={win.maximized ? "원래 크기로" : "꽉 채우기"} title={win.maximized ? "원래 크기로 (⌃⌥↑)" : "꽉 채우기 (⌃⌥↑ · 헤더 더블클릭)"} onClick={() => snap(win.id, "max")}>{win.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
+              <span className="desktop-title"><Globe size={13} />{t("desk.windowN", { n: windows.indexOf(win) + 1 })}{win.id === activeId && windows.length > 1 && <em>{t("desk.aiTarget")}</em>}</span>
+              <div className="desktop-snaps" role="group" aria-label={t("desk.layout")}>
+                <button type="button" aria-label={t("desk.newWindow")} title={t("desk.newWindow")} onClick={open}><Plus size={14} /></button>
+                <button type="button" className={win.snap === "left" ? "on" : ""} aria-label={t("desk.leftHalf")} title={t("desk.leftHalfTitle")} onClick={() => snap(win.id, "left")}><PanelLeft size={14} /></button>
+                <button type="button" className={win.snap === "right" ? "on" : ""} aria-label={t("desk.rightHalf")} title={t("desk.rightHalfTitle")} onClick={() => snap(win.id, "right")}><PanelRight size={14} /></button>
+                <button type="button" className={win.maximized ? "on" : ""} aria-label={win.maximized ? t("desk.restoreTo") : t("desk.fill")} title={win.maximized ? t("desk.restoreToTitle") : t("desk.fillTitle")} onClick={() => snap(win.id, "max")}>{win.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
               </div>
             </header>
             <div className="desktop-body">
@@ -133,8 +134,8 @@ export function BrowserDesktop({ onAttach, request, onModeChange }: Props) {
           </section>
         );
       })}
-      {minimized.length > 0 && <nav className="desktop-dock" aria-label="최소화된 브라우저 창">
-        {minimized.map((win) => <button type="button" key={win.id} onClick={() => { update(win.id, (w) => ({ ...w, minimized: false })); focus(win.id); }} title="창 복원"><Globe size={14} />창 {windows.indexOf(win) + 1}</button>)}
+      {minimized.length > 0 && <nav className="desktop-dock" aria-label={t("desk.dock")}>
+        {minimized.map((win) => <button type="button" key={win.id} onClick={() => { update(win.id, (w) => ({ ...w, minimized: false })); focus(win.id); }} title={t("desk.restoreWindow")}><Globe size={14} />{t("desk.dockItem", { n: windows.indexOf(win) + 1 })}</button>)}
       </nav>}
     </div>
   );

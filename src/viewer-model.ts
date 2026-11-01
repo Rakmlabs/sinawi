@@ -1,4 +1,5 @@
 import { fileNameOf, kindFromName, KIND_LABEL, type MediaKind } from "../server/media-kinds";
+import { t } from "./i18n";
 
 export type MediaRef = { path: string; name: string; kind: MediaKind; size?: number };
 
@@ -189,7 +190,7 @@ export function parseCsv(text: string, maxRows = 200): string[][] {
 export const UPLOAD_LIMIT = 80 * 1024 * 1024;
 
 export function uploadRejection(file: { name: string; size: number }): string | undefined {
-  if (file.size > UPLOAD_LIMIT) return `${file.name}: 80MB보다 큰 파일은 작업 폴더에 두고 열어 주세요.`;
+  if (file.size > UPLOAD_LIMIT) return t("viewer.fileTooLarge", { name: file.name });
   return undefined;
 }
 

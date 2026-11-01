@@ -31,9 +31,9 @@ test("file viewer traps tab and restores the opener", () => {
   assert.match(source, /trapFocusIndex/);
   assert.match(source, /isConnected/);
   assert.match(source, /Escape/);
-  assert.match(source, /이미지를 표시하지 못했습니다/);
+  assert.match(source, /t\("viewer\.imageFailed"\)/);
   assert.doesNotMatch(source, /onError=\{\(\) => \{\}\}/);
-  assert.match(pdf, /외부로 열기/);
+  assert.match(pdf, /t\("pdf\.openExternal"\)/);
   assert.match(pdf, /viewer-pdf-frame/);
   assert.match(pdf, /role="alert"/);
 });

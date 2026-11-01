@@ -1,6 +1,6 @@
 export type AgentCommand = { type: "browser-command"; id: string; action: string; args: Record<string, unknown> };
 
-export const OWN_APP_ERROR = "Agent Orchestra 자체 주소는 열 수 없습니다. localhost 개발 서버 페이지를 여세요.";
+export const OWN_APP_ERROR = "Sinawi 자체 주소는 열 수 없습니다. localhost 개발 서버 페이지를 여세요.";
 
 /** App server (default 3001) opened as a tab nests the shell; picker never answers. */
 export function isOwnAppUrl(raw: string | undefined, appPort = 3001): boolean {

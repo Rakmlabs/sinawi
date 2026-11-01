@@ -18,7 +18,9 @@ test("header is absent outside Tauri and follows the selected conversation insid
     assert.equal(isTauri(), true);
     assert.match(render(), /새 채팅/);
     const first = render("코드 검토");
-    assert.match(first, /Agent Orchestra/);
+    assert.match(first, /<svg class="sinawi-mark"[^>]*aria-hidden="true"/);
+    assert.match(first, /<\/svg>Sinawi<\/span>/);
+    assert.doesNotMatch(first, /Agent Orchestra/);
     assert.match(first, /코드 검토/);
     const button = first.match(/<button\b[^>]*>/)?.[0];
     assert.ok(button, "desktop header includes a reload button");

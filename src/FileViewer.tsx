@@ -2,9 +2,10 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, Minus, Plus, X } from "lucide-react";
 import { MarkdownSessionContext, localImageSrc } from "./markdown-images";
 import { Markdown } from "./Markdown";
-import { PDF_RENDER_ERROR, PdfCanvas } from "./PdfCanvas";
+import { pdfRenderError, PdfCanvas } from "./PdfCanvas";
 import { writeClipboard } from "./CopyButton";
 import { clampZoom, fileActionUrl, formatBytes, kindLabel, mediaUrl, parseCsv, stepIndex, swipeDirection, trapFocusIndex, type MediaRef } from "./viewer-model";
+import { t } from "./i18n";
 
 const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
@@ -65,10 +66,10 @@ export function FileViewer({ items, index, onIndex, onClose }: {
     void fetch(mediaUrl(sessionId, current.path, { text: true })).then(async (res) => {
       const data = await res.json().catch(() => ({})) as { text?: string; truncated?: boolean; error?: string };
       if (cancel) return;
-      if (!res.ok) { setTextError(data.error || "파일을 읽지 못했습니다."); return; }
+      if (!res.ok) { setTextError(data.error || t("viewer.readFailed")); return; }
       setText(data.text ?? "");
       setTruncated(Boolean(data.truncated));
-    }).catch(() => { if (!cancel) setTextError("파일을 읽지 못했습니다."); });
+    }).catch(() => { if (!cancel) setTextError(t("viewer.readFailed")); });
     return () => { cancel = true; };
   }, [current, local, sessionId]);
 
@@ -81,14 +82,14 @@ export function FileViewer({ items, index, onIndex, onClose }: {
       const type = res.headers.get("content-type") ?? "";
       if (!res.ok || type.includes("json")) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        if (!cancel) setOffice({ phase: "fallback", message: data.error || "PDF로 바꾸지 못했습니다." });
+        if (!cancel) setOffice({ phase: "fallback", message: data.error || t("viewer.convertFailed") });
         return;
       }
       const blob = await res.blob();
       objectUrl = URL.createObjectURL(blob);
       if (cancel) { URL.revokeObjectURL(objectUrl); return; }
       setOffice({ phase: "ready", url: objectUrl });
-    }).catch(() => { if (!cancel) setOffice({ phase: "fallback", message: "PDF로 바꾸지 못했습니다." }); });
+    }).catch(() => { if (!cancel) setOffice({ phase: "fallback", message: t("viewer.convertFailed") }); });
     return () => { cancel = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [current, sessionId]);
 
@@ -133,13 +134,13 @@ export function FileViewer({ items, index, onIndex, onClose }: {
     try {
       const res = await fetch(fileActionUrl(sessionId), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: current.path, action }) });
       const data = await res.json().catch(() => ({})) as { error?: string };
-      if (!res.ok) setNotice(data.error || "파일을 열지 못했습니다.");
-    } catch { setNotice("파일을 열지 못했습니다."); }
+      if (!res.ok) setNotice(data.error || t("viewer.openFailed"));
+    } catch { setNotice(t("viewer.openFailed")); }
   };
   const copyPath = async () => {
     const value = metaPath || current.path;
     const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
-    setNotice(await writeClipboard(value, clipboard) ? "경로를 복사했습니다." : "경로를 복사하지 못했습니다.");
+    setNotice(await writeClipboard(value, clipboard) ? t("viewer.pathCopied") : t("viewer.pathCopyFailed"));
   };
 
   const rows = current.kind === "csv" ? parseCsv(text) : [];
@@ -152,28 +153,28 @@ export function FileViewer({ items, index, onIndex, onClose }: {
         </div>
         <div className="viewer-actions">
           {current.kind === "image" && <>
-            <button type="button" aria-label="축소" onClick={() => setZoom((value) => clampZoom(value - 0.5))}><Minus size={16} /></button>
-            <button type="button" aria-label="확대" onClick={() => setZoom((value) => clampZoom(value + 0.5))}><Plus size={16} /></button>
+            <button type="button" aria-label={t("viewer.zoomOut")} onClick={() => setZoom((value) => clampZoom(value - 0.5))}><Minus size={16} /></button>
+            <button type="button" aria-label={t("viewer.zoomIn")} onClick={() => setZoom((value) => clampZoom(value + 0.5))}><Plus size={16} /></button>
           </>}
           {showPager && <>
-            <button type="button" aria-label="이전 페이지" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={16} /></button>
+            <button type="button" aria-label={t("viewer.prevPage")} disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={16} /></button>
             <span className="viewer-page">{page}/{pages}</span>
-            <button type="button" aria-label="다음 페이지" disabled={page >= pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}><ChevronRight size={16} /></button>
-            <button type="button" aria-label="축소" onClick={() => setZoom((value) => clampZoom(value - 0.25, 0.5, 3))}><Minus size={16} /></button>
-            <button type="button" aria-label="확대" onClick={() => setZoom((value) => clampZoom(value + 0.25, 0.5, 3))}><Plus size={16} /></button>
+            <button type="button" aria-label={t("viewer.nextPage")} disabled={page >= pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}><ChevronRight size={16} /></button>
+            <button type="button" aria-label={t("viewer.zoomOut")} onClick={() => setZoom((value) => clampZoom(value - 0.25, 0.5, 3))}><Minus size={16} /></button>
+            <button type="button" aria-label={t("viewer.zoomIn")} onClick={() => setZoom((value) => clampZoom(value + 0.25, 0.5, 3))}><Plus size={16} /></button>
           </>}
           {items.length > 1 && <>
-            <button type="button" aria-label="이전 파일" onClick={() => move(-1)}><ChevronLeft size={16} /></button>
-            <button type="button" aria-label="다음 파일" onClick={() => move(1)}><ChevronRight size={16} /></button>
+            <button type="button" aria-label={t("viewer.prevFile")} onClick={() => move(-1)}><ChevronLeft size={16} /></button>
+            <button type="button" aria-label={t("viewer.nextFile")} onClick={() => move(1)}><ChevronRight size={16} /></button>
           </>}
           {local && <>
-            <button type="button" onClick={() => void act("reveal")}><FolderOpen size={15} />Finder에서 보기</button>
-            <button type="button" onClick={() => void act("open")}><ExternalLink size={15} />기본 앱으로 열기</button>
+            <button type="button" onClick={() => void act("reveal")}><FolderOpen size={15} />{t("viewer.reveal")}</button>
+            <button type="button" onClick={() => void act("open")}><ExternalLink size={15} />{t("viewer.openDefault")}</button>
             <button type="button" onClick={() => void act("quicklook")}>Quick Look</button>
-            <button type="button" onClick={() => void copyPath()}><Copy size={15} />경로 복사</button>
+            <button type="button" onClick={() => void copyPath()}><Copy size={15} />{t("viewer.copyPath")}</button>
           </>}
-          <a className="viewer-download" href={local ? mediaUrl(sessionId, current.path, { download: true }) : src} download={current.name}><Download size={15} />다운로드</a>
-          <button type="button" className="viewer-close" aria-label="닫기" onClick={onClose}><X size={18} /></button>
+          <a className="viewer-download" href={local ? mediaUrl(sessionId, current.path, { download: true }) : src} download={current.name}><Download size={15} />{t("viewer.download")}</a>
+          <button type="button" className="viewer-close" aria-label={t("viewer.close")} onClick={onClose}><X size={18} /></button>
         </div>
       </header>
       {notice && <p className="viewer-notice" role="status">{notice}</p>}
@@ -185,24 +186,24 @@ export function FileViewer({ items, index, onIndex, onClose }: {
           if (direction) onIndex(stepIndex(index, direction, items.length));
         }}>
         {current.kind === "image" && (imageFailed
-          ? <p className="viewer-status" role="alert">이미지를 표시하지 못했습니다.</p>
+          ? <p className="viewer-status" role="alert">{t("viewer.imageFailed")}</p>
           : <img className="viewer-image" src={local ? (localImageSrc(current.path, sessionId) ?? src) : src} alt={current.name} style={{ width: `${zoom * 100}%` }} onDoubleClick={() => setZoom((value) => value > 1 ? 1 : 2)} onError={() => setImageFailed(true)} />)}
         {current.kind === "video" && <div className="viewer-video"><video key={src} src={src} controls playsInline preload="metadata" /></div>}
         {current.kind === "audio" && <div className="viewer-audio"><audio key={src} src={src} controls preload="metadata" /></div>}
-        {current.kind === "pdf" && <div className="viewer-pdf"><PdfCanvas url={src} page={page} scale={zoom} onPages={setPages} onError={() => setNotice(PDF_RENDER_ERROR)} /></div>}
-        {(current.kind === "office" || current.kind === "hwp") && office.phase === "loading" && <p className="viewer-status" role="status">PDF로 바꾸는 중…</p>}
+        {current.kind === "pdf" && <div className="viewer-pdf"><PdfCanvas url={src} page={page} scale={zoom} onPages={setPages} onError={() => setNotice(pdfRenderError())} /></div>}
+        {(current.kind === "office" || current.kind === "hwp") && office.phase === "loading" && <p className="viewer-status" role="status">{t("viewer.converting")}</p>}
         {(current.kind === "office" || current.kind === "hwp") && office.phase === "fallback" && <div className="viewer-fallback">
           <p>{office.message}</p>
-          <button type="button" onClick={() => void act("quicklook")}>Quick Look으로 열기</button>
+          <button type="button" onClick={() => void act("quicklook")}>{t("viewer.quickLook")}</button>
         </div>}
-        {(current.kind === "office" || current.kind === "hwp") && office.phase === "ready" && pdfSrc && <div className="viewer-pdf"><PdfCanvas url={pdfSrc} page={page} scale={zoom} onPages={setPages} onError={() => setOffice({ phase: "fallback", message: "PDF를 표시하지 못했습니다. Quick Look으로 열 수 있습니다." })} /></div>}
+        {(current.kind === "office" || current.kind === "hwp") && office.phase === "ready" && pdfSrc && <div className="viewer-pdf"><PdfCanvas url={pdfSrc} page={page} scale={zoom} onPages={setPages} onError={() => setOffice({ phase: "fallback", message: t("viewer.pdfFallback") })} /></div>}
         {textError && <p className="viewer-status" role="alert">{textError}</p>}
         {current.kind === "markdown" && text && <div className="viewer-markdown"><Markdown text={text} /></div>}
         {current.kind === "csv" && text && <div className="viewer-table-wrap"><table>{rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => rowIndex === 0 ? <th key={cellIndex}>{cell}</th> : <td key={cellIndex}>{cell}</td>)}</tr>)}</table></div>}
         {(current.kind === "text" || current.kind === "code") && text && <pre className="viewer-text"><code>{text}</code></pre>}
-        {truncated && <p className="viewer-status">앞부분만 표시합니다.</p>}
+        {truncated && <p className="viewer-status">{t("viewer.truncated")}</p>}
       </div>
-      {items.length > 1 && <div className="viewer-strip" aria-label="썸네일">
+      {items.length > 1 && <div className="viewer-strip" aria-label={t("viewer.thumbnails")}>
         {items.map((item, itemIndex) => <button type="button" key={`${item.path}-${itemIndex}`} aria-current={itemIndex === index} aria-label={`${itemIndex + 1} ${item.name}`} onClick={() => onIndex(itemIndex)}>
           {item.kind === "image" ? <img src={localImageSrc(item.path, sessionId) ?? item.path} alt="" /> : <span>{item.name}</span>}
         </button>)}

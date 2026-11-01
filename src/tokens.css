@@ -1,0 +1,291 @@
+/*
+ * Sinawi design tokens — direction "A · neutral tone".
+ *
+ * This is the only file that holds raw colour values. Every other stylesheet reads
+ * these semantic variables, so re-theming means editing the blocks below and nothing else.
+ *
+ * Theme contract (html[data-theme] is set by the settings UI):
+ *   html[data-theme="dark"]   → dark, always
+ *   html[data-theme="light"]  → light, always
+ *   no data-theme attribute   → follows prefers-color-scheme (dark when there is no preference)
+ *
+ * Type scale: every font-size in the app is written as calc(<px> * var(--font-scale)),
+ * so setting --font-scale on <html> (e.g. 1.1) scales text without touching layout boxes.
+ *
+ * Import order (main.tsx): tokens.css must load first so every sheet sees the variables;
+ * fonts.css next. Colour and type no longer depend on order: each selector+property pair is
+ * declared once (the old polish.css/readability.css override layers were folded into their
+ * owners). What still relies on order is limited to equal-specificity rules with *different*
+ * selectors that hit the same element:
+ *   - style.css first — Tailwind preflight plus element defaults (button, input, small, h1…)
+ *     that component sheets refine with single-class selectors.
+ *   - chat-layout.css after style.css — it re-lays out the legacy .rail/.conversation shell
+ *     with grouped selectors (e.g. ".app-shell main, .app-shell.sidebar-expanded main").
+ *   - readability.css after the component sheets — its grouped type-scale selectors
+ *     (small, time, .subtle-tag, …) set the metadata size/colour those sheets leave open.
+ *   - appearance.css / beat.css (owned by the settings UI) only style their own classes.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* — Surfaces — */
+  --bg-app: #0d0e10;
+  --bg-sidebar: #0f1012;
+  --bg-surface: #131518;
+  --bg-raised: #16181b;
+  --bg-overlay: #1a1c20;       /* menus, popovers, toasts */
+  --bg-hover: #1a1c20;
+  --bg-active: #1d2024;
+  --bg-strong: #2a2e33;        /* pressed segment, scrollbar thumb */
+  --bg-inset: #0f1012;         /* segmented-control track, code blocks */
+  --backdrop: rgba(5, 6, 7, 0.62);
+
+  /* — Borders — */
+  --border-subtle: #1b1e22;
+  --border: #22252a;
+  --border-strong: #2a2e33;
+  --border-focus: #5bd6a0;
+
+  /* — Text — */
+  --text: #ecedef;
+  --text-prose: #d7dade;  /* long-form message text */
+  --text-secondary: #c9cdd2;
+  --text-muted: #8e959d;
+  --text-subtle: #808790;      /* ≥ 4.5:1 on app, raised and active backgrounds */
+  --text-disabled: #4a4f56;
+  --icon: #a3a9b0;
+
+  /* — Accent — */
+  --accent: #5bd6a0;
+  --accent-hover: #7fe0b4;
+  --accent-text: #06110c;      /* text on an accent fill */
+  --accent-fg: #7fe0b4;        /* accent-coloured text/links on surfaces */
+  --accent-tint: #12291f;      /* quiet accent background (badges, selection halo) */
+  --accent-border: #1f4a37;
+  --selection: rgba(91, 214, 160, 0.28);
+
+  /* — Status — */
+  --ok: #5bd6a0;
+  --ok-fg: #7fe0b4;
+  --ok-tint: #12291f;
+  --warn: #f2a65a;
+  --warn-fg: #f2b277;
+  --warn-tint: #2e2215;
+  --danger: #e5735c;
+  --danger-fg: #f08a76;
+  --danger-tint: #2e1814;
+  --danger-border: #5a2a21;
+  --info: #8aa4ff;
+  --info-fg: #a3b6ff;
+  --info-tint: #1a2140;
+  --on-status: #0d0e10;        /* text on a solid warn/info/danger fill */
+  --on-warn: #0d0e10;
+
+  /* — Agents — */
+  --agent-claude: #e0896a;
+  --agent-codex: #a9b1ba;
+  --agent-grok: #8aa4ff;
+
+  /* — Logo mark: --mark-1 is the tile fill, --mark-2/--mark-3 the strokes drawn on it.
+       The tile contrasts with the app background, so the strokes use the opposite theme's hues. — */
+  --mark-1: #ecedef;
+  --mark-2: #138a5a;
+  --mark-3: #d9774f;
+  --mono-logo-filter: brightness(0) invert(1); /* monochrome brand SVGs (Codex, Grok) */
+
+  /* — Terminal (xterm theme can read these via getComputedStyle) — */
+  --terminal-bg: #0f1012;
+  --terminal-fg: #d7dade;
+  --terminal-cursor: #5bd6a0;
+  --terminal-selection: rgba(91, 214, 160, 0.28);
+
+  /* — Fixed (theme-independent) — */
+  --traffic-close: #ff5f57;
+  --traffic-min: #febc2e;
+  --traffic-max: #28c840;
+  --traffic-glyph: rgba(0, 0, 0, 0.6);
+  --content-canvas: #ffffff;   /* web page / PDF paper behind embedded content */
+  --media-bg: #000000;
+
+  /* — Elevation — */
+  --shadow-color: rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --highlight: rgba(255, 255, 255, 0.04); /* inset top highlight */
+
+  /* — Radii — */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-full: 999px;
+
+  /* — Typography — */
+  --font-ui: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  --font-scale: 1;
+
+  /* Legacy names still referenced by components; keep them pointing at the semantic tokens. */
+  --font-sans: var(--font-ui);
+  --muted: var(--text-muted);
+  --line: var(--border);
+  --sage: var(--accent);
+  --panel: var(--bg-surface);
+}
+
+/* Light, chosen explicitly. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-app: #f6f7f8;
+  --bg-sidebar: #fbfbfc;
+  --bg-surface: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-overlay: #ffffff;
+  --bg-hover: #f1f3f5;
+  --bg-active: #edeff1;
+  --bg-strong: #e3e6e9;
+  --bg-inset: #f1f3f5;
+  --backdrop: rgba(17, 19, 21, 0.32);
+
+  --border-subtle: #eef0f2;
+  --border: #e6e8eb;
+  --border-strong: #dcdfe3;
+  --border-focus: #0e7a4e;
+
+  --text: #111315;
+  --text-prose: #2b2f33;
+  --text-secondary: #3a3f45;
+  --text-muted: #575e66;
+  --text-subtle: #5f666e;
+  --text-disabled: #b4b9bf;
+  --icon: #5a6067;
+
+  --accent: #0e7a4e;
+  --accent-hover: #0a6b44;
+  --accent-text: #ffffff;
+  --accent-fg: #0e7a4e;
+  --accent-tint: #e3f5ec;
+  --accent-border: #b9e4cf;
+  --selection: rgba(19, 138, 90, 0.2);
+
+  --ok: #138a5a;
+  --ok-fg: #0e7a4e;
+  --ok-tint: #e3f5ec;
+  --warn: #e08a2e;
+  --warn-fg: #9a5512;
+  --warn-tint: #fdf1e3;
+  --danger: #d9533e;
+  --danger-fg: #b83a27;
+  --danger-tint: #fcebe8;
+  --danger-border: #f2c4bb;
+  --info: #3b5bdb;
+  --info-fg: #3451d1;
+  --info-tint: #eaefff;
+  --on-status: #ffffff;
+  --on-warn: #2a1a05;
+
+  --agent-claude: #d9774f;
+  --agent-codex: #6b7480;
+  --agent-grok: #4c6ef5;
+
+  --mark-1: #111315;
+  --mark-2: #5bd6a0;
+  --mark-3: #e0896a;
+  --mono-logo-filter: brightness(0) opacity(0.82);
+
+  /* Read by the xterm theme in TerminalPanel.tsx (re-applied when the theme changes). */
+  --terminal-bg: #fbfbfa;
+  --terminal-fg: #1f2328;
+  --terminal-cursor: #0e7a4e;
+  --terminal-selection: rgba(14, 122, 78, 0.18);
+
+  --shadow-color: rgba(17, 19, 21, 0.1);
+  --shadow-sm: 0 1px 2px rgba(17, 19, 21, 0.06);
+  --shadow-md: 0 4px 14px rgba(17, 19, 21, 0.08);
+  --shadow-lg: 0 16px 40px rgba(17, 19, 21, 0.14);
+  --highlight: rgba(255, 255, 255, 0.7);
+}
+
+/* Light, following the OS when the user has not chosen. Must mirror the block above. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+
+    --bg-app: #f6f7f8;
+    --bg-sidebar: #fbfbfc;
+    --bg-surface: #ffffff;
+    --bg-raised: #ffffff;
+    --bg-overlay: #ffffff;
+    --bg-hover: #f1f3f5;
+    --bg-active: #edeff1;
+    --bg-strong: #e3e6e9;
+    --bg-inset: #f1f3f5;
+    --backdrop: rgba(17, 19, 21, 0.32);
+
+    --border-subtle: #eef0f2;
+    --border: #e6e8eb;
+    --border-strong: #dcdfe3;
+    --border-focus: #0e7a4e;
+
+    --text: #111315;
+    --text-prose: #2b2f33;
+    --text-secondary: #3a3f45;
+    --text-muted: #575e66;
+    --text-subtle: #5f666e;
+    --text-disabled: #b4b9bf;
+    --icon: #5a6067;
+
+    --accent: #0e7a4e;
+    --accent-hover: #0a6b44;
+    --accent-text: #ffffff;
+    --accent-fg: #0e7a4e;
+    --accent-tint: #e3f5ec;
+    --accent-border: #b9e4cf;
+    --selection: rgba(19, 138, 90, 0.2);
+
+    --ok: #138a5a;
+    --ok-fg: #0e7a4e;
+    --ok-tint: #e3f5ec;
+    --warn: #e08a2e;
+    --warn-fg: #9a5512;
+    --warn-tint: #fdf1e3;
+    --danger: #d9533e;
+    --danger-fg: #b83a27;
+    --danger-tint: #fcebe8;
+    --danger-border: #f2c4bb;
+    --info: #3b5bdb;
+    --info-fg: #3451d1;
+    --info-tint: #eaefff;
+    --on-status: #ffffff;
+    --on-warn: #2a1a05;
+
+    --agent-claude: #d9774f;
+    --agent-codex: #6b7480;
+    --agent-grok: #4c6ef5;
+
+    --mark-1: #111315;
+    --mark-2: #5bd6a0;
+    --mark-3: #e0896a;
+    --mono-logo-filter: brightness(0) opacity(0.82);
+
+    /* Read by the xterm theme in TerminalPanel.tsx (re-applied when the theme changes). */
+    --terminal-bg: #fbfbfa;
+    --terminal-fg: #1f2328;
+    --terminal-cursor: #0e7a4e;
+    --terminal-selection: rgba(14, 122, 78, 0.18);
+
+    --shadow-color: rgba(17, 19, 21, 0.1);
+    --shadow-sm: 0 1px 2px rgba(17, 19, 21, 0.06);
+    --shadow-md: 0 4px 14px rgba(17, 19, 21, 0.08);
+    --shadow-lg: 0 16px 40px rgba(17, 19, 21, 0.14);
+    --highlight: rgba(255, 255, 255, 0.7);
+  }
+}
+
+html {
+  background: var(--bg-app);
+}

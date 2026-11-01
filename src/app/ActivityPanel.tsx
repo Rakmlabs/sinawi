@@ -3,17 +3,18 @@ import { AgentMark } from "../AgentMark";
 import { workerLogSummary, type workerLogRows } from "../worker-log";
 import { eventLabels } from "./labels";
 import type { Session } from "../../server/types";
+import { t } from "../i18n";
 
 type Row = ReturnType<typeof workerLogRows>[number];
 
 /** Right column: recent non-message activity of the active session. */
 export function ActivityPanel({ active, connected, rows, onClose }: { active: Session | undefined; connected: boolean; rows: Row[]; onClose: () => void }) {
-  return <aside className="right-column" id="activity-panel" aria-label="실시간 활동">
+  return <aside className="right-column" id="activity-panel" aria-label={t("activity.label")}>
     <section className="glass activity-panel">
       <div className="panel-header">
         <div>
           <Radio size={17} />
-          <h2>작업 내역</h2>
+          <h2>{t("activity.title")}</h2>
         </div>
         <span
           className={`live-badge ${!connected ? "offline" : ""}`}
@@ -21,12 +22,12 @@ export function ActivityPanel({ active, connected, rows, onClose }: { active: Se
         >
           <i />
           {!connected
-            ? "연결 끊김"
+            ? t("activity.disconnected")
             : active?.status === "running"
-              ? "진행 중"
-              : "대기 중"}
+              ? t("activity.running")
+              : t("activity.idle")}
         </span>
-        <button className="icon-button" aria-label="작업 내역 접기" onClick={onClose}><X size={16} /></button>
+        <button className="icon-button" aria-label={t("activity.close")} onClick={onClose}><X size={16} /></button>
       </div>
       <div className="activity-content">
         {!active ? (
@@ -34,22 +35,22 @@ export function ActivityPanel({ active, connected, rows, onClose }: { active: Se
             <span className="radar">
               <Radio size={27} />
             </span>
-            <h3>작업 과정을 한눈에.</h3>
+            <h3>{t("activity.emptyTitle")}</h3>
             <p>
-              명령 실행, 도구 사용, 파일 변경 내역이
+              {t("activity.emptyBody1")}
               <br />
-              여기에 실시간으로 표시됩니다.
+              {t("activity.emptyBody2")}
             </p>
-            <span>첫 세션을 기다리고 있습니다</span>
+            <span>{t("activity.waiting")}</span>
           </div>
         ) : (
           <div
             className="event-list"
             role="log"
-            aria-label="최근 에이전트 활동"
+            aria-label={t("activity.recent")}
             aria-live="off"
           >
-            {rows.length === 0 && <p className="thread-empty">아직 작업 내역이 없습니다.</p>}
+            {rows.length === 0 && <p className="thread-empty">{t("activity.none")}</p>}
             {rows.map((row) => <div className={`activity-summary event-${row.type}`} key={row.event.id}>
               <AgentMark agent={row.event.agent} size="small" /><span title={workerLogSummary(row)}>{row.event.workerLabel ? `${row.event.workerLabel} · ` : ""}{eventLabels[row.type]} · {workerLogSummary(row)}</span>
               <time>{new Date(row.event.time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</time>
@@ -59,7 +60,7 @@ export function ActivityPanel({ active, connected, rows, onClose }: { active: Se
       </div>
       <div className="activity-footer">
         <Terminal size={13} />
-        <span>실시간 CLI 활동 내역</span>
+        <span>{t("activity.footer")}</span>
         <span className="tiny-dot" />
       </div>
     </section>

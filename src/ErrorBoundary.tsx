@@ -1,5 +1,6 @@
 import { isStrandedShell, returnToAppServer } from "./app-origin";
 import { Component, Fragment, type ErrorInfo, type ReactNode } from "react";
+import { t } from "./i18n";
 
 type ErrorBoundaryProps = {
   children: ReactNode;
@@ -14,10 +15,10 @@ export function AppErrorFallback({ onRetry }: { onRetry: () => void }) {
   return (
     <main className="app-error-boundary" role="alert">
       <div className="app-error-card">
-        <h1>화면을 표시하지 못했습니다</h1>
-        <p>잠시 문제가 발생했습니다. 다시 시도하면 작업 화면을 새로 불러옵니다.</p>
+        <h1>{t("errorBoundary.title")}</h1>
+        <p>{t("errorBoundary.body")}</p>
         <button type="button" className="button primary" onClick={onRetry}>
-          다시 시도
+          {t("common.retry")}
         </button>
       </div>
     </main>

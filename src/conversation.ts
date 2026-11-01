@@ -1,5 +1,6 @@
 import { parseWorkerLog, workerLogSummary } from "./worker-log";
 import type { AgentId, Session, SessionEvent, SessionStatus } from "../server/types";
+import { t } from "./i18n";
 
 export function conversationText(text: string): string {
   return text.replace(/<<DELEGATE\s+to=["'][^"'<>]+["']>>[\s\S]*?<<\/DELEGATE>>/gi, "").trim();
@@ -26,9 +27,9 @@ export interface DelegationWorker {
   activity: string;
 }
 
-export function liveBadgeLabel(event: Pick<SessionEvent, "metadata">): "상태" | "지시" | undefined {
-  if (event.metadata?.live === "status") return "상태";
-  if (event.metadata?.live === "directive") return "지시";
+export function liveBadgeLabel(event: Pick<SessionEvent, "metadata">): string | undefined {
+  if (event.metadata?.live === "status") return t("live.status");
+  if (event.metadata?.live === "directive") return t("live.directive");
 }
 
 export function canPromoteLive(event: Pick<SessionEvent, "metadata">): boolean {
@@ -70,7 +71,7 @@ export function delegationTasks(session: Session, now: number): DelegationTask[]
     const end = terminal?.time ?? (status === "running" ? undefined : last?.time ?? session.endedAt ?? event.time);
     const current = [...thread].reverse().find((item) => item.role === "worker" && item.agent !== "user");
     const displayedEvent = current ? { ...event, agent: current.agent, model: current.model ?? event.model, reasoningEffort: current.reasoningEffort ?? event.reasoningEffort } : event;
-    tasks.push({ event: displayedEvent, thread, status, elapsed: formatElapsed(Date.parse(event.time), end ? Date.parse(end) : now), startedAt: event.time, endedAt: end, activity: (last ? workerLogSummary(parseWorkerLog(last)) : "") || "작업을 준비하고 있습니다" });
+    tasks.push({ event: displayedEvent, thread, status, elapsed: formatElapsed(Date.parse(event.time), end ? Date.parse(end) : now), startedAt: event.time, endedAt: end, activity: (last ? workerLogSummary(parseWorkerLog(last)) : "") || t("delegation.preparing") });
   });
   return tasks;
 }

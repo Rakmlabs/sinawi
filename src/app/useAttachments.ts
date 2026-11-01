@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { uploadFraction, uploadRejection } from "../viewer-model";
 import type { ComposerAttachment } from "../preview-attachments";
+import { t } from "../i18n";
 
 /**
  * Composer attachments: browser element captures, pasted images and dropped files.
@@ -28,7 +29,7 @@ export function useAttachments(composerInput: RefObject<HTMLTextAreaElement | nu
       return {
         id: Math.random().toString(36).slice(2, 10),
         kind: image ? "image" as const : "file" as const,
-        label: file.name && file.name !== "image.png" ? file.name : image ? "이미지" : "파일",
+        label: file.name && file.name !== "image.png" ? file.name : image ? t("common.image") : t("common.file"),
         preview: image ? URL.createObjectURL(file) : undefined,
         size: file.size,
         progress: 0,
@@ -47,9 +48,9 @@ export function useAttachments(composerInput: RefObject<HTMLTextAreaElement | nu
         let data: { path?: string; error?: string } = {};
         try { data = JSON.parse(xhr.responseText || "{}"); } catch { /* keep */ }
         if (xhr.status >= 200 && xhr.status < 300 && data.path) patchAttachment(id, { screenshotPath: data.path, progress: undefined, error: undefined });
-        else patchAttachment(id, { progress: undefined, error: data.error || "첨부 저장 실패" });
+        else patchAttachment(id, { progress: undefined, error: data.error || t("attach.saveFailed") });
       };
-      xhr.onerror = () => { uploads.current.delete(id); patchAttachment(id, { progress: undefined, error: "첨부 저장 실패" }); };
+      xhr.onerror = () => { uploads.current.delete(id); patchAttachment(id, { progress: undefined, error: t("attach.saveFailed") }); };
       xhr.onabort = () => { uploads.current.delete(id); setAttachments((old) => old.filter((item) => item.id !== id)); };
       xhr.send(file);
     }

@@ -3,6 +3,7 @@ import { LockKeyhole, Search, SlidersHorizontal, Wrench } from "lucide-react";
 import type { WorkspaceId } from "../server/types";
 import { AgentMark } from "./AgentMark";
 import { openTerminal } from "./terminal-events";
+import { t, translatedMap } from "./i18n";
 
 export type McpTool = {
   agent: string;
@@ -34,16 +35,16 @@ type ToolTab = "mcp" | "skills";
 type ToolRow = McpTool | ManagedSkill;
 
 const agentNames: Record<string, string> = { codex: "Codex", claude: "Claude", grok: "Grok Build" };
-const statusLabels: Record<string, string> = {
-  enabled: "사용 중",
-  disabled: "사용 안 함",
-  connected: "연결됨",
-  disconnected: "연결 안 됨",
-  "app-disabled": "앱에서 사용 안 함",
-  unavailable: "CLI 없음",
-  error: "확인 실패",
-  "app-level": "앱에서 관리",
-};
+const statusLabels: Record<string, string> = translatedMap({
+  enabled: "tools.enabled",
+  disabled: "tools.disabled",
+  connected: "tools.connected",
+  disconnected: "tools.disconnected",
+  "app-disabled": "tools.appDisabled",
+  unavailable: "tools.unavailable",
+  error: "tools.error",
+  "app-level": "tools.appLevel",
+});
 
 function workspaceParam(workspaceId: WorkspaceId) {
   return workspaceId === "company" ? "work" : "personal";
@@ -64,12 +65,12 @@ export function toolUpdateRequest(workspaceId: WorkspaceId, cwd: string, kind: "
 }
 
 export function toolStatusPresentation(tool: McpTool): { label: string; tone: string } {
-  if (tool.forcedOff || tool.status === "locked") return { label: "잠김", tone: "locked" };
-  if (tool.needsAuth && tool.appEnabled && tool.nativeEnabled) return { label: "인증 필요", tone: "error" };
+  if (tool.forcedOff || tool.status === "locked") return { label: t("tools.locked"), tone: "locked" };
+  if (tool.needsAuth && tool.appEnabled && tool.nativeEnabled) return { label: t("tools.needsAuth"), tone: "error" };
   if (tool.agent === "claude") {
-    if (tool.status === "disconnected") return { label: "연결 안 됨 · 앱에서 관리", tone: "error" };
-    if (tool.status === "app-disabled") return { label: "앱에서 사용 안 함", tone: "disabled" };
-    return { label: "연결됨 · 앱에서 관리", tone: "enabled" };
+    if (tool.status === "disconnected") return { label: t("tools.disconnectedApp"), tone: "error" };
+    if (tool.status === "app-disabled") return { label: t("tools.appDisabled"), tone: "disabled" };
+    return { label: t("tools.connectedApp"), tone: "enabled" };
   }
   const tone = tool.status === "connected" ? "enabled" : tool.status === "disconnected" ? "error" : tool.status;
   return { label: statusLabels[tool.status] ?? tool.status, tone };
@@ -96,7 +97,7 @@ export function filterTools<T extends ToolRow>(rows: T[], query: string): T[] {
   return rows.filter((row) => {
     const text = "agents" in row
       ? [row.name, row.source, row.description, ...row.agents.map((agent) => agentNames[agent] ?? agent)]
-      : [row.name, row.agent, agentNames[row.agent] ?? row.agent, row.url, row.command, row["url/command"], row.status, row.reason, row.displayName, row.needsAuth ? "인증 필요" : ""];
+      : [row.name, row.agent, agentNames[row.agent] ?? row.agent, row.url, row.command, row["url/command"], row.status, row.reason, row.displayName, row.needsAuth ? t("tools.needsAuth") : ""];
     return text.filter(Boolean).join(" ").toLocaleLowerCase().includes(needle);
   });
 }
@@ -106,7 +107,7 @@ async function fetchTools(path: string, init?: RequestInit): Promise<ToolsState>
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
-  if (!response.ok) throw new Error((await response.text()) || `도구 정보를 불러오지 못했습니다 (${response.status})`);
+  if (!response.ok) throw new Error((await response.text()) || t("tools.loadFailed", { status: response.status }));
   return response.json() as Promise<ToolsState>;
 }
 
@@ -185,19 +186,19 @@ export function ToolsPanel({ workspaceId, cwd, initialState, initialTab = "mcp",
   const visible = tab === "mcp" ? mcpGroups.reduce((sum, [, rows]) => sum + rows.length, 0) : skillGroups.reduce((sum, [, rows]) => sum + rows.length, 0);
   return <section className="tools-page" aria-labelledby="tools-heading">
     <header className="tools-heading">
-      <div><Wrench size={24} aria-hidden="true" /><div><h1 id="tools-heading">도구 관리</h1><p>{workspaceId === "company" ? "회사" : "개인"} 공간에서 에이전트가 사용할 MCP와 스킬을 관리합니다.</p></div></div>
-      <span className="tools-count" aria-label={`전체 ${total}개`}>{total}</span>
+      <div><Wrench size={24} aria-hidden="true" /><div><h1 id="tools-heading">{t("tools.title")}</h1><p>{t("tools.intro", { space: workspaceId === "company" ? t("workspace.company") : t("workspace.personal") })}</p></div></div>
+      <span className="tools-count" aria-label={t("tools.total", { n: total })}>{total}</span>
     </header>
     <div className="glass tools-surface">
       <div className="tools-toolbar">
-        <div className="tools-tabs" role="tablist" aria-label="도구 종류">
+        <div className="tools-tabs" role="tablist" aria-label={t("tools.kinds")}>
           <button role="tab" aria-selected={tab === "mcp"} onClick={() => setTab("mcp")}><SlidersHorizontal size={16} />MCP</button>
-          <button role="tab" aria-selected={tab === "skills"} onClick={() => setTab("skills")}><Wrench size={16} />스킬</button>
+          <button role="tab" aria-selected={tab === "skills"} onClick={() => setTab("skills")}><Wrench size={16} />{t("tools.skills")}</button>
         </div>
-        <label className="tools-search"><Search size={17} aria-hidden="true" /><input type="search" aria-label="도구 검색" placeholder="이름, 에이전트, 설명 검색" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <label className="tools-search"><Search size={17} aria-hidden="true" /><input type="search" aria-label={t("tools.search")} placeholder={t("tools.searchPlaceholder")} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
       </div>
-      {error && <div className="tools-error" role="alert"><span>{error}</span><button className="button light" onClick={() => void load()}>다시 시도</button></div>}
-      {loading && <div className="tools-empty" role="status">도구 상태를 확인하는 중…</div>}
+      {error && <div className="tools-error" role="alert"><span>{error}</span><button className="button light" onClick={() => void load()}>{t("common.retry")}</button></div>}
+      {loading && <div className="tools-empty" role="status">{t("tools.loading")}</div>}
       {!loading && tools && tab === "mcp" && <div className="tools-groups" role="tabpanel">
         {mcpGroups.map(([agent, rows]) => <section className="tools-group" key={agent} aria-labelledby={`tools-${agent}`}>
           <h2 id={`tools-${agent}`}><AgentMark agent={agent} />{agentNames[agent] ?? agent}<span>{rows.length}</span></h2>
@@ -205,10 +206,10 @@ export function ToolsPanel({ workspaceId, cwd, initialState, initialTab = "mcp",
             const enabled = tool.nativeEnabled && tool.appEnabled && !tool.forcedOff;
             const presentation = toolStatusPresentation(tool);
             return <div className={`tool-row${tool.forcedOff ? " locked" : ""}`} key={`${tool.agent}:${tool.name}`}>
-              <div className="tool-copy"><strong title={tool.name}>{tool.displayName ?? tool.name}</strong><span>{tool.url || tool.command || tool["url/command"] || "앱 설정"}</span>{tool.agent === "claude" && !tool.forcedOff && !tool.reason && <small>Claude MCP는 앱에서만 켜고 끕니다. CLI 연결 상태는 읽기 전용입니다.</small>}{tool.reason && !tool.needsAuth && <small>{tool.reason}</small>}{tool.needsAuth && tool.authHint && <small>{tool.authHint} · 안 쓰면 꺼두세요.</small>}</div>
+              <div className="tool-copy"><strong title={tool.name}>{tool.displayName ?? tool.name}</strong><span>{tool.url || tool.command || tool["url/command"] || t("tools.appSettings")}</span>{tool.agent === "claude" && !tool.forcedOff && !tool.reason && <small>{t("tools.claudeNote")}</small>}{tool.reason && !tool.needsAuth && <small>{tool.reason}</small>}{tool.needsAuth && tool.authHint && <small>{t("tools.authHint", { hint: tool.authHint })}</small>}</div>
               <span className={`tool-status ${presentation.tone}`}>{tool.forcedOff && <LockKeyhole size={13} />}{presentation.label}</span>
-              {tool.needsAuth && enabled && tool.authCommand && <button className="button light" type="button" onClick={() => openTerminal({ command: tool.authCommand })}>인증하기</button>}
-              <button className="tool-switch" type="button" role="switch" aria-checked={enabled} aria-label={`${tool.name} ${enabled ? "끄기" : "켜기"}`} disabled={Boolean(tool.forcedOff) || Boolean(updating)} onClick={() => void update("mcp", tool.name, !enabled, tool.agent)}><span /></button>
+              {tool.needsAuth && enabled && tool.authCommand && <button className="button light" type="button" onClick={() => openTerminal({ command: tool.authCommand })}>{t("tools.authenticate")}</button>}
+              <button className="tool-switch" type="button" role="switch" aria-checked={enabled} aria-label={t(enabled ? "tools.turnOff" : "tools.turnOn", { name: tool.name })} disabled={Boolean(tool.forcedOff) || Boolean(updating)} onClick={() => void update("mcp", tool.name, !enabled, tool.agent)}><span /></button>
             </div>;
           })}</div>
         </section>)}
@@ -219,13 +220,13 @@ export function ToolsPanel({ workspaceId, cwd, initialState, initialTab = "mcp",
           <div className="tools-list">{rows.map((skill) => {
             return <div className="tool-row skill-row" key={`${source}:${skill.name}`}>
               <div className="tool-copy"><strong>{skill.name}</strong><span>{skill.description}</span><span className="tool-agents">{skill.agents.map((agent) => <span key={agent}><AgentMark agent={agent} size="small" />{agentNames[agent] ?? agent}</span>)}</span></div>
-              <span className={`tool-status ${skill.enabled ? "enabled" : "disabled"}`}>{skill.enabled ? "사용 중" : "사용 안 함"}</span>
-              <button className="tool-switch" type="button" role="switch" aria-checked={skill.enabled} aria-label={`${skill.name} ${skill.enabled ? "끄기" : "켜기"}`} disabled={Boolean(updating)} onClick={() => void update("skill", skill.name, !skill.enabled)}><span /></button>
+              <span className={`tool-status ${skill.enabled ? "enabled" : "disabled"}`}>{skill.enabled ? t("tools.enabled") : t("tools.disabled")}</span>
+              <button className="tool-switch" type="button" role="switch" aria-checked={skill.enabled} aria-label={t(skill.enabled ? "tools.turnOff" : "tools.turnOn", { name: skill.name })} disabled={Boolean(updating)} onClick={() => void update("skill", skill.name, !skill.enabled)}><span /></button>
             </div>;
           })}</div>
         </section>)}
       </div>}
-      {!loading && tools && visible === 0 && <div className="tools-empty" role="status">{query ? "검색 결과가 없습니다." : "표시할 도구가 없습니다."}</div>}
+      {!loading && tools && visible === 0 && <div className="tools-empty" role="status">{query ? t("tools.noResults") : t("tools.empty")}</div>}
     </div>
   </section>;
 }

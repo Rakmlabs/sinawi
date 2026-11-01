@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /** Collapsed and focus-hidden rails stay closed until an explicit click. Pointer hover does not open them. */
 export function railCollapsed(sidebarCollapsed: boolean, focusMode: boolean, pinnedOpen: boolean): boolean {
   if (pinnedOpen) return false;
@@ -14,6 +15,6 @@ export function afterRailToggle(hidden: boolean): { sidebarCollapsed: boolean; p
     : { sidebarCollapsed: true, pinnedOpen: false };
 }
 
-export function railToggleLabel(collapsed: boolean): "사이드바 펼치기" | "사이드바 접기" {
-  return collapsed ? "사이드바 펼치기" : "사이드바 접기";
+export function railToggleLabel(collapsed: boolean): string {
+  return collapsed ? t("sidebar.expand") : t("sidebar.collapse");
 }

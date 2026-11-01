@@ -1,4 +1,5 @@
 import type { EventType, SessionEvent } from "../server/types";
+import { t } from "./i18n";
 
 export type ItemStatus = "in_progress" | "completed" | "failed";
 export interface WorkerLogRow {
@@ -44,7 +45,7 @@ export function parseWorkerLog(event: SessionEvent): WorkerLogRow {
       if (typeof change?.path !== "string") continue;
       changes.push({ path: change.path, kind: change.kind === "add" || change.kind === "delete" ? change.kind : "modify" });
     }
-    return { event, type: "edit", itemId, status, text: "파일 변경 내역이 없습니다.", changes: Array.isArray(item.changes) ? changes : undefined };
+    return { event, type: "edit", itemId, status, text: t("workerLog.noChanges"), changes: Array.isArray(item.changes) ? changes : undefined };
   }
   if (itemType === "agent_message" || itemType === "reasoning") {
     return { event, type: "message", itemId, text: typeof item.text === "string" ? item.text : "" };
@@ -80,5 +81,5 @@ export function workerLogRows(events: SessionEvent[]): WorkerLogRow[] {
 }
 
 export function workerLogSummary(row: WorkerLogRow): string {
-  return row.changes?.length ? row.changes.map((change) => change.path).join(", ") : row.text.replace(/\s+/g, " ").trim() || (row.type === "command" ? "명령을 확인할 수 없습니다." : "");
+  return row.changes?.length ? row.changes.map((change) => change.path).join(", ") : row.text.replace(/\s+/g, " ").trim() || (row.type === "command" ? t("workerLog.unknownCommand") : "");
 }

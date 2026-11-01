@@ -9,6 +9,7 @@ import { browserOwnsFocus, browserShortcut, chatShortcut, globalBrowserShortcut,
 import { attachmentLabel, displayUrl, type ComposerAttachment, type ElementCapture } from "./preview-attachments";
 import { toggleTerminal } from "./terminal-events";
 import { IFRAME_SANDBOX, previewTargetOrigin, trustedPreviewSender } from "./browser-messages";
+import { t } from "./i18n";
 
 type Tab = {
   id: string; input: string; url: string; title: string; frameUrl?: string; proxied?: boolean;
@@ -19,12 +20,12 @@ type OpenResult = { url: string; frameUrl: string; proxied: boolean; proxyOrigin
 
 const BASE_STORE = "orchestra.browser.tabs";
 const newId = () => Math.random().toString(36).slice(2, 10);
-const blankTab = (): Tab => ({ id: newId(), input: "", url: "", title: "새 탭", nonce: 0 });
+const blankTab = (): Tab => ({ id: newId(), input: "", url: "", title: t("br.newTab"), nonce: 0 });
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? `요청 실패 (${res.status})`);
+  if (!res.ok) throw new Error(data.error ?? t("br.requestFailed", { status: res.status }));
   return data as T;
 }
 
@@ -51,7 +52,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const [tabs, setTabs] = useState<Tab[]>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(STORE) ?? "null");
-      if (Array.isArray(saved?.tabs) && saved.tabs.length) return saved.tabs.map((tab: { url?: string; title?: string }) => ({ ...blankTab(), input: tab.url ?? "", url: tab.url ?? "", title: tab.title || "새 탭" }));
+      if (Array.isArray(saved?.tabs) && saved.tabs.length) return saved.tabs.map((tab: { url?: string; title?: string }) => ({ ...blankTab(), input: tab.url ?? "", url: tab.url ?? "", title: tab.title || t("br.newTab") }));
     } catch { /* ignore */ }
     return [blankTab()];
   });
@@ -182,8 +183,8 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const togglePicker = useCallback((force?: boolean) => {
     onOpenChange(true);
     const tab = tabsRef.current.find((item) => item.id === activeRef.current);
-    if (!tab?.frameUrl) { setStatus("먼저 페이지를 여세요."); return; }
-    if (!tab.proxied) { setStatus("요소 선택은 localhost 개발 서버 페이지에서만 됩니다."); return; }
+    if (!tab?.frameUrl) { setStatus(t("br.openPageFirst")); return; }
+    if (!tab.proxied) { setStatus(t("br.pickLocalOnly")); return; }
     const on = force ?? !picking.on;
     send(tab.id, { type: "pick", on });
     frames.current.get(tab.id)?.focus();
@@ -194,7 +195,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     const internals = (window as unknown as { __TAURI_INTERNALS__?: { invoke: (cmd: string) => Promise<unknown> } }).__TAURI_INTERNALS__;
     if (native || !tab?.proxied) {
       if (internals) void internals.invoke("open_devtools").catch(() => undefined);
-      else setStatus("앱 검사기는 데스크톱 앱에서만 열립니다 (우클릭 → 요소 검사도 가능).");
+      else setStatus(t("br.inspectorDesktopOnly"));
       return;
     }
     send(tab.id, { type: "devtools" });
@@ -261,7 +262,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     const images = [viewportShot ?? "", ...items.map((item) => item.screenshot ?? "")];
     let paths: (string | null)[] = [];
     try { paths = (await post<{ paths: (string | null)[] }>("/preview/assets", { images })).paths; }
-    catch (error) { setStatus(`캡처 저장 실패: ${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { setStatus(t("br.captureFailed", { error: error instanceof Error ? error.message : String(error) })); }
     const viewportPath = paths[0] ?? undefined;
     const tab = tabsRef.current.find((item) => item.id === activeRef.current);
     const attachments: ComposerAttachment[] = items.map((item, index) => {
@@ -270,8 +271,8 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       return { id: newId(), kind: "element", label: attachmentLabel(item), preview: screenshot ?? viewportShot, screenshotPath: paths[index + 1] ?? undefined, viewportPath, element };
     });
     onAttach(attachments);
-    setStatus(`요소 ${attachments.length}개를 채팅에 첨부했습니다.`);
-    onNotice?.(`요소 ${attachments.length}개 첨부됨`);
+    setStatus(t("br.attached", { n: attachments.length }));
+    onNotice?.(t("br.attachedShort", { n: attachments.length }));
   }, [onAttach, onNotice]);
 
   const stopAgentRef = useRef<() => void>(() => undefined);
@@ -305,7 +306,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     agentPending.current.clear();
     if (agentTab) send(agentTab, { type: "agent-hide" });
     setAgentTab(undefined);
-    setStatus("AI 조작을 중지했습니다. 1분 동안 AI 명령을 막습니다.");
+    setStatus(t("br.agentStopped"));
   }, [agentTab, send]);
   const tabSummary = useCallback((activeTabId: string) => tabsRef.current.map((item, index) => ({ index: index + 1, active: item.id === activeTabId, url: item.url, title: item.title, controllable: Boolean(item.proxied) })), []);
   const pagePicture = useCallback(async (id: string) => {
@@ -372,7 +373,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     if (command.action === "goto") {
       const url = String(command.args.url ?? "").trim();
       if (!url) return { ok: false, error: "주소가 필요합니다. 예: ao-browser goto 5173" };
-      setStatus(`AI가 ${url} 여는 중…`);
+      setStatus(t("br.aiOpening", { url }));
       let opened: OpenResult | undefined;
       try { opened = await navigate(tab.id, url); } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
       if (!opened?.proxied) return { ok: true, result: { url: opened?.url, controllable: false, note: "외부 사이트라 표시만 되고 AI 조작은 안 됩니다. localhost 개발 서버만 조작할 수 있습니다." } };
@@ -474,7 +475,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       } else if (data.type === "picking") {
         if (id === activeRef.current) setPicking({ on: Boolean(data.on), count: Number(data.count) || 0 });
       } else if (data.type === "progress") setStatus(String(data.text));
-      else if (data.type === "error") setStatus(`오류: ${String(data.text)}`);
+      else if (data.type === "error") setStatus(t("br.error", { text: String(data.text) }));
       else if (data.type === "attachments" && Array.isArray(data.items)) void uploadCaptures(data.items as ElementCapture[], typeof data.viewportShot === "string" ? data.viewportShot : undefined);
     };
     window.addEventListener("message", handle);
@@ -485,7 +486,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   useEffect(() => { if (!status) return; const timer = setTimeout(() => setStatus(""), 5000); return () => clearTimeout(timer); }, [status]);
 
   return (
-    <aside ref={panel} className="browser-panel glass browser-v-floating" hidden={!open} aria-label="브라우저"
+    <aside ref={panel} className="browser-panel glass browser-v-floating" hidden={!open} aria-label={t("br.label")}
       onPointerDownCapture={() => browserRegistry.activate(instanceId)} onFocusCapture={() => browserRegistry.activate(instanceId)}>
       <div className="browser-tabs" role="tablist">
         {tabs.map((tab, index) => (
@@ -493,43 +494,43 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
             onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key !== "Enter" && event.key !== " ") return; event.preventDefault(); setActiveId(tab.id); }}
             onAuxClick={(event) => { if (event.button === 1) closeTab(tab.id); }}>
             {tab.id === agentTab ? <Bot size={13} className="browser-ai-icon" /> : tab.loading ? <RotateCw size={13} className="spin" /> : <Globe size={13} />}
-            <span>{tab.title || "새 탭"}</span>
-            {tab.id === agentTab && <em className="browser-ai-badge">AI 조작 중</em>}
-            <button type="button" aria-label="탭 닫기" onClick={(event) => { event.stopPropagation(); closeTab(tab.id); }}><X size={13} /></button>
+            <span>{tab.title || t("br.newTab")}</span>
+            {tab.id === agentTab && <em className="browser-ai-badge">{t("br.aiControlling")}</em>}
+            <button type="button" aria-label={t("br.closeTab")} onClick={(event) => { event.stopPropagation(); closeTab(tab.id); }}><X size={13} /></button>
           </div>
         ))}
-        <button type="button" className="browser-icon" aria-label="새 탭 (⌘T)" title="새 탭 (⌘T)" onClick={() => addTab()}><Plus size={16} /></button>
+        <button type="button" className="browser-icon" aria-label={t("br.newTabShortcut")} title={t("br.newTabShortcut")} onClick={() => addTab()}><Plus size={16} /></button>
         <span className="browser-tabs-spacer" />
       </div>
       <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); void navigate(active.id, active.input).catch(() => undefined); frames.current.get(active.id)?.focus(); }}>
-        <button type="button" className="browser-icon" aria-label="뒤로 (⌘[)" title="뒤로 (⌘[)" disabled={!active.proxied || !canGo(histories.current.get(active.id), -1)} onClick={() => go(active.id, -1)}><ArrowLeft size={17} /></button>
-        <button type="button" className="browser-icon" aria-label="앞으로 (⌘])" title="앞으로 (⌘])" disabled={!active.proxied || !canGo(histories.current.get(active.id), 1)} onClick={() => go(active.id, 1)}><ArrowRight size={17} /></button>
-        <button type="button" className="browser-icon" aria-label="새로고침 (⌘R)" title="새로고침 (⌘R)" disabled={!active.frameUrl} onClick={reload}><RotateCw size={16} /></button>
-        <input ref={urlInput} className="browser-url" aria-label="주소" value={active.input} spellCheck={false} placeholder="주소 또는 포트 번호 (예: 3000)  ⌘L"
+        <button type="button" className="browser-icon" aria-label={t("br.back")} title={t("br.back")} disabled={!active.proxied || !canGo(histories.current.get(active.id), -1)} onClick={() => go(active.id, -1)}><ArrowLeft size={17} /></button>
+        <button type="button" className="browser-icon" aria-label={t("br.forward")} title={t("br.forward")} disabled={!active.proxied || !canGo(histories.current.get(active.id), 1)} onClick={() => go(active.id, 1)}><ArrowRight size={17} /></button>
+        <button type="button" className="browser-icon" aria-label={t("br.reload")} title={t("br.reload")} disabled={!active.frameUrl} onClick={reload}><RotateCw size={16} /></button>
+        <input ref={urlInput} className="browser-url" aria-label={t("br.address")} value={active.input} spellCheck={false} placeholder={t("br.addressPlaceholder")}
           onChange={(event) => patch(active.id, { input: event.target.value })}
           onFocus={(event) => event.target.select()}
           onKeyDown={(event) => { if (event.key === "Escape") { patch(active.id, { input: active.url }); event.currentTarget.blur(); event.stopPropagation(); } }} />
         <div className="browser-device-wrap" ref={deviceMenuRef}>
-          <button type="button" className={`browser-device-toggle${viewport.mode === "device" ? " on" : ""}`} aria-pressed={viewport.mode === "device"} title={viewport.mode === "device" ? `앱 화면 ${viewport.width}×${viewport.height}` : "데스크톱 웹 화면"} onClick={() => applyViewport(toggleViewport(viewport))}>
+          <button type="button" className={`browser-device-toggle${viewport.mode === "device" ? " on" : ""}`} aria-pressed={viewport.mode === "device"} title={viewport.mode === "device" ? t("br.appScreen", { w: viewport.width, h: viewport.height }) : t("br.desktopWeb")} onClick={() => applyViewport(toggleViewport(viewport))}>
             {viewport.mode === "device" ? <Smartphone size={16} /> : <Monitor size={16} />}
             <span>{viewportLabel(viewport)}</span>
           </button>
-          <button type="button" className="browser-icon" aria-label="화면 크기" aria-expanded={deviceMenu} title="iPhone, 태블릿, 데스크톱, 사용자 지정" onClick={() => { setCustomSize({ w: String(viewport.width), h: String(viewport.height) }); setDeviceMenu((openMenu) => !openMenu); }}><ChevronDown size={15} /></button>
+          <button type="button" className="browser-icon" aria-label={t("br.screenSize")} aria-expanded={deviceMenu} title={t("br.screenSizeTitle")} onClick={() => { setCustomSize({ w: String(viewport.width), h: String(viewport.height) }); setDeviceMenu((openMenu) => !openMenu); }}><ChevronDown size={15} /></button>
           {deviceMenu && <div className="browser-device-menu" role="menu">
             {([
               ["iphone", "iPhone 390×844"],
-              ["tablet", "태블릿 768×1024"],
-              ["desktop", "데스크톱 전체 폭"],
+              ["tablet", t("br.tabletSize")],
+              ["desktop", t("br.desktopFull")],
             ] as const).map(([preset, label]) => {
               const choice = parseViewportArg(preset, viewport);
               const checked = !isViewportError(choice) && (preset === "desktop" ? viewport.mode === "desktop" : viewport.mode === "device" && viewport.preset === preset);
               return <button type="button" role="menuitemradio" aria-checked={checked} key={preset} onClick={() => { if (!isViewportError(choice)) applyViewport(choice); setDeviceMenu(false); }}>{label}</button>;
             })}
             <div className="browser-device-custom">
-              <span>사용자 지정</span>
-              <input aria-label="너비" inputMode="numeric" value={customSize.w} onChange={(event) => setCustomSize((old) => ({ ...old, w: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); } }} />
+              <span>{t("br.custom")}</span>
+              <input aria-label={t("br.width")} inputMode="numeric" value={customSize.w} onChange={(event) => setCustomSize((old) => ({ ...old, w: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); } }} />
               <span>×</span>
-              <input aria-label="높이" inputMode="numeric" value={customSize.h} onChange={(event) => setCustomSize((old) => ({ ...old, h: event.target.value }))} onKeyDown={(event) => {
+              <input aria-label={t("br.height")} inputMode="numeric" value={customSize.h} onChange={(event) => setCustomSize((old) => ({ ...old, h: event.target.value }))} onKeyDown={(event) => {
                 if (event.key !== "Enter") return;
                 event.preventDefault();
                 event.stopPropagation();
@@ -543,17 +544,17 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
                 if (isViewportError(choice)) { setStatus(choice.error); return; }
                 applyViewport(choice);
                 setDeviceMenu(false);
-              }}>적용</button>
+              }}>{t("br.apply")}</button>
             </div>
           </div>}
         </div>
-        <button type="button" className="browser-icon" aria-label="개발자 도구 (⌥⌘I)" title="개발자 도구 (⌥⌘I) · ⇧클릭: 앱 검사기" onClick={(event) => openDevtools(event.shiftKey)}><SquareCode size={16} /></button>
-        <button type="button" className={`browser-pick${picking.on ? " on" : ""}`} aria-pressed={picking.on} title="요소 선택 (⌘⇧C)" onClick={() => togglePicker()}>
-          <MousePointerClick size={16} />{picking.on ? (picking.count ? `${picking.count}개 선택` : "선택 중") : "요소 선택"}
+        <button type="button" className="browser-icon" aria-label={t("br.devtools")} title={t("br.devtoolsTitle")} onClick={(event) => openDevtools(event.shiftKey)}><SquareCode size={16} /></button>
+        <button type="button" className={`browser-pick${picking.on ? " on" : ""}`} aria-pressed={picking.on} title={t("br.pickTitle")} onClick={() => togglePicker()}>
+          <MousePointerClick size={16} />{picking.on ? (picking.count ? t("br.pickedN", { n: picking.count }) : t("br.picking")) : t("br.pick")}
         </button>
-        {picking.on && picking.count > 0 && <button type="button" className="browser-attach" onClick={() => send(active.id, { type: "attach" })}>채팅에 첨부</button>}
+        {picking.on && picking.count > 0 && <button type="button" className="browser-attach" onClick={() => send(active.id, { type: "attach" })}>{t("br.attachToChat")}</button>}
       </form>
-      {agentTab && <div className="browser-ai-bar" role="status"><Bot size={15} /><span>AI가 이 탭을 조작하고 있어요</span><button type="button" onClick={stopAgent}><Square size={12} />중지 (Esc)</button></div>}
+      {agentTab && <div className="browser-ai-bar" role="status"><Bot size={15} /><span>{t("br.aiBar")}</span><button type="button" onClick={stopAgent}><Square size={12} />{t("br.stopEsc")}</button></div>}
       {status && <div className="browser-status" role="status">{status}</div>}
       <div ref={viewportBox} className={`browser-viewport${viewport.mode === "device" && active.frameUrl ? " framed" : ""}`} style={viewport.mode === "device" ? { "--ao-w": `${viewport.width}px`, "--ao-h": `${viewport.height}px`, "--ao-zoom": String(fitDevice(viewport.width, viewport.height, panelBox.w, panelBox.h).scale) } as CSSProperties : undefined}>
         {tabs.map((tab) => tab.frameUrl ? (
@@ -575,24 +576,24 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
             }}
             sandbox={IFRAME_SANDBOX} allow="clipboard-read; clipboard-write; fullscreen" />
         ) : null)}
-        {viewport.mode === "device" && active.frameUrl && <div className="browser-device-caption">{viewport.width}×{viewport.height}{emulationOf(viewport).touch ? " · 터치" : ""}</div>}
+        {viewport.mode === "device" && active.frameUrl && <div className="browser-device-caption">{viewport.width}×{viewport.height}{emulationOf(viewport).touch ? t("br.touch") : ""}</div>}
         {!active.frameUrl && (
           <div className="browser-start">
             {active.error && <p className="browser-error" role="alert">{active.error}</p>}
-            <h3><Server size={18} />실행 중인 개발 서버 <button type="button" className="browser-icon" aria-label="다시 찾기" onClick={refreshPorts}><RefreshCw size={15} /></button></h3>
+            <h3><Server size={18} />{t("br.devServers")} <button type="button" className="browser-icon" aria-label={t("br.rescan")} onClick={refreshPorts}><RefreshCw size={15} /></button></h3>
             {ports.length ? <div className="browser-ports">{ports.map((port) => (
               <button type="button" key={port.port} onClick={() => void navigate(active.id, port.url).catch(() => undefined)}><b>localhost:{port.port}</b><small>{port.command}</small></button>
-            ))}</div> : <p className="muted">찾은 개발 서버가 없습니다. 터미널(⌃`)에서 `npm run dev`를 실행하거나 위에 주소를 입력하세요.</p>}
-            {recent.length > 0 && <><h3>최근 방문</h3><div className="browser-recent">{recent.map((site) => (
+            ))}</div> : <p className="muted">{t("br.noServers")}</p>}
+            {recent.length > 0 && <><h3>{t("br.recent")}</h3><div className="browser-recent">{recent.map((site) => (
               <button type="button" key={site.url} onClick={() => void navigate(active.id, site.url).catch(() => undefined)} title={site.url}>
                 <span className="browser-recent-icon">{/localhost|127\.0\.0\.1/.test(site.url) ? <Server size={18} /> : <Globe size={18} />}</span>
                 <b>{site.title}</b><small>{site.url.replace(/^https?:\/\//, "")}</small>
               </button>))}</div></>}
-            {closed.length > 0 && <><h3>최근 닫은 탭 (⌘⇧T)</h3><div className="browser-ports">{[...closed].reverse().slice(0, 6).map((url) => <button type="button" key={url} onClick={() => void navigate(active.id, url).catch(() => undefined)}><b>{url.replace(/^https?:\/\//, "")}</b></button>)}</div></>}
-            <p className="browser-help">⌘T 새 탭 · ⌘W 탭 닫기 · ⌘⇧T 닫은 탭 다시 열기 · ⌘L 주소창 · ⌘R 새로고침 · ⌃Tab 탭 이동 · ⌘1–9 탭 선택 · ⌘⇧C 요소 선택 · ⌥⌘I 개발자 도구 · ⌘⇧B 브라우저 열기/닫기</p>
+            {closed.length > 0 && <><h3>{t("br.recentlyClosed")}</h3><div className="browser-ports">{[...closed].reverse().slice(0, 6).map((url) => <button type="button" key={url} onClick={() => void navigate(active.id, url).catch(() => undefined)}><b>{url.replace(/^https?:\/\//, "")}</b></button>)}</div></>}
+            <p className="browser-help">{t("br.help")}</p>
           </div>
         )}
-        {active.frameUrl && !active.proxied && <div className="browser-external-note">외부 사이트는 요소 선택이 안 되고, 일부 사이트는 앱 안에 표시되지 않을 수 있습니다.</div>}
+        {active.frameUrl && !active.proxied && <div className="browser-external-note">{t("br.externalNote")}</div>}
       </div>
     </aside>
   );

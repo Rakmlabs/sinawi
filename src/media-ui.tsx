@@ -3,6 +3,7 @@ import { FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, Presentatio
 import { MarkdownSessionContext, localImageSrc } from "./markdown-images";
 import { formatBytes, galleryCells, isLongText, kindLabel, mediaUrl, parseAttachmentMessage, type MediaRef } from "./viewer-model";
 import type { MediaKind } from "../server/media-kinds";
+import { t } from "./i18n";
 
 export type ViewerApi = { open: (items: MediaRef[], index: number) => void };
 
@@ -48,7 +49,7 @@ function frameSrc(src: string, sessionId: string | undefined) {
 
 function GalleryImage({ src, alt, width, height }: { src: string; alt: string; width: number; height: number }) {
   const [failed, setFailed] = useState(false);
-  if (failed) return <span className="image-missing" role="img" aria-label={`${alt || "이미지"}를 표시하지 못했습니다`}>이미지를 표시하지 못했습니다</span>;
+  if (failed) return <span className="image-missing" role="img" aria-label={t("media.imageFailedNamed", { name: alt || t("common.image") })}>{t("media.imageFailed")}</span>;
   return <img src={src} alt={alt} width={width} height={height} onError={() => setFailed(true)} />;
 }
 
@@ -75,7 +76,7 @@ export function MessageFold({ text, streaming, children }: { text: string; strea
   const [open, setOpen] = useState(false);
   return <div className="message-fold">
     <div className={long && !open ? "message-fold-clip" : undefined}>{children}</div>
-    {long && <button type="button" className="message-fold-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "접기" : "더 보기"}</button>}
+    {long && <button type="button" className="message-fold-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? t("media.collapse") : t("media.expand")}</button>}
   </div>;
 }
 

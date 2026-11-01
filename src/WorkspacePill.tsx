@@ -1,16 +1,17 @@
 import type { WorkspaceId } from "../server/types";
+import { t, translatedMap } from "./i18n";
 
-const workspaceLabels: Record<WorkspaceId, string> = {
-  personal: "개인",
-  company: "회사",
-};
-const workspaceDestinations: Record<WorkspaceId, string> = {
-  personal: "개인으로",
-  company: "회사로",
-};
+const workspaceLabels = translatedMap<WorkspaceId>({
+  personal: "workspace.personal",
+  company: "workspace.company",
+});
+const workspaceDestinations = translatedMap<WorkspaceId>({
+  personal: "workspace.toPersonal",
+  company: "workspace.toCompany",
+});
 
 export function workspaceTargetLabel(workspaceId: WorkspaceId) {
-  return `${workspaceDestinations[workspaceId === "personal" ? "company" : "personal"]} 이동`;
+  return t("workspace.moveTo", { dest: workspaceDestinations[workspaceId === "personal" ? "company" : "personal"] });
 }
 
 type WorkspacePillProps = {
@@ -27,12 +28,12 @@ export function WorkspacePill({ workspaceId, onSwitch, otherRunning = 0, classNa
   return <button
     type="button"
     className={`workspace-pill ${workspaceId}${className ? ` ${className}` : ""}`}
-    aria-label={`${current} 작업 공간, ${workspaceDestinations[otherId]} 전환`}
-    title={`${other} 작업 공간으로 전환`}
+    aria-label={t("workspace.pillLabel", { current, dest: workspaceDestinations[otherId] })}
+    title={t("workspace.pillTitle", { other })}
     onClick={onSwitch}
   >
     <span className="workspace-pill-dot" aria-hidden="true" />
     <span className="workspace-pill-label">{current}</span>
-    {otherRunning > 0 && <span className="workspace-running-badge" aria-label={`${other}에서 진행 중인 작업 ${otherRunning}개`}>{otherRunning}</span>}
+    {otherRunning > 0 && <span className="workspace-running-badge" aria-label={t("workspace.otherRunning", { other, count: otherRunning })}>{otherRunning}</span>}
   </button>;
 }

@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, us
 import type { AgentId } from "../server/types";
 import type { ProviderQuota } from "../server/quota";
 import { remainingQuota } from "./quota-data";
+import { t } from "./i18n";
 
 const QuotaContext = createContext<{ providers: ProviderQuota[]; loading: boolean; refreshing: boolean; error: string; reload: () => Promise<void>; refreshClaude: () => Promise<void> }>({ providers: [], loading: true, refreshing: false, error: "", reload: async () => {}, refreshClaude: async () => {} });
 export const useQuotas = () => useContext(QuotaContext);
@@ -21,10 +22,10 @@ export function QuotaProvider({ children }: { children: ReactNode }) {
     try {
       const response = await fetch(probe ? "/api/limits/refresh" : "/api/limits", probe ? { method: "POST" } : undefined);
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "남은 한도를 불러오지 못했습니다.");
+      if (!response.ok) throw new Error(payload.error || t("quota.loadFailed"));
       if (active.current) dispatch({ type: "success", id, providers: Array.isArray(payload.providers) ? payload.providers : [] });
     } catch (reason) {
-      if (active.current) dispatch({ type: "error", id, error: reason instanceof Error ? reason.message : "남은 한도를 불러오지 못했습니다." });
+      if (active.current) dispatch({ type: "error", id, error: reason instanceof Error ? reason.message : t("quota.loadFailed") });
     } finally { if (!probe) inFlight.current = false;  }
   }, []);
   const reload = useCallback(() => request(), [request]);
@@ -51,5 +52,5 @@ export function RemainingChip({ agent }: { agent: AgentId }) {
   const provider = providers.find((item) => item.agent === agent);
   const remaining = remainingQuota(provider);
   if (remaining === undefined) return null;
-  return <span className={`remaining-chip${remaining < 20 ? " low" : ""}`} title={`남은 한도 ${remaining.toFixed(1)}% · 마지막 확인 ${provider?.updatedAt ?? "정보 없음"}`} aria-label={`남은 한도 ${remaining.toFixed(1)}%`}>{remaining < 1 && remaining > 0 ? "<1" : Math.floor(remaining)}%</span>;
+  return <span className={`remaining-chip${remaining < 20 ? " low" : ""}`} title={t("quota.chipTitle", { percent: remaining.toFixed(1), time: provider?.updatedAt ?? t("common.noInfo") })} aria-label={t("quota.chipLabel", { percent: remaining.toFixed(1) })}>{remaining < 1 && remaining > 0 ? "<1" : Math.floor(remaining)}%</span>;
 }

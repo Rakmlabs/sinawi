@@ -1,16 +1,15 @@
 /** 설정 도우미: pure state helpers (tested). */
 import type { SetupTool } from "../server/setup";
+import { t, type MessageKey } from "./i18n";
 
 export const ONBOARDING_STORE = "orchestra.onboarding";
 export const ONBOARDING_OPEN_EVENT = "orchestra:open-onboarding";
-export const STEPS = [
-  { id: "tools", title: "필수 도구", short: "도구" },
-  { id: "login", title: "로그인", short: "로그인" },
-  { id: "permissions", title: "macOS 권한", short: "권한" },
-  { id: "workspaces", title: "작업 공간", short: "공간" },
-  { id: "connections", title: "연결 (선택)", short: "연결" },
-  { id: "done", title: "완료", short: "완료" },
-] as const;
+const step = <I extends string>(id: I) => ({
+  id,
+  get title() { return t(`onboarding.step.${id}` as MessageKey); },
+  get short() { return t(`onboarding.short.${id}` as MessageKey); },
+});
+export const STEPS = [step("tools"), step("login"), step("permissions"), step("workspaces"), step("connections"), step("done")] as const;
 export type StepId = typeof STEPS[number]["id"];
 
 export type OnboardingProgress = { step: number; completed: boolean; skipped: boolean; acknowledged: string[] };
@@ -51,18 +50,18 @@ export function loginStatus(tools: SetupTool[] | undefined, auth: Partial<Record
   return (tools ?? []).some((t) => t.agent && t.installed && auth[t.id] === "authenticated") ? "ok" : "warn";
 }
 
-export const SHORTCUTS: ReadonlyArray<[string, string]> = [
-  ["⌘B", "사이드바 숨기기/보이기 (접으면 왼쪽 가장자리 버튼으로 펼쳐요)"],
-  ["F1 / F2", "개인 / 회사 공간 전환"],
-  ["⌘⇧T · F3", "도구 관리"],
-  ["⌃`", "내장 터미널"],
-  ["⌘⇧B", "내장 브라우저"],
-  ["⌃⌥← / → / ↑", "브라우저 창 왼쪽 반 / 오른쪽 반 / 최대화"],
-  ["⌘T · ⌘W · ⌘⇧T", "브라우저 새 탭 · 탭 닫기 · 닫은 탭 다시 열기"],
-  ["⌘[ · ⌘]", "브라우저 뒤로 · 앞으로"],
-  ["⌘⇧J", "채팅 접기/펼치기"],
-  ["Enter · ⇧Enter", "보내기 · 줄바꿈"],
-  ["/usage", "에이전트·모델별 사용량"],
+export const SHORTCUTS: ReadonlyArray<[string, MessageKey]> = [
+  ["⌘B", "shortcut.sidebar"],
+  ["F1 / F2", "shortcut.workspace"],
+  ["⌘⇧T · F3", "shortcut.tools"],
+  ["⌃`", "shortcut.terminal"],
+  ["⌘⇧B", "shortcut.browser"],
+  ["⌃⌥← / → / ↑", "shortcut.snap"],
+  ["⌘T · ⌘W · ⌘⇧T", "shortcut.tabs"],
+  ["⌘[ · ⌘]", "shortcut.history"],
+  ["⌘⇧J", "shortcut.chat"],
+  ["Enter · ⇧Enter", "shortcut.send"],
+  ["/usage", "shortcut.usage"],
 ];
 
 export type PermState = "granted" | "denied" | "unknown";
