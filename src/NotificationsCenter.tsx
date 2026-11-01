@@ -14,6 +14,7 @@ import {
 import type { AppNotification, NotificationType } from "../server/notification-types";
 import type { WorkspaceId } from "../server/types";
 import { openTerminal, terminalOwnsKeyboardEvent } from "./terminal-events";
+import { useNow } from "./app/clock";
 
 const NOTIFICATIONS_EVENT = "orchestra:notifications";
 const criticalTypes = new Set<NotificationType>(["auth", "error", "permission"]);
@@ -86,13 +87,20 @@ function saveSeenToasts(workspaceId: WorkspaceId, seen: Set<string>): void {
 type NotificationsCenterProps = {
   workspaceId: WorkspaceId;
   cwd?: string;
+  /** Main WebSocket state: the server pushes changes while connected, so polling is only a fallback. */
+  connected?: boolean;
   onSession: (sessionId: string) => void;
   onRefreshAuth?: () => void;
 };
 
-export function NotificationsCenter({ workspaceId, cwd, onSession, onRefreshAuth }: NotificationsCenterProps) {
+/** Fallback poll period while the push channel is down. */
+export const NOTIFICATIONS_FALLBACK_POLL_MS = 5_000;
+
+export function NotificationsCenter({ workspaceId, cwd, connected = false, onSession, onRefreshAuth }: NotificationsCenterProps) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [open, setOpen] = useState(false);
+  // Relative times ("n분 전") refresh on their own clock while the list is open.
+  const now = useNow(60_000, open);
   const [toasts, setToasts] = useState<AppNotification[]>([]);
   const centerRef = useRef<HTMLDivElement>(null);
   const requestRef = useRef(0);
@@ -118,15 +126,24 @@ export function NotificationsCenter({ workspaceId, cwd, onSession, onRefreshAuth
     setNotifications([]);
     setToasts([]);
     void refresh();
-    const interval = window.setInterval(() => { void refresh(); }, 5_000);
     const invalidate = () => { void refresh(); };
     window.addEventListener(NOTIFICATIONS_EVENT, invalidate);
     return () => {
-      window.clearInterval(interval);
       window.removeEventListener(NOTIFICATIONS_EVENT, invalidate);
       requestRef.current += 1;
     };
   }, [refresh]);
+
+  // Pushes (NOTIFICATIONS_EVENT) cover every change while the WebSocket is up. Poll only while it
+  // is down, and catch up once on reconnect for anything pushed during the outage.
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    const reconnected = connected && !wasConnected.current;
+    wasConnected.current = connected;
+    if (connected) { if (reconnected) void refresh(); return; }
+    const interval = window.setInterval(() => { void refresh(); }, NOTIFICATIONS_FALLBACK_POLL_MS);
+    return () => window.clearInterval(interval);
+  }, [connected, refresh]);
 
   useEffect(() => () => {
     for (const timer of toastTimers.current) window.clearTimeout(timer);
@@ -283,7 +300,7 @@ export function NotificationsCenter({ workspaceId, cwd, onSession, onRefreshAuth
                   <span className="notification-title-row">
                     <strong>{notification.title}</strong>
                     <time dateTime={notification.updatedAt} title={absoluteTime(notification.updatedAt)}>
-                      {notificationRelativeTime(notification.updatedAt)}
+                      {notificationRelativeTime(notification.updatedAt, now)}
                     </time>
                   </span>
                   <span className="notification-body">{notification.body}</span>

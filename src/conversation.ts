@@ -10,6 +10,9 @@ export interface DelegationTask {
   thread: SessionEvent[];
   status: SessionStatus;
   elapsed: string;
+  /** Start and end (absent while running) of the task, for a live elapsed clock. */
+  startedAt: string;
+  endedAt?: string;
   activity: string;
 }
 
@@ -41,9 +44,16 @@ export function canUndoAutoHandoff(event: SessionEvent, status: SessionStatus, l
   return event.id === latestHandoffId && event.type === "handoff" && event.metadata?.auto === true && event.metadata.undone !== true && status !== "running";
 }
 
+/** `m:ss` between two instants (ms), clamped at zero. */
+export function formatElapsed(startMs: number, endMs: number): string {
+  const seconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 export function delegationTasks(session: Session, now: number): DelegationTask[] {
-  return session.events.filter((event) => event.type === "delegation").map((event) => {
-    const start = session.events.indexOf(event);
+  const tasks: DelegationTask[] = [];
+  session.events.forEach((event, start) => {
+    if (event.type !== "delegation") return;
     const next = session.events.findIndex((item, index) => index > start && (item.type === "delegation" || item.agent === "user"));
     const isWorkerEvent = (item: SessionEvent) => item.agent !== "user" && item.role !== "orchestrator" && item.role !== "planner" && !item.metadata?.live;
     const thread = session.events.slice(start + 1).filter((item, offset) =>
@@ -58,11 +68,11 @@ export function delegationTasks(session: Session, now: number): DelegationTask[]
     const terminal = [...currentAttempt].reverse().find((item) => item.taskStatus && item.taskStatus !== "running");
     const status = terminal?.taskStatus ?? (currentAttempt.some((item) => item.type === "error") ? "error" : event.delegationId ? session.status : next >= 0 ? "done" : session.status);
     const end = terminal?.time ?? (status === "running" ? undefined : last?.time ?? session.endedAt ?? event.time);
-    const seconds = Math.max(0, Math.floor(((end ? Date.parse(end) : now) - Date.parse(event.time)) / 1000));
     const current = [...thread].reverse().find((item) => item.role === "worker" && item.agent !== "user");
     const displayedEvent = current ? { ...event, agent: current.agent, model: current.model ?? event.model, reasoningEffort: current.reasoningEffort ?? event.reasoningEffort } : event;
-    return { event: displayedEvent, thread, status, elapsed: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`, activity: (last ? workerLogSummary(parseWorkerLog(last)) : "") || "작업을 준비하고 있습니다" };
+    tasks.push({ event: displayedEvent, thread, status, elapsed: formatElapsed(Date.parse(event.time), end ? Date.parse(end) : now), startedAt: event.time, endedAt: end, activity: (last ? workerLogSummary(parseWorkerLog(last)) : "") || "작업을 준비하고 있습니다" });
   });
+  return tasks;
 }
 
 export function delegationWorkers(session: Session, now: number): DelegationWorker[] {

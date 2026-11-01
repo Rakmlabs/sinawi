@@ -8,6 +8,7 @@ import { OWN_APP_ERROR, agentCommandError, claimCommand, commandTargetsOwnApp, h
 import { browserOwnsFocus, browserShortcut, chatShortcut, globalBrowserShortcut, windowShortcut, type BrowserAction } from "./browser-shortcuts";
 import { attachmentLabel, displayUrl, type ComposerAttachment, type ElementCapture } from "./preview-attachments";
 import { toggleTerminal } from "./terminal-events";
+import { IFRAME_SANDBOX, previewTargetOrigin, trustedPreviewSender } from "./browser-messages";
 
 type Tab = {
   id: string; input: string; url: string; title: string; frameUrl?: string; proxied?: boolean;
@@ -112,7 +113,9 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   useEffect(() => { if (open) refreshPorts(); }, [open, refreshPorts]);
 
   const send = useCallback((id: string, message: Record<string, unknown>) => {
-    frames.current.get(id)?.contentWindow?.postMessage({ source: "orchestra-parent", ...message }, "*");
+    // Only the proxied page (same proxy origin) may receive commands; after it navigates elsewhere, drop them.
+    const targetOrigin = previewTargetOrigin(tabsRef.current.find((tab) => tab.id === id));
+    if (targetOrigin) frames.current.get(id)?.contentWindow?.postMessage({ source: "orchestra-parent", ...message }, targetOrigin);
   }, []);
   const applyViewport = useCallback((choice: ViewportChoice) => {
     const previous = emulationOf(viewportRef.current);
@@ -449,13 +452,12 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   // Messages from the injected page script.
   useEffect(() => {
     const handle = (event: MessageEvent) => {
+      // Trust only our own preview iframes, from their proxy origin (see browser-messages.ts).
+      const id = trustedPreviewSender(event, frames.current, tabsRef.current);
+      if (!id) return;
       const data = event.data;
-      if (!data || data.source !== "orchestra-preview") return;
       if (data.type === "agent-result") { agentPending.current.get(String(data.id))?.({ ok: Boolean(data.ok), result: data.result, error: data.error }); return; }
       if (data.type === "agent-stop") { stopAgentRef.current(); return; }
-      const entry = [...frames.current.entries()].find(([, frame]) => frame.contentWindow === event.source);
-      if (!entry) return;
-      const [id] = entry;
       const tab = tabsRef.current.find((item) => item.id === id);
       if (data.type === "location" && tab) {
         histories.current.set(id, recordLocation(histories.current.get(id) ?? emptyHistory(), data.href));
@@ -571,7 +573,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
                 send(tab.id, { type: "emulate", ...payload, persist: true });
               }
             }}
-            allow="clipboard-read; clipboard-write; fullscreen" />
+            sandbox={IFRAME_SANDBOX} allow="clipboard-read; clipboard-write; fullscreen" />
         ) : null)}
         {viewport.mode === "device" && active.frameUrl && <div className="browser-device-caption">{viewport.width}×{viewport.height}{emulationOf(viewport).touch ? " · 터치" : ""}</div>}
         {!active.frameUrl && (

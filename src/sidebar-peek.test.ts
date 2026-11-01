@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 test("collapsed sidebar no longer peeks open on hover", () => {
-  const main = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+  const main = ["./main.tsx", "./app/WorkspaceApp.tsx", "./app/Composer.tsx"].map((path) => readFileSync(new URL(path, import.meta.url), "utf8")).join("\n");
   const css = readFileSync(new URL("./browser.css", import.meta.url), "utf8");
   assert.doesNotMatch(main, /sidebar-peek|sidebar-hotzone|sidebarPeek/);
   assert.doesNotMatch(css, /sidebar-peek|sidebar-hotzone|sidebar-hover/);

@@ -31,7 +31,7 @@ test("shell commands can be resent and every other command id runs once", () => 
   assert.match(panel, /commandTargetsOwnApp/);
   assert.match(panel, /runAgentRef/);
   assert.match(panel, /takeHeldCommand\(\)/);
-  const main = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+  const main = readFileSync(new URL("./app/WorkspaceApp.tsx", import.meta.url), "utf8");
   assert.match(main, /holdCommand\(detail\)/);
   assert.doesNotMatch(main, /__retry/);
   const desktop = readFileSync(new URL("./BrowserDesktop.tsx", import.meta.url), "utf8");

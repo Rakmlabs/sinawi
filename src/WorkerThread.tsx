@@ -1,4 +1,5 @@
 import { AgentMark } from "./AgentMark";
+import { Elapsed } from "./app/Elapsed";
 import { Markdown } from "./Markdown";
 import type { DelegationTask, DelegationWorker } from "./conversation";
 import { workerLogRows, type ItemStatus } from "./worker-log";
@@ -12,7 +13,7 @@ const changeLabels = { add: "추가", modify: "수정", delete: "삭제" };
 function TaskLog({ task, index }: { task: DelegationTask; index: number }) {
   const rows = workerLogRows(task.thread);
   return <section className="worker-task-log" aria-labelledby={`worker-task-${task.event.id}`}>
-    <div className="worker-task-divider"><span>작업 {index + 1}</span><strong id={`worker-task-${task.event.id}`}>{task.event.text}</strong><span className={`status-label ${task.status}`}>{statuses[task.status]}</span><time>{task.elapsed}</time></div>
+    <div className="worker-task-divider"><span>작업 {index + 1}</span><strong id={`worker-task-${task.event.id}`}>{task.event.text}</strong><span className={`status-label ${task.status}`}>{statuses[task.status]}</span><Elapsed start={task.startedAt} end={task.endedAt} /></div>
     {rows.map((row) => <article className={`event event-${row.type}`} key={row.event.id}>
       <div className="event-top"><span>{labels[row.type]}</span>
         {row.status && <span className={`worker-item-status ${row.status}`}>{itemStatuses[row.status]}{row.exitCode !== undefined && ` · 종료 코드 ${row.exitCode}`}</span>}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canPromoteLive, canUndoAutoHandoff, conversationText, delegationTasks, delegationWorkers, liveBadgeLabel, mainConversation, mergeSession } from "./conversation";
+import { canPromoteLive, canUndoAutoHandoff, conversationText, delegationTasks, formatElapsed, delegationWorkers, liveBadgeLabel, mainConversation, mergeSession } from "./conversation";
 import type { Session, SessionEvent } from "../server/types";
 
 const event = (id: string, type: SessionEvent["type"], agent: SessionEvent["agent"], text: string, extra: Partial<SessionEvent> = {}): SessionEvent => ({ id, sessionId: "s", type, agent, text, time: "2026-10-30T00:00:00.000Z", ...extra });
@@ -170,4 +170,20 @@ test("duplicate same-agent workers keep separate sidebar groups and logs", () =>
 
 test("main chat removes delegation directives addressed to worker ids", () => {
   assert.equal(conversationText('Start <<DELEGATE to="codex-2">>test<</DELEGATE>>'), "Start");
+});
+
+test("delegation tasks expose start/end so a leaf clock can tick only running tasks", () => {
+  const s = session([
+    event("a", "delegation", "claude", "첫 작업", { delegationId: "a", taskStatus: "running" }),
+    event("ad", "status", "claude", "완료", { delegationId: "a", taskStatus: "done", time: "2026-10-30T00:00:05Z" }),
+    event("b", "delegation", "claude", "두 번째 작업", { delegationId: "b", taskStatus: "running", time: "2026-10-30T00:00:06Z" }),
+  ]);
+  const [done, running] = delegationTasks(s, Date.parse("2026-10-30T00:01:10Z"));
+  assert.equal(done.startedAt, "2026-10-30T00:00:00.000Z");
+  assert.equal(done.endedAt, "2026-10-30T00:00:05Z");
+  assert.equal(running.startedAt, "2026-10-30T00:00:06Z");
+  assert.equal(running.endedAt, undefined);
+  assert.equal(running.elapsed, formatElapsed(Date.parse(running.startedAt), Date.parse("2026-10-30T00:01:10Z")));
+  assert.equal(formatElapsed(0, 65_000), "1:05");
+  assert.equal(formatElapsed(10_000, 0), "0:00");
 });
