@@ -4,39 +4,16 @@
   -webkit-app-region: no-drag;
 }
 
-.notifications-trigger {
-  position: relative;
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border-radius: 6px;
-  color: var(--text-muted);
-}
-
-.notifications-trigger:hover,
-.notifications-trigger[aria-expanded="true"] {
-  color: var(--text);
-  background: var(--border);
-}
-
-.notifications-trigger:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .notifications-badge {
   position: absolute;
-  top: -4px;
-  right: -7px;
+  top: 3px;
+  right: 1px;
   display: grid;
-  min-width: 19px;
-  height: 19px;
+  min-width: 18px;
+  height: 18px;
   place-items: center;
   padding: 0 4px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--bg-app);
   border-radius: 20px;
   color: var(--accent-text);
   background: var(--accent);
@@ -47,8 +24,8 @@
 
 .notifications-popover {
   position: absolute;
-  top: 34px;
-  right: -42px;
+  top: 42px;
+  right: -8px;
   width: min(370px, calc(100vw - 24px));
   overflow: hidden;
   border: 1px solid var(--border);
@@ -307,7 +284,7 @@
 @media (max-width: 560px) {
   .notifications-popover {
     position: fixed;
-    top: calc(var(--window-header-height, 38px) + 6px);
+    top: calc(var(--window-header-height, 48px) + 6px);
     right: 8px;
     left: 8px;
     width: auto;
@@ -315,11 +292,6 @@
 }
 
 @media (pointer: coarse) {
-  .notifications-trigger {
-    width: 44px;
-    height: 44px;
-  }
-
   .notification-item {
     min-height: 56px;
   }

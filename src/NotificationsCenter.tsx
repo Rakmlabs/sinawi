@@ -260,7 +260,7 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
       <div className="notifications-center" ref={centerRef}>
         <button
         type="button"
-        className="notifications-trigger"
+        className="notifications-trigger header-icon-button"
         aria-label={unread ? t("noti.buttonUnread", { n: unread }) : t("noti.title")}
         aria-expanded={open}
         aria-controls="notifications-popover"
@@ -270,7 +270,7 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
           if (!open) void refresh();
         }}
       >
-        <Bell size={15} aria-hidden="true" />
+        <Bell size={18} aria-hidden="true" />
         {unread > 0 ? <span className="notifications-badge" aria-hidden="true">{unread > 99 ? "99+" : unread}</span> : null}
         </button>
 

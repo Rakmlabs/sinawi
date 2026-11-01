@@ -21,7 +21,6 @@ select {
 
 small,
 time,
-.subtle-tag,
 .status-label,
 .live-badge,
 .count,
@@ -47,15 +46,13 @@ time,
 .activity-summary time,
 .event-top,
 .event-top time,
-.event-type,
-.activity-footer {
+.event-type {
   font-size: calc(12px * var(--font-scale));
   line-height: 1.55;
 }
 
 small,
 time,
-.subtle-tag,
 .field-caption,
 .team-caption,
 .delegation-heading > div > span,
@@ -73,7 +70,6 @@ time,
 .rail .sidebar-folder,
 .rail .sidebar-chat-open,
 .rail .sidebar-worker,
-.rail-label,
 .sidebar-session-title,
 .sidebar-action-menu button,
 .sidebar-action-menu label,
@@ -159,14 +155,12 @@ time,
   }
 
   .rail button,
-  .rail-label,
   .sidebar-session-title {
     font-size: calc(14px * var(--font-scale));
   }
 
   small,
   time,
-  .subtle-tag,
   .status-label,
   .sidebar-chat-copy small,
   .sidebar-worker small,

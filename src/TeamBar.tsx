@@ -1,9 +1,8 @@
 import { changeWorkerConfig } from "./team";
 import { normalizeWorkerConfigs } from "../server/workers";
 import { RemainingChip } from "./QuotaContext";
-import { AgentMark } from "./AgentMark";
-import { useState } from "react";
-import { Check, ChevronDown, Plus, Users, X } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ArrowRight, Check, Plus, X } from "lucide-react";
 import type { AgentId, AgentSelection } from "../server/types";
 import type { RoutingSettings } from "../server/routing";
 import { ModelChoice } from "./RoutingControls";
@@ -13,9 +12,9 @@ const names = { codex: "Codex", claude: "Claude", grok: "Grok Build" };
 const ids: AgentId[] = ["codex", "claude", "grok"];
 export const selectionLabel = (value: AgentSelection) => `${names[value.agent]} · ${value.model || t("usage.cliDefaultModel")} · ${value.reasoningEffort || t("team.defaultReasoning")}`;
 
-export function TeamBar({ orchestrator, workers, settings, availableAgents, disabled, running, automatic, onSave }: {
+export function TeamBar({ orchestrator, workers, settings, availableAgents, disabled, running, automatic, actions, onSave }: {
   orchestrator: AgentSelection; workers: AgentSelection[]; settings?: RoutingSettings; availableAgents?: AgentId[];
-  disabled: boolean; running: boolean; automatic: boolean;
+  disabled: boolean; running: boolean; automatic: boolean; actions?: ReactNode;
   onSave: (orchestrator: AgentSelection, workers: AgentSelection[]) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
@@ -26,12 +25,20 @@ export function TeamBar({ orchestrator, workers, settings, availableAgents, disa
     setOpen(!open);
   };
   return <div className="team-bar">
-    <div className="team-chips" aria-label={t("team.current")}>
-      <span className="team-caption"><Users size={14} />{t("team.orchestrator")}{automatic ? t("team.autoPick") : ""}</span>
-      <button className="team-chip" onClick={edit} aria-expanded={open} aria-controls="team-editor" title={t("team.changeOrchestrator")}><AgentMark agent={orchestrator.agent} size="small" /><strong>{selectionLabel(orchestrator)}</strong><RemainingChip agent={orchestrator.agent} /><ChevronDown size={13} /></button>
-      <span className="team-caption">{t("team.workers")}</span>
-      {workers.map((worker, index) => <button className="team-chip" key={worker.id ?? index} onClick={edit} aria-expanded={open} aria-controls="team-editor"><AgentMark agent={worker.agent} size="small" />{worker.label ? `${worker.label} · ` : ""}{selectionLabel(worker)}<RemainingChip agent={worker.agent} /></button>)}
-      <button className="icon-button" onClick={edit} aria-label={t("team.edit")} aria-expanded={open} aria-controls="team-editor"><Plus size={15} /></button>
+    <div className="team-row">
+      <div className="team-chips" role="group" aria-label={t("team.current")}>
+        <span className="team-caption">{t("team.label")}</span>
+        <button className="team-chip" onClick={edit} aria-expanded={open} aria-controls="team-editor" title={`${t("team.changeOrchestrator")} · ${selectionLabel(orchestrator)}`}>
+          <span className={`agent-dot ${orchestrator.agent}`} aria-hidden="true" /><strong>{names[orchestrator.agent]}</strong>
+          <span className="team-chip-meta">{t("team.orchestrator")}{automatic ? t("team.autoPick") : ` · ${orchestrator.model || t("usage.cliDefaultModel")}`}</span><RemainingChip agent={orchestrator.agent} />
+        </button>
+        {workers.length > 0 && <ArrowRight className="team-arrow-icon" size={16} aria-hidden="true" />}
+        {workers.map((worker, index) => <button key={worker.id ?? index} className="team-chip" onClick={edit} aria-expanded={open} aria-controls="team-editor" title={`${t("team.workers")} · ${worker.label ? `${worker.label} · ` : ""}${selectionLabel(worker)}`}>
+            <span className={`agent-dot ${worker.agent}`} aria-hidden="true" />{worker.label ?? names[worker.agent]}<RemainingChip agent={worker.agent} />
+          </button>)}
+        <button className="team-edit" onClick={edit} aria-label={t("team.edit")} aria-expanded={open} aria-controls="team-editor">{t("team.editShort")}</button>
+      </div>
+      {actions}
     </div>
     {open && <section className="team-editor" id="team-editor" aria-label={t("team.edit")}>
       {running && <p role="status">{t("team.runningLocked")}</p>}

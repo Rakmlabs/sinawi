@@ -1,40 +1,66 @@
-/* Persistent team controls sit outside the scrolling conversation. */
+/* Team row under the title bar: team chips on the left, conversation controls on the right. */
 .team-bar {
   flex: 0 0 auto;
   min-width: 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.team-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 49px;
+  padding: 8px 16px 8px 24px;
 }
 .team-chips {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 8px;
-  padding: 10px 18px;
+  min-width: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 .team-caption {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   flex-shrink: 0;
+  margin-right: 2px;
+  font-weight: 600;
+  letter-spacing: .02em;
 }
 .team-chip {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 8px;
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--bg-active);
-  color: inherit;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--text);
+  white-space: nowrap;
 }
-.team-chip strong { font-weight: 550; }
-.team-chip:hover { background: var(--bg-strong); }
+.team-chip strong { font-weight: 600; }
+.team-chip-meta { color: var(--text-muted); }
+.team-chip:hover:not(:disabled) { background: var(--bg-active); }
+.team-chip .remaining-chip { margin-left: 2px; }
+.team-arrow-icon { flex-shrink: 0; color: var(--text-disabled); }
+.team-edit {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: calc(13px * var(--font-scale));
+}
+.team-edit:hover:not(:disabled),
+.team-edit[aria-expanded="true"] { background: var(--bg-active); color: var(--text); }
+/* Agent identity dot (team chips, activity rows). */
+.agent-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+.agent-dot.claude { background: var(--agent-claude); }
+.agent-dot.codex { background: var(--agent-codex); }
+.agent-dot.grok { background: var(--agent-grok); }
 .team-editor {
-  padding: 4px 18px 14px;
+  padding: 4px 24px 14px;
   max-height: min(370px, 42dvh);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -65,14 +91,12 @@
 .handoff-undo { flex: 0 0 auto; min-height: 30px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; color: inherit; background: var(--bg-hover); }
 .handoff-undo:hover:not(:disabled) { color: var(--accent-fg); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .handoff-undo:disabled { opacity: .5; cursor: default; }
-.activity-tabs { overflow-x: auto; }
-.activity-tabs button { flex-shrink: 0; }
 .event pre { overflow-wrap: anywhere; white-space: pre-wrap; }
 .thread-empty { padding: 24px 16px; }
 .event { scroll-margin-top: 12px; }
 @media (max-width: 740px), (pointer: coarse) {
-  .team-chips { padding: 8px 12px; }
-  .team-chip, .team-chips .icon-button, .team-editor-actions .button, .team-worker-editor > button, .delegation-bottom .button { min-height: 44px; }
+  .team-row { padding: 6px 8px 6px 12px; }
+  .team-chip, .team-edit, .team-editor-actions .button, .team-worker-editor > button, .delegation-bottom .button { min-height: 44px; }
   .team-worker-editor > button { min-width: 44px; }
   .team-editor { padding: 4px 12px 12px; }
   .delegation-card { padding: 12px; }
@@ -89,9 +113,6 @@
 .worker-task-divider > span:first-child { flex-shrink: 0; color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
 .worker-task-divider strong { min-width: 0; flex: 1; font-size: calc(13px * var(--font-scale)); font-weight: 550; overflow-wrap: anywhere; }
 .worker-task-divider time { flex-shrink: 0; color: var(--text-muted); font-size: calc(12px * var(--font-scale)); font-variant-numeric: tabular-nums; }
-.activity-summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
-.activity-summary > span:not(.agent-mark) { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.activity-summary time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 /* Worker thread details (moved from readability.css). */
 .worker-thread .event-top { align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }

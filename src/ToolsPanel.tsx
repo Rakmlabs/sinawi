@@ -189,7 +189,7 @@ export function ToolsPanel({ workspaceId, cwd, initialState, initialTab = "mcp",
       <div><Wrench size={24} aria-hidden="true" /><div><h1 id="tools-heading">{t("tools.title")}</h1><p>{t("tools.intro", { space: workspaceId === "company" ? t("workspace.company") : t("workspace.personal") })}</p></div></div>
       <span className="tools-count" aria-label={t("tools.total", { n: total })}>{total}</span>
     </header>
-    <div className="glass tools-surface">
+    <div className="panel tools-surface">
       <div className="tools-toolbar">
         <div className="tools-tabs" role="tablist" aria-label={t("tools.kinds")}>
           <button role="tab" aria-selected={tab === "mcp"} onClick={() => setTab("mcp")}><SlidersHorizontal size={16} />MCP</button>

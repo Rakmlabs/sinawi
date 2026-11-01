@@ -34,6 +34,7 @@ export function WorkspacePill({ workspaceId, onSwitch, otherRunning = 0, classNa
   >
     <span className="workspace-pill-dot" aria-hidden="true" />
     <span className="workspace-pill-label">{current}</span>
+    <span className="workspace-pill-other" aria-hidden="true">⇄ {other}</span>
     {otherRunning > 0 && <span className="workspace-running-badge" aria-label={t("workspace.otherRunning", { other, count: otherRunning })}>{otherRunning}</span>}
   </button>;
 }

@@ -9,7 +9,7 @@ import { Beat } from "../Beat";
 /** "세션 기록" tab: every session of the workspace with a live elapsed clock. */
 export function SessionsView({ sessions, onNew, onSelect, onStop }: { sessions: Session[]; onNew: () => void; onSelect: (id: string) => void; onStop: (id: string) => void }) {
   const running = sessions.filter((s) => s.status === "running").length;
-  return <section className="glass full-panel">
+  return <section className="panel full-panel">
     <div className="panel-header">
       <h2>{t("sessions.title")}</h2>
       <span>

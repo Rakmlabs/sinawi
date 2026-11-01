@@ -5,16 +5,17 @@ import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
 import { delegationWorkers } from "./conversation";
 import type { Group, Session, SessionStatus, WorkspaceId } from "../server/types";
-import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings2, WandSparkles, Wrench, X } from "lucide-react";
+import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, Search, Settings2, WandSparkles, Wrench, X } from "lucide-react";
 import { workspaceTargetLabel } from "./WorkspacePill";
 import { searchWorkspace } from "./workspaces";
-import { railToggleLabel } from "./sidebar-rail";
+import { isMacPlatform } from "./sidebar-rail";
 import { Beat } from "./Beat";
 import { t, translatedMap } from "./i18n";
 
+const agentNames: Record<Session["agent"], string> = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
 const statusLabels = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
 type SidebarProps = {
-  collapsed: boolean; /** Rail is off-screen until the edge button or this toggle opens it. Hover does not reveal it. */ hiddenRail?: boolean; onToggle: () => void; tab: string; onNavigate: (tab: string) => void; onSkills: () => void; connected: boolean;
+  /** DOM id the title-bar toggle points at (aria-controls). */ id?: string; /** Off-screen: removed from focus order and the accessibility tree. */ closed?: boolean; tab: string; onNavigate: (tab: string) => void; onSkills: () => void; connected: boolean;
   selectedWorker?: string; onSelectWorker?: (sessionId: string, workerId: string) => void;
   sessions: Session[]; groups: Group[]; busy: boolean; selected?: string; onNew: (groupId?: string) => void; onSelect: (id: string) => void; onHelp: () => void;
   onCreateGroup: (name: string) => Promise<boolean>; onRenameGroup: (id: string, name: string) => Promise<boolean>; onDeleteGroup: (id: string) => Promise<boolean>;
@@ -42,7 +43,7 @@ export function workerTreeReducer(state: WorkerTreeState, action: WorkerTreeActi
 }
 
 export function Sidebar(props: SidebarProps) {
-  const { collapsed, hiddenRail, onToggle, tab, onNavigate, onSkills, connected, sessions, groups, busy, selected, onNew, onSelect, onHelp } = props;
+  const { closed: railClosed, tab, onNavigate, onSkills, connected, sessions, groups, busy, selected, onNew, onSelect, onHelp } = props;
   const [workerTree, dispatchWorkerTree] = useReducer(workerTreeReducer, { expanded: new Set(selected ? [selected] : []) });
   const [closed, setClosed] = useState<Set<string>>(new Set());
   const activeSession = sessions.find((session) => session.id === selected);
@@ -75,15 +76,11 @@ export function Sidebar(props: SidebarProps) {
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
       if (terminalOwnsKeyboardEvent(event)) return;
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "b") {
-        if (event.repeat) return;
-        event.preventDefault(); onToggle();
-      }
       if (event.key === "Escape") { setMenu(undefined); setEditor(undefined); setDeleting(undefined); setDeletingWorker(undefined); if (dragRef.current?.active) cancelDrag(); }
     };
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
-  }, [onToggle]);
+  }, []);
   const expand = (id: string) => setClosed((old) => { const next = new Set(old); next.delete(id); return next; });
   const cleanupDrag = useRef<() => void>(undefined);
   const cancelDrag = () => { cleanupDrag.current?.(); };
@@ -172,10 +169,10 @@ export function Sidebar(props: SidebarProps) {
     {editor?.kind === "session" && editor.id === session.id ? editForm(editor) : <div className={`sidebar-row${drag?.id === session.id ? " dragging" : ""}`} draggable={false} data-draggable={!busy}
       onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}
       onPointerDown={(event) => startDrag(event, session)}>
-      <button className="sidebar-chat-toggle" aria-label={t(open ? "side.collapseWorkers" : "side.expandWorkers", { title: session.title })} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={12} className={`folder-chevron ${open ? "open" : ""}`} /></button>
-      <button className={`sidebar-chat-open ${parentActive ? "active" : ""}`} aria-current={parentActive ? "page" : undefined} title={`${session.title} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
-        <AgentMark agent={session.agent} size="small" /><span className="sidebar-chat-copy"><span className="sidebar-session-title">{session.title}</span><small>{session.agent === "claude" ? "Claude" : session.agent === "codex" ? "Codex" : "Grok Build"}</small></span>{session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}
+      <button className={`sidebar-chat-open ${parentActive ? "active" : ""}`} aria-current={parentActive ? "page" : undefined} title={`${session.title} · ${agentNames[session.agent]} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
+        {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}<span className="sidebar-session-title">{session.title}</span>
       </button>
+      <button className={`sidebar-chat-toggle${open ? " open" : ""}`} aria-label={t(open ? "side.collapseWorkers" : "side.expandWorkers", { title: session.title })} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={14} className={`folder-chevron ${open ? "open" : ""}`} /></button>
       <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: session.title })} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
     </div>}
     {confirmDelete("session", session.id)}
@@ -202,16 +199,11 @@ export function Sidebar(props: SidebarProps) {
   </div>;
   };
   const ungrouped = visibleSessions.filter((session) => !visibleGroups.some((group) => group.id === session.groupId));
-  const desktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  return <aside className={`rail ${collapsed ? "collapsed" : "expanded"}${desktop ? " desktop" : ""}`} aria-label={t("side.label")}>
-    {(() => {
-      const closed = Boolean(collapsed || hiddenRail);
-      const label = railToggleLabel(closed);
-      return <button className="rail-toggle" onClick={onToggle} aria-expanded={!closed} aria-controls="sidebar-links" aria-label={label} title={t("side.toggleTitle", { label })}>{closed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}<span className="rail-label">{label}</span></button>;
-    })()}
-    <button className="sidebar-new" onClick={() => onNew()} aria-label={t("common.newChat")} title={t("common.newChat")}><Plus size={19} /><span className="rail-label">{t("common.newChat")}</span></button>
-    {!collapsed && <label className="sidebar-search"><Search size={15} aria-hidden="true" /><input type="search" aria-label={t("side.search")} placeholder={t("side.search")} value={query} onChange={(event) => setQuery(event.target.value)} /></label>}
-    <nav id="sidebar-links" className="rail-main" aria-label={t("side.chatList")} hidden={collapsed}>
+  const newChatKey = isMacPlatform() ? "⌘N" : "Ctrl+N";
+  return <aside id={props.id} className="rail" aria-label={t("side.label")} inert={railClosed || undefined}>
+    <button className="sidebar-new" onClick={() => onNew()} aria-label={t("common.newChat")} title={`${t("common.newChat")} (${newChatKey})`}><Plus size={18} aria-hidden="true" /><span>{t("common.newChat")}</span><kbd aria-hidden="true">{newChatKey}</kbd></button>
+    <label className="sidebar-search"><Search size={18} aria-hidden="true" /><input type="search" aria-label={t("side.search")} placeholder={t("side.search")} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+    <nav id="sidebar-links" className="rail-main" aria-label={t("side.chatList")}>
       {searching && !visibleGroups.length && !visibleSessions.length && <p className="sidebar-search-empty" role="status">{t("side.noResults")}</p>}
       <section className="sidebar-projects" aria-label={t("side.projects")}>
         <div className="sidebar-section-heading"><h2>{t("side.projects")}</h2><button aria-label={t("ob.createProject")} title={t("ob.createProject")} disabled={busy} onClick={() => { setEditor({ kind: "create", id: "", value: "" }); setMenu(undefined); }}><Plus size={15} /></button></div>
@@ -223,7 +215,7 @@ export function Sidebar(props: SidebarProps) {
           return <div key={group.id} className={`sidebar-project${dropClass(group.id)}`} data-drop-group={group.id}>
             {editor?.kind === "group" && editor.id === group.id ? editForm(editor) : <div className="sidebar-row" onContextMenu={(event) => { event.preventDefault(); openMenu("group", group.id, event); }}>
               <button className="sidebar-folder" aria-expanded={open} aria-controls={`project-${group.id}`} title={group.name} onClick={() => setClosed((old) => { const next = new Set(old); if (open) next.add(group.id); else next.delete(group.id); return next; })}>
-                <ChevronRight size={12} className={open ? "folder-chevron open" : "folder-chevron"} />{open ? <FolderOpen size={16} /> : <Folder size={16} />}<span className="sidebar-session-title">{group.name}</span><small>{chats.length}</small>
+                {open ? <FolderOpen size={18} /> : <Folder size={18} />}<span className="sidebar-session-title">{group.name}</span><small>{chats.length}</small>
               </button>
               <button className="sidebar-row-action" aria-label={t("side.projectMenu", { name: group.name })} aria-haspopup="menu" aria-expanded={menu === group.id} onClick={(event) => menu === group.id ? setMenu(undefined) : openMenu("group", group.id, event, true)}><MoreHorizontal size={15} /></button>
             </div>}
@@ -234,11 +226,11 @@ export function Sidebar(props: SidebarProps) {
       </section>
       <section className={`sidebar-recents${dropClass(UNGROUPED)}`} aria-label={t("side.recentChats")} data-drop-group={UNGROUPED}><div className="sidebar-section-heading"><h2>{t("side.recent")}</h2>{drag && <small className="drop-hint">{t("side.dropUnsorted")}</small>}</div>{dropTarget === UNGROUPED && drag && <div className="drop-slot" aria-hidden="true">{t("side.moveUnsorted", { title: drag.title })}</div>}{ungrouped.length ? ungrouped.map(sessionRow) : !searching ? <p className="sidebar-empty">{t("side.noChats")}</p> : null}</section>
     </nav>
-    <div className="sidebar-tools" aria-label={t("side.tools")}>
+    <div className="sidebar-tools" role="group" aria-label={t("side.tools")}>
       {props.onUsage && <button aria-label={t("side.usage")} title={t("side.usage")} onClick={props.onUsage}><BarChart3 size={18} /></button>}
       {([[Wrench, "tools", t("header.tools")], [Settings2, "routing", t("side.settings")], [Bot, "bots", t("side.bots")], [WandSparkles, "skills", t("side.skills")], [CircleHelp, "help", t("side.help")]] as const).map(([Icon, key, label]) => <button key={key} aria-label={label} title={key === "tools" ? t("header.toolsTitle") : label} className={tab === key ? "active" : ""} aria-current={tab === key ? "page" : undefined} onClick={() => key === "skills" ? onSkills() : key === "help" ? onHelp() : onNavigate(key)}><Icon size={18} /></button>)}
     </div>
-    <div className="rail-connection" role="status" aria-label={connected ? t("side.connected") : t("side.reconnecting")}><span className={`rail-status ${connected ? "online" : "offline"}`} /><span className="rail-label">{connected ? t("side.connected") : t("side.reconnecting")}</span></div>
+    <div className="rail-connection" role="status"><span className={`rail-status ${connected ? "online" : "offline"}`} aria-hidden="true" /><span>{connected ? t("side.connected") : t("side.reconnecting")}</span>{connected && typeof window !== "undefined" && window.location?.hostname && <span className="rail-host">· {window.location.hostname}</span>}</div>
     {menuState && <ContextMenu x={menuState.x} y={menuState.y} label={t("side.chatMenu")} onClose={() => setMenuState(undefined)} items={menuItems(menuState)} />}
     {drag && createPortal(<div className="sidebar-drag-ghost" style={{ left: drag.x + 14, top: drag.y + 10 }} aria-hidden="true"><AgentMark agent={drag.agent} size="small" /><span>{drag.title}</span></div>, document.body)}
   </aside>;

@@ -24,7 +24,7 @@ export type BotsViewProps = {
 /** "봇" tab: saved bot presets and a two-bot conversation launcher. */
 export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, prompt, setPrompt, cwd, busy, connected, onCreate, onPickFolder, onUse, onDelete, onStart }: BotsViewProps) {
   return <div className="bots-grid">
-    <section className="glass full-panel">
+    <section className="panel full-panel">
       <div className="panel-header">
         <h2>{t("bots.title")}</h2>
         <button
@@ -76,7 +76,7 @@ export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, 
         ))
       )}
     </section>
-    <section className="glass bot-conversation">
+    <section className="panel bot-conversation">
       <h2>{t("bots.convTitle")}</h2>
       <p>
         {t("bots.convBody1")}

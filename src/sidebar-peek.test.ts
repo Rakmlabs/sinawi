@@ -7,6 +7,8 @@ test("collapsed sidebar no longer peeks open on hover", () => {
   const css = readFileSync(new URL("./browser.css", import.meta.url), "utf8");
   assert.doesNotMatch(main, /sidebar-peek|sidebar-hotzone|sidebarPeek/);
   assert.doesNotMatch(css, /sidebar-peek|sidebar-hotzone|sidebar-hover/);
-  assert.match(main, /aria-label=\{t\("sidebar\.expand"\)\}/);
+  // The only way to open a closed sidebar is the title-bar toggle (or ⌘B / ⌘\), never an edge handle.
+  assert.doesNotMatch(main + css, /sidebar-handle/);
+  assert.match(main, /sidebar=\{\{ open: sidebarOpen, controls: SIDEBAR_ID, onToggle: toggleSidebar/);
   assert.doesNotMatch(main, /aria-label="스킬 첨부"|label="작업 그룹"|"comp\.attachSkill"|"comp\.taskGroup"/);
 });

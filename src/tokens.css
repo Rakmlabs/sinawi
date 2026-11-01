@@ -19,10 +19,10 @@
  * selectors that hit the same element:
  *   - style.css first — Tailwind preflight plus element defaults (button, input, small, h1…)
  *     that component sheets refine with single-class selectors.
- *   - chat-layout.css after style.css — it re-lays out the legacy .rail/.conversation shell
- *     with grouped selectors (e.g. ".app-shell main, .app-shell.sidebar-expanded main").
+ *   - chat-layout.css after style.css — it owns the app shell grid (title bar, sidebar, main)
+ *     and refines a few element defaults from style.css (e.g. .composer-bottom .send-button).
  *   - readability.css after the component sheets — its grouped type-scale selectors
- *     (small, time, .subtle-tag, …) set the metadata size/colour those sheets leave open.
+ *     (small, time, .status-label, …) set the metadata size/colour those sheets leave open.
  *   - appearance.css / beat.css (owned by the settings UI) only style their own classes.
  */
 

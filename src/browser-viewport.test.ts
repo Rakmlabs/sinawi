@@ -86,9 +86,6 @@ test("a scaled iPhone frame keeps a 390 CSS layout and paints the full visual bo
   assert.match(css, /var\(--text-body\)/);
   assert.match(css, /var\(--radius-rail\)/);
   assert.doesNotMatch(css, /Menlo/);
-  assert.match(css, /button\.sidebar-handle[\s\S]*min-width:\s*28px/);
-  assert.match(css, /button\.sidebar-handle::before[\s\S]*width:\s*14px/);
-  assert.doesNotMatch(css, /sidebar-handle:hover[\s\S]{0,180}width:\s*20px/);
   assert.match(css, /button\.light[\s\S]*min-width:\s*28px/);
   assert.match(css, /button\.light::before[\s\S]*width:\s*13px/);
 });

@@ -124,7 +124,7 @@
 .browser-recent small { font-size: var(--text-title); opacity: .65; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 바탕화면 브라우저 창 ---- */
-.browser-desktop { position: fixed; top: var(--window-header-height, 38px); right: 0; bottom: 0; left: 0; pointer-events: none; z-index: 40; overflow: hidden; }
+.browser-desktop { position: fixed; top: var(--window-header-height, 48px); right: 0; bottom: 0; left: 0; pointer-events: none; z-index: 40; overflow: hidden; }
 .desktop-window { position: absolute; display: flex; flex-direction: column; pointer-events: auto; border-radius: var(--radius-composer); overflow: hidden; background: var(--bg-surface); box-shadow: 0 18px 50px var(--shadow-color), 0 0 0 1px var(--highlight); }
 .desktop-window[hidden] { display: none; }
 .desktop-window.focused { box-shadow: 0 22px 60px var(--shadow-color), 0 0 0 1px var(--selection); }
@@ -157,28 +157,15 @@
 .desktop-dock button { display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: var(--radius-message); padding: 6px 10px; font: inherit; font-size: var(--text-title); font-weight: 600; color: var(--text); background: var(--bg-strong); cursor: pointer; }
 .desktop-dock button:hover { background: var(--bg-strong); }
 
-/* ---- 새 채팅에서도 채팅 패널이 사이드바와 같은 높이 ---- */
-.app-shell main.chat-view > .workspace-grid { flex: 1 1 auto; min-height: 0; }
-.app-shell main.chat-view > .workspace-grid > .conversation { height: auto; min-height: 0; }
-
-/* ---- 사이드바: 접힘(⌘B)·브라우저 최대화/반쪽이면 완전히 숨김. 왼쪽 가장자리 버튼으로만 펼침 ---- */
-.app-shell .rail { transition: transform 220ms cubic-bezier(.2,.8,.2,1), box-shadow 220ms ease-out; will-change: transform; }
-.app-shell.sidebar-collapsed .rail { transform: translateX(calc(-100% - 40px)); box-shadow: none; z-index: 97; }
-.app-shell.sidebar-collapsed main, .app-shell.sidebar-collapsed.sidebar-expanded main { margin-left: 16px !important; }
-@media (prefers-reduced-motion: reduce) { .app-shell .rail { transition: none; } }
-
-/* ---- 브라우저가 반쪽/전체를 차지할 때 채팅 배치 ---- */
-.app-shell.desk-left main { margin-left: calc(50vw + 4px) !important; }
-.app-shell.desk-right main { margin-left: 0 !important; margin-right: calc(50vw + 4px) !important; }
-.app-shell.desk-left main, .app-shell.desk-right main { padding-left: 4px; padding-right: 4px; }
-.app-shell main.chat-hidden { display: none !important; }
+/* ---- 브라우저가 반쪽/전체를 차지할 때 채팅 배치 (사이드바는 이때 오버레이) ---- */
+.app-shell.desk-left main { margin-left: 50vw; border-left: 1px solid var(--border); }
+.app-shell.desk-right main { margin-right: 50vw; border-right: 1px solid var(--border); }
+.app-shell main.chat-hidden { display: none; }
 .app-shell main.chat-float {
   position: fixed; right: 20px; bottom: 20px; z-index: 95; width: min(440px, calc(100vw - 40px)); height: min(660px, calc(100dvh - 90px));
-  margin: 0 !important; padding: 0 !important; border-radius: var(--radius-emblem); overflow: hidden; box-shadow: 0 24px 70px var(--shadow-color), 0 0 0 1px var(--highlight);
+  margin: 0; border-radius: var(--radius-emblem); overflow: hidden; box-shadow: 0 24px 70px var(--shadow-color), 0 0 0 1px var(--highlight);
 }
-.app-shell main.chat-float .right-column { display: none; }
-.app-shell main.chat-float .workspace-grid { grid-template-columns: minmax(0, 1fr) !important; }
-.app-shell main.chat-float .conversation { border-radius: var(--radius-emblem); }
+.app-shell main.chat-float .activity-panel { display: none; }
 .chat-float-close { position: absolute; top: 10px; right: 12px; z-index: 5; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: var(--radius-control); color: var(--text); background: var(--bg-strong); cursor: pointer; }
 .chat-float-close:hover { background: var(--bg-strong); }
 .app-shell main.chat-float .chat-actions { margin-right: 38px; }
@@ -188,15 +175,8 @@
 .chat-bubble-dot { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: var(--radius-round); background: var(--accent); border: 2px solid var(--bg-app); }
 
 /* ---- 채팅 접기: 오른쪽 얇은 레일 ---- */
-.app-shell.chat-collapsed main.chat-view { display: none !important; }
-.chat-rail { position: fixed; right: 12px; top: calc(var(--window-header-height, 38px) + 16px); bottom: 16px; z-index: 35; width: 48px; border-radius: var(--radius-panel); background: var(--bg-sidebar); box-shadow: 0 0 0 1px var(--highlight); }
-.chat-rail button { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; height: 100%; padding: 14px 0; border: 0; border-radius: var(--radius-panel); color: var(--text-secondary); background: transparent; cursor: pointer; font: inherit; font-size: var(--text-title); font-weight: 600; }
+.app-shell.chat-collapsed main.chat-view { display: none; }
+.chat-rail { position: fixed; right: 0; top: var(--window-header-height); bottom: var(--terminal-height, 0px); z-index: 35; width: 48px; border-left: 1px solid var(--border); background: var(--bg-sidebar); }
+.chat-rail button { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; height: 100%; padding: 14px 0; border: 0; border-radius: 0; color: var(--text-secondary); background: transparent; cursor: pointer; font: inherit; font-size: var(--text-title); font-weight: 600; }
 .chat-rail button:hover { background: var(--bg-active); }
 .chat-rail span { writing-mode: vertical-rl; letter-spacing: .1em; }
-/* 접힌 사이드바 손잡이: 보이는 탭은 14px, 클릭 영역은 28px. 호버로 폭을 키우지 않는다. */
-button.sidebar-handle { position: fixed; left: 0; top: 50%; transform: translateY(-50%); z-index: 99; width: 28px; min-width: 28px; height: 56px; min-height: 28px; padding: 0; display: flex; align-items: center; justify-content: flex-start; border: 0; border-radius: 0; background: transparent; color: var(--text-muted); cursor: pointer; box-shadow: none; }
-button.sidebar-handle::before { content: ""; position: absolute; left: 0; top: 0; width: 14px; height: 56px; border: 1px solid var(--border); border-left: 0; border-radius: 0 var(--radius-control) var(--radius-control) 0; background: var(--bg-sidebar); box-shadow: 0 6px 18px var(--shadow-color); }
-button.sidebar-handle svg { position: relative; z-index: 1; }
-button.sidebar-handle:hover, button.sidebar-handle:focus-visible { width: 28px; background: transparent; color: var(--text); outline: none; }
-button.sidebar-handle:hover::before, button.sidebar-handle:focus-visible::before { background: var(--bg-sidebar); }
-button.sidebar-handle:focus-visible::before { box-shadow: 0 0 0 2px var(--selection), 0 6px 18px var(--shadow-color); }

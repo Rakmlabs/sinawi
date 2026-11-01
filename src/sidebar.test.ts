@@ -13,7 +13,7 @@ function session(id: string, groupId?: string, status: Session["status"] = "done
 }
 function render(overrides: Partial<ComponentProps<typeof Sidebar>> = {}) {
   return renderToStaticMarkup(createElement(Sidebar, {
-    collapsed: false, onToggle: noop, tab: "workspace", onNavigate: noop, onSkills: noop, connected: true,
+    tab: "workspace", onNavigate: noop, onSkills: noop, connected: true,
     sessions: [], groups: [], busy: false, onNew: noop, onSelect: noop, onHelp: noop,
     onCreateGroup: ok, onRenameGroup: ok, onDeleteGroup: ok, onRenameSession: ok, onDeleteSession: ok, onAssign: ok,
     ...overrides,
@@ -38,7 +38,9 @@ test("sidebar offers new chat, project creation and compact management tools wit
   const html = render();
   for (const label of ["새 채팅", "채팅 및 프로젝트 검색", "프로젝트 만들기", "도구 관리", "설정", "봇", "스킬"]) assert.ok(html.includes(`aria-label="${label}"`));
   assert.doesNotMatch(html, /작업 그룹|작업 공간|에이전트 관리/);
-  assert.match(html, /aria-label="사이드바 접기"/);
+  // The collapse toggle lives in the title bar now, not inside the sidebar.
+  assert.doesNotMatch(html, /사이드바 접기|사이드바 펼치기/);
+  assert.match(html, /<kbd aria-hidden="true">(?:⌘N|Ctrl\+N)<\/kbd>/);
   assert.match(html, /아직 채팅이 없습니다/);
   assert.match(html, /프로젝트로 채팅을 모아 보세요/);
 });
@@ -47,15 +49,13 @@ test("sidebar keeps the workspace switcher exclusively in the header", () => {
   assert.doesNotMatch(html, /aria-label="회사 작업 공간, 개인으로 전환"/);
   assert.doesNotMatch(html, /개인에서 진행 중인 작업 2개/);
 });
-test("collapsed rail hides chat navigation and busy chats cannot be dragged", () => {
+test("a closed sidebar is inert and busy chats cannot be dragged", () => {
   const companySession = { ...session("busy"), workspaceId: "company" as const };
-  const html = render({ collapsed: true, busy: true, sessions: [companySession], workspaceId: "company", onSwitchWorkspace: noop });
-  assert.match(html, /aria-label="채팅 목록" hidden=""/);
-  assert.match(html, /aria-label="사이드바 펼치기"/);
-  assert.match(html, /title="사이드바 펼치기 \(⌘ \/ Ctrl\+B\)"/);
+  const html = render({ id: "app-sidebar", closed: true, busy: true, sessions: [companySession], workspaceId: "company", onSwitchWorkspace: noop });
+  assert.match(html, /<aside id="app-sidebar" class="rail" aria-label="사이드바" inert="">/);
   assert.match(html, /data-draggable="false"/);
-  assert.doesNotMatch(html, /aria-label="채팅 및 프로젝트 검색"/);
   assert.doesNotMatch(html, /회사 작업 공간, 개인으로 전환/);
+  assert.doesNotMatch(render({ id: "app-sidebar" }), /inert/);
 });
 
 test("sidebar exposes usage from its management footer", () => {

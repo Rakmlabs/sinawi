@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { TeamBar } from "../TeamBar";
 import { useQuotas } from "../QuotaContext";
 import { automaticTeamDefaults } from "../workspaces";
@@ -17,6 +18,8 @@ export type TeamBarSlotProps = {
   quotaThreshold: number;
   routingSettings: RoutingSettings | undefined;
   busy: boolean;
+  /** Conversation controls shown at the right end of the team row. */
+  actions?: ReactNode;
   onSave: (orchestrator: AgentSelection, workers: AgentSelection[]) => Promise<boolean>;
 };
 
@@ -24,7 +27,7 @@ export type TeamBarSlotProps = {
  * Team chips above the chat. The automatic default depends on quota windows expiring, so only this
  * slot keeps a (coarse, 30 s — the quota refresh period) clock, and only while that default shows.
  */
-export function TeamBarSlot({ workspaceId, active, pendingRecommendation, mode, manual, availableAgents, quotaFallback, quotaThreshold, routingSettings, busy, onSave }: TeamBarSlotProps) {
+export function TeamBarSlot({ workspaceId, active, pendingRecommendation, mode, manual, availableAgents, quotaFallback, quotaThreshold, routingSettings, busy, actions, onSave }: TeamBarSlotProps) {
   const { providers } = useQuotas();
   const automaticShown = !active && !pendingRecommendation && mode === "auto";
   const now = useNow(30_000, automaticShown);
@@ -44,5 +47,5 @@ export function TeamBarSlot({ workspaceId, active, pendingRecommendation, mode, 
       } : undefined,
     ) : { agent: manual.agent, model: manual.model, reasoningEffort: manual.reasoningEffort });
   const workers = active ? normalizeWorkerConfigs(active.workers, active.workerConfigs) : pendingRecommendation?.workers ?? normalizeWorkerConfigs(manual.workers, manual.workerConfigs);
-  return <TeamBar orchestrator={orchestrator} workers={workers} settings={routingSettings} availableAgents={availableAgents} disabled={busy} running={active?.status === "running"} automatic={automaticShown} onSave={onSave} />;
+  return <TeamBar orchestrator={orchestrator} workers={workers} settings={routingSettings} availableAgents={availableAgents} disabled={busy} running={active?.status === "running"} automatic={automaticShown} actions={actions} onSave={onSave} />;
 }

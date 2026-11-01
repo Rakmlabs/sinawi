@@ -21,7 +21,7 @@ const fallbackCandidates = (source: AgentId): AgentId[] => source === "codex" ? 
 
 /** Settings tab: which agents this workspace may use, and quota-exhaustion fallback order. */
 export function AllowedAgentsSettings({ workspaceId, allowedAgents, busy, quotaFallback, setQuotaFallback, quotaThreshold, setQuotaThreshold, fallbackOrder, setFallbackOrder, onAllowedChange }: AllowedAgentsSettingsProps) {
-  return <section className="glass routing-settings" aria-label={t("allowed.label")}>
+  return <section className="panel routing-settings" aria-label={t("allowed.label")}>
     <h2>{t("allowed.title", { space: workspaceId === "company" ? t("workspace.company") : t("workspace.personal") })}</h2>
     <p className="muted">{t("allowed.body")}</p>
     <div className="routing-skills">{(["codex", "claude", "grok"] as AgentId[]).map((id) => <label key={id} title={workspaceId === "company" && id === "codex" ? t("allowed.codexOffAtWork") : undefined}>

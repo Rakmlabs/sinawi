@@ -1,4 +1,4 @@
-/* NEXT4: viewport-bound, conversation-first application shell. */
+/* Viewport-bound application shell: title bar, then sidebar | main, flush columns split by 1px borders. */
 html,
 body,
 #root {
@@ -8,146 +8,109 @@ body,
 }
 
 .app-shell {
-  width: 100%;
-  height: 100dvh;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.rail {
-  top: calc(var(--window-header-height) + 16px);
-  bottom: 16px;
-  left: 16px;
-  min-height: 0;
-  max-height: calc(100dvh - var(--window-header-height) - 32px);
-  justify-content: flex-start;
-}
-
-.rail > .rail-main {
-  flex: 1 1 auto;
-  align-self: stretch;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-width: thin;
-}
-
-.rail.collapsed > .rail-main {
-  overflow: visible;
-}
-
-.rail.expanded > .rail-main {
-  padding-right: 2px;
-}
-
-.rail .sidebar-new {
-  color: var(--text);
-  background: var(--bg-raised);
-  border: 1px solid var(--border-strong);
-  font-weight: 600;
-}
-
-.rail .sidebar-new:hover:not(:disabled) {
-  background: var(--bg-active);
-}
-
-.sidebar-sessions {
+  --window-header-height: 48px;
+  --sidebar-width: 260px;
+  --sidebar-motion: 180ms ease-out;
   display: grid;
-  gap: 3px;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.sidebar-sessions > p {
-  padding: 6px 10px;
-  color: var(--text-muted);
-  font-size: calc(12px * var(--font-scale));
-  line-height: 1.6;
-}
-
-.rail .sidebar-sessions > button {
-  display: flex;
-  min-width: 0;
-  min-height: 34px;
-  padding: 7px 9px;
-  gap: 8px;
-}
-
-.sidebar-session-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail .sidebar-help {
-  flex: 0 0 auto;
-  margin-top: 8px;
-}
-
-.rail > .rail-connection {
-  flex-shrink: 0;
-  min-height: 38px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
-}
-
-.app-shell main,
-.app-shell.sidebar-expanded main,
-.app-shell.sidebar-collapsed main {
-  height: calc(100dvh - var(--window-header-height));
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: var(--window-header-height) minmax(0, 1fr);
+  grid-template-areas: "header header" "sidebar main";
+  width: 100%;
+  height: calc(100dvh - var(--terminal-height, 0px));
   min-height: 0;
-  max-width: none;
-  margin-top: 0;
-  margin-right: 0;
-  padding: 16px 16px 16px 0;
+  overflow: hidden;
+  background: var(--bg-app);
+  transition: grid-template-columns var(--sidebar-motion);
+}
+
+.app-shell.sidebar-closed,
+.app-shell.sidebar-overlay {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+/* Docked sidebar: a fixed-width column right-aligned in its track, so shrinking the track slides it out. */
+.app-shell > .rail {
+  grid-area: sidebar;
+  justify-self: end;
+  justify-self: unsafe end;
+  width: var(--sidebar-width);
+  min-height: 0;
+  transition: visibility 0s;
+}
+
+.app-shell.sidebar-closed > .rail {
+  visibility: hidden;
+  transition: visibility 0s linear 180ms;
+}
+
+/* Overlay sidebar (narrow window, or over a snapped/maximised browser): slides over the content. */
+.app-shell.sidebar-overlay > .rail {
+  position: fixed;
+  z-index: 96;
+  top: var(--window-header-height);
+  bottom: var(--terminal-height, 0px);
+  left: 0;
+  width: min(var(--sidebar-width), calc(100vw - 48px));
+  transform: translateX(0);
+  transition: transform var(--sidebar-motion), visibility 0s;
+}
+
+.app-shell.sidebar-overlay.sidebar-closed > .rail {
+  transform: translateX(-100%);
+  transition: transform var(--sidebar-motion), visibility 0s linear 180ms;
+}
+
+.sidebar-scrim {
+  position: fixed;
+  z-index: 95;
+  inset: var(--window-header-height) 0 var(--terminal-height, 0px);
+  background: var(--backdrop);
+  animation: sidebar-scrim-in var(--sidebar-motion);
+}
+
+@keyframes sidebar-scrim-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell,
+  .app-shell > .rail,
+  .app-shell.sidebar-overlay > .rail,
+  .app-shell.sidebar-overlay.sidebar-closed > .rail { transition: none; }
+  .sidebar-scrim { animation: none; }
+}
+
+.app-shell main {
+  grid-area: main;
+  background: var(--bg-app);
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
   overflow: hidden;
 }
 
 .app-shell main > .error-banner {
   flex: 0 0 auto;
-  margin: 0;
+  margin: 12px 24px 0;
 }
 
+/* Chat column + optional live-activity aside. */
 .app-shell .workspace-grid {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-}
-
-.app-shell .workspace-grid.activity-open {
-  grid-template-columns: minmax(0, 1fr) minmax(290px, 360px);
-}
-
-.app-shell .workspace-grid > *,
-.conversation,
-.right-column,
-.activity-panel {
-  min-width: 0;
-  min-height: 0;
+  display: flex;
 }
 
 .conversation {
   position: relative;
-  width: 100%;
-  height: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.conversation > .panel-header {
-  min-height: 52px;
-  flex: 0 0 52px;
-  padding: 0 18px;
 }
 
 .chat-body {
@@ -160,10 +123,10 @@ body,
 }
 
 .messages {
-  width: min(100%, 800px);
+  width: min(100%, 820px);
   margin-inline: auto;
-  padding: 24px 20px 36px;
-  gap: 26px;
+  padding: 28px 24px 36px;
+  gap: 24px;
 }
 
 .message {
@@ -178,10 +141,9 @@ body,
 .user-message {
   align-self: flex-end;
   width: fit-content;
-  max-width: min(82%, 640px);
-  padding: 11px 14px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px 12px 4px 12px;
+  max-width: 80%;
+  padding: 12px 16px;
+  border-radius: 14px 14px 4px 14px;
   background: var(--bg-active);
 }
 
@@ -401,15 +363,59 @@ body,
   padding: 16px 18px;
 }
 
+/* Conversation controls at the right end of the team row. */
 .chat-actions {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
-.chat-actions .button {
-  min-height: 34px;
-  padding: 7px 10px;
+.chat-actions-context {
+  max-width: 220px;
+  margin-right: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale));
+}
+
+.chat-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--icon);
+}
+
+.chat-action-icon:hover:not(:disabled),
+.chat-action-icon[aria-expanded="true"] {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.chat-action-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin-right: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: calc(13px * var(--font-scale));
+  white-space: nowrap;
+}
+
+.chat-action-text:hover:not(:disabled) {
+  background: var(--bg-active);
+  color: var(--text);
 }
 
 .composer-warning {
@@ -423,24 +429,32 @@ body,
   line-height: 1.55;
 }
 
+/* Composer: centred 820px column, as wide as the messages. */
 .composer-area {
   flex: 0 0 auto;
+  width: min(100%, 820px);
   min-width: 0;
-  padding: 10px 14px 14px;
-  border-top: 1px solid var(--border-subtle);
+  margin-inline: auto;
+  padding: 0 24px 20px;
 }
 
 .composer {
   min-width: 0;
-  padding: 9px 10px 8px;
+  padding: 12px 12px 10px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
   background: var(--bg-raised);
   overflow: visible;
 }
 
+.composer:focus-within {
+  border-color: var(--accent-border);
+}
+
 .composer textarea {
-  min-height: 38px;
-  max-height: 132px;
-  padding: 2px 3px 7px;
+  min-height: 46px;
+  max-height: 160px;
+  padding: 0 0 8px;
   overflow-y: auto;
 }
 
@@ -449,14 +463,20 @@ body,
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 8px;
 }
 
 .composer-bottom .directory-button {
   flex: 0 1 auto;
   width: auto;
   max-width: min(230px, 38%);
-  min-height: 34px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
 }
 
 .composer-bottom .routing-mode {
@@ -466,8 +486,8 @@ body,
 }
 
 .composer-bottom .routing-mode button {
-  min-height: 28px;
-  padding: 5px 8px;
+  min-height: 24px;
+  padding: 0 10px;
   border-radius: 6px;
   font-size: calc(12px * var(--font-scale));
 }
@@ -487,22 +507,20 @@ body,
   max-width: 150px;
 }
 
-.composer-bottom .skill-toggle,
 .composer-bottom > .icon-button {
-  min-height: 34px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border-radius: 8px;
-  background: var(--bg-active);
+  color: var(--icon);
 }
 
-.composer-bottom > .icon-button {
-  width: 34px;
+.composer-bottom > .icon-button:hover:not(:disabled) {
+  background: var(--bg-active);
+  color: var(--text);
 }
 
 .composer-bottom .send-button {
-  width: 36px;
-  height: 36px;
   margin-left: auto;
 }
 
@@ -550,28 +568,73 @@ body,
   background: transparent;
 }
 
-.right-column {
-  height: 100%;
-  display: flex;
-  overflow: hidden;
-}
-
+/* Live activity aside: flush column with its own background. */
 .activity-panel {
-  width: 100%;
-  height: 100%;
+  flex: 0 0 clamp(300px, 26vw, 360px);
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--bg-sidebar);
 }
 
-.activity-panel > .panel-header,
-.activity-tabs,
-.activity-footer {
+.activity-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 0 0 auto;
+  padding: 10px 8px 6px 16px;
+}
+
+.activity-heading h2 {
+  font-size: calc(14px * var(--font-scale));
+  font-weight: 600;
+}
+
+.activity-heading .live-badge {
+  letter-spacing: 0;
+}
+
+.activity-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-heading .live-badge + .chat-action-icon {
+  margin-left: auto;
+}
+
+.activity-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 0 12px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.activity-tabs button {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale));
+  white-space: nowrap;
+}
+
+.activity-tabs button[aria-selected="true"] {
+  background: var(--bg-active);
+  color: var(--text);
 }
 
 .activity-content {
   flex: 1 1 auto;
+  display: flex;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -579,72 +642,114 @@ body,
 }
 
 .event-list {
+  width: 100%;
   min-height: 0;
+  margin: 0;
+  padding: 8px 16px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
+.activity-summary {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.activity-summary > time {
+  flex: 0 0 auto;
+  padding-top: 2px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-summary > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.activity-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: calc(13px * var(--font-scale));
+}
+
+.activity-detail {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--font-scale));
+}
+
+.activity-summary.event-error .activity-detail,
+.activity-summary.event-warning .activity-detail {
+  color: var(--danger-fg);
+}
+
+.activity-terminal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 34px;
+  margin: 8px 12px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: calc(13px * var(--font-scale));
+}
+
+.activity-terminal kbd,
+.sidebar-new kbd {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--font-scale));
+}
+
+/* Settings, tools, history and bots: a flush scrolling column of bordered sections. */
 .app-shell main.management-view {
   display: block;
+  padding: 24px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
-.app-shell main.management-view > .glass,
-.app-shell main.management-view > section {
-  margin-bottom: 16px;
+.app-shell main.management-view > section,
+.app-shell main.management-view > div {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto 16px;
 }
 
+/* Narrow windows: the activity aside floats over the chat instead of squeezing it. */
 @media (max-width: 940px) {
-  .app-shell .workspace-grid.activity-open {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .app-shell .workspace-grid.activity-open .right-column {
+  .activity-panel {
     position: fixed;
     z-index: 35;
-    top: calc(var(--window-header-height) + 16px);
-    right: 16px;
-    bottom: 16px;
-    width: min(380px, calc(100vw - 106px));
-    height: auto;
-    filter: drop-shadow(-16px 12px 30px var(--shadow-color));
+    top: var(--window-header-height);
+    right: 0;
+    bottom: var(--terminal-height, 0px);
+    width: min(360px, calc(100vw - 48px));
   }
 }
 
 @media (max-width: 740px) {
-  .rail {
-    top: calc(var(--window-header-height) + 8px);
-    bottom: 8px;
-    left: 8px;
-    max-height: calc(100dvh - var(--window-header-height) - 16px);
-  }
-
-  .rail.expanded {
-    z-index: 50;
-  }
-
-  .rail .sidebar-help,
-  .rail .sidebar-new,
-  .rail .rail-toggle {
-    min-height: 44px;
-  }
-
-  .app-shell main,
-  .app-shell.sidebar-expanded main,
-  .app-shell.sidebar-collapsed main {
-    margin-left: 68px;
-    padding: 8px 8px 8px 0;
-  }
-
-  .conversation > .panel-header {
-    min-height: 48px;
-    flex-basis: 48px;
-    padding: 0 12px;
+  .chat-body .messages {
+    padding: 20px 16px 28px;
   }
 
   .composer-area {
-    padding: 8px;
+    padding: 0 12px 12px;
   }
 
   .composer-bottom {
@@ -652,34 +757,7 @@ body,
   }
 
   .composer-bottom .directory-button {
-    min-height: 44px;
     max-width: calc(100% - 50px);
-  }
-
-  .composer-bottom .routing-mode,
-  .composer-bottom .session-group-control,
-  .composer-bottom .skill-toggle,
-  .composer-bottom > .icon-button {
-    min-height: 44px;
-  }
-
-  .composer-bottom > .icon-button,
-  .chat-actions .icon-button,
-  .activity-panel .icon-button {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-  }
-
-  .composer-bottom .routing-mode button,
-  .composer-bottom .send-button {
-    min-height: 44px;
-  }
-
-  .composer-bottom .send-button {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
   }
 
   .composer-bottom .session-group-control .glass-select {
@@ -694,17 +772,6 @@ body,
     max-width: 340px;
   }
 
-  .prompt-chips button {
-    min-height: 44px;
-  }
-
-  .app-shell .workspace-grid.activity-open .right-column {
-    top: calc(var(--window-header-height) + 8px);
-    right: 8px;
-    bottom: 8px;
-    width: calc(100vw - 84px);
-  }
-
   .recommendation-summary {
     align-items: flex-start;
     flex-direction: column;
@@ -713,16 +780,37 @@ body,
   .recommendation-actions {
     align-self: flex-end;
   }
+
+  .app-shell main.management-view {
+    padding: 16px 12px;
+  }
+}
+
+@media (max-width: 740px), (pointer: coarse) {
+  .composer-bottom .directory-button,
+  .composer-bottom .routing-mode,
+  .composer-bottom .session-group-control,
+  .composer-bottom .routing-mode button,
+  .prompt-chips button {
+    min-height: 44px;
+  }
+
+  .composer-bottom > .icon-button,
+  .composer-bottom .send-button,
+  .chat-action-icon {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+
+  .chat-action-text,
+  .activity-tabs button {
+    min-height: 44px;
+  }
 }
 
 @media (max-height: 650px) {
-  .conversation > .panel-header {
-    min-height: 44px;
-    flex-basis: 44px;
-  }
-
   .composer-area {
-    padding-top: 7px;
     padding-bottom: 8px;
   }
 

@@ -1,20 +1,13 @@
-.app-shell {
-  --window-header-height: 38px;
-}
-
-.app-shell.tauri-app {
-  --window-header-height: 38px;
-  padding-top: var(--window-header-height);
-}
-
+/* App title bar: full-width 48px row above the sidebar and main column. */
 .window-header {
-  position: absolute;
-  inset: 0 0 auto;
-  height: var(--window-header-height);
-  padding: 0 78px;
+  grid-area: header;
+  z-index: 90;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 12px;
+  min-width: 0;
+  height: var(--window-header-height);
+  padding: 0 12px 0 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-app);
   user-select: none;
@@ -22,73 +15,135 @@
   cursor: default;
 }
 
-.window-header-title {
+/* macOS traffic lights (titleBarStyle "Overlay") sit over this spacer. */
+.window-header-traffic {
+  flex: 0 0 68px;
+  align-self: stretch;
+}
+
+.window-header-crumbs {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
+  gap: 10px;
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: 100%;
-  font-size: calc(12px * var(--font-scale));
+  font-size: calc(14px * var(--font-scale));
   line-height: 1.4;
-}
-
-.window-header-brand,
-.window-header-separator {
-  flex-shrink: 0;
-}
-
-.window-header-brand {
-  font-weight: 550;
-}
-
-.window-header-separator,
-.window-header-conversation {
-  color: var(--text-muted);
-}
-
-.window-header-reload {
-  position: absolute;
-  right: 12px;
-  top: 5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-.window-header-tools { position: absolute; right: 46px; top: 5px; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; color: var(--text-muted); -webkit-app-region: no-drag; }
-.window-header-tools[aria-current="page"] { background: var(--border); color: var(--accent-fg); }
-.window-header-tools:hover { background: var(--border); color: inherit; }
-.window-header-tools:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
-
-.window-header-reload:hover {
-  background: var(--border);
-  color: inherit;
-}
-
-.window-header-reload:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 1px;
-}
-
-.window-header-conversation {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.app-shell { padding-top: var(--window-header-height); }
-.window-header { z-index: 90; padding-right: 160px; }
-.window-header-terminal, .window-header-notifications { position: absolute; top: 5px; -webkit-app-region: no-drag; }
-.window-header-terminal { right: 80px; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; color: var(--text-muted); }
-.window-header-notifications { right: 114px; }
-.app-shell main { height: calc(100dvh - var(--window-header-height) - var(--terminal-height, 0px)); }
+/* Decorative children pass hits to their drag-region parent. */
+.window-header-crumbs svg,
+.window-header-status > * {
+  pointer-events: none;
+}
+
+.window-header-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.window-header-separator {
+  flex-shrink: 0;
+  color: var(--text-disabled);
+}
+
+.window-header-project {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--icon);
+}
+
+.window-header-conversation {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.window-header-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-tint);
+  color: var(--accent-fg);
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.window-header-status time {
+  color: inherit;
+  font-size: inherit;
+}
+
+.window-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.window-header-actions > .workspace-pill {
+  margin-right: 4px;
+}
+
+/* 36px ghost icon button shared by the title bar (also used by the notifications trigger). */
+.header-icon-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--icon);
+  -webkit-app-region: no-drag;
+}
+
+.header-icon-button:hover:not(:disabled),
+.header-icon-button[aria-expanded="true"]:not(.window-header-sidebar) {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.header-icon-button[aria-current="page"] {
+  background: var(--bg-active);
+  color: var(--accent-fg);
+}
+
+.header-icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (max-width: 720px) {
+  .window-header { gap: 8px; padding-right: 8px; }
+  .window-header-brand,
+  .window-header-brand + .window-header-separator,
+  .window-header-project,
+  .window-header-project + .window-header-separator { display: none; }
+}
+
+@media (max-width: 520px) {
+  .window-header-status { display: none; }
+}
+
+@media (pointer: coarse) {
+  .header-icon-button { width: 44px; height: 44px; }
+}

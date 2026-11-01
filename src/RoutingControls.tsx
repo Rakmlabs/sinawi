@@ -76,7 +76,7 @@ export function RecommendationCard({ value, settings, skills, editing, busy, run
   onEdit: () => void; onChange: (value: RoutingRecommendation) => void; onRun: () => void;
 }) {
   const summary = (selection: AgentSelection) => <span className="agent-label"><AgentMark agent={selection.agent} size="small" />{names[selection.agent]}<RemainingChip agent={selection.agent} />{selection.model ? ` (${selection.model})` : ""}</span>;
-  return <section className="glass recommendation" aria-label={t("rt.autoTeam")} aria-live="polite">
+  return <section className="panel recommendation" aria-label={t("rt.autoTeam")} aria-live="polite">
     <div className="recommendation-summary">
       <div><h2>{t("rt.recommended")}{summary(value.orchestrator)} → {value.workers.map((worker, index) => <span key={worker.id ?? index}>{summary(worker)} </span>)}</h2>
         <p>{value.reason}</p><small>{t("rt.plan")}{summary(value.planner)}{t("rt.skillCount", { n: value.skills.length })}</small>
@@ -115,7 +115,7 @@ export function RoutingSettingsPage({ value, busy, onSave, onRefresh }: { value:
   const [saved, setSaved] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshed, setRefreshed] = useState(false);
-  return <section className="glass routing-settings">
+  return <section className="panel routing-settings">
     <h2>{t("rt.title")}</h2><p className="muted">{t("rt.intro")}</p>
     <AuthBadges settings={value} />
     <button className="button light" disabled={busy || refreshing} onClick={() => {

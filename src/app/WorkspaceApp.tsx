@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MotionConfig } from "framer-motion";
-import { Activity, ArrowDown, ChevronDown, ChevronRight, Globe, MessageSquare, PanelRightClose, PanelRightOpen, Square } from "lucide-react";
+import { Activity, ArrowDown, ChevronDown, Globe, MessageSquare, PanelRightClose, PanelRightOpen, Square } from "lucide-react";
 import { MarkdownSessionContext } from "../markdown-images";
 import { isNetworkFailure, teamAvailabilityWarning } from "../team";
 import { normalizeWorkerConfigs } from "../../server/workers";
@@ -14,7 +14,6 @@ import { workerLogRows } from "../worker-log";
 import { Sidebar } from "../Sidebar";
 import { inWorkspace, workspaceTeamDefaults } from "../workspaces";
 import { readPreference, writePreference, savedBoolean } from "../preferences";
-import { AgentMark } from "../AgentMark";
 import { TerminalPanel } from "../TerminalPanel";
 import { NotificationsCenter } from "../NotificationsCenter";
 import { toggleTerminal, terminalOwnsKeyboardEvent, TERMINAL_AUTH_REFRESH_EVENT, TERMINAL_NOTICE_EVENT, type TerminalNotice } from "../terminal-events";
@@ -23,13 +22,12 @@ import type { DesktopMode } from "../desktop-windows";
 import { holdCommand } from "../browser-agent";
 import { browserRegistry } from "../browser-registry";
 import { chatShortcut, globalBrowserShortcut, browserOwnsFocus } from "../browser-shortcuts";
-import { afterEdgeClick, afterRailToggle, railCollapsed } from "../sidebar-rail";
+import { isMacPlatform, SIDEBAR_OVERLAY_QUERY, sidebarLayout, sidebarShortcut } from "../sidebar-rail";
 import { classifyLiveMessage } from "../../server/live-turn";
 import { promptWithAttachments, type ComposerAttachment } from "../preview-attachments";
-import { isTauri, WindowHeader } from "../WindowHeader";
+import { WindowHeader } from "../WindowHeader";
 import { conversationText, delegationTasks, delegationWorkers, mainConversation } from "../conversation";
 import { streamingAssistantMessageId } from "../chat-scroll";
-import { RemainingChip } from "../QuotaContext";
 import { ViewerContext } from "../media-ui";
 import { FileViewer } from "../FileViewer";
 import type { MediaRef } from "../viewer-model";
@@ -55,6 +53,18 @@ import { QuotaReturnBanner } from "./QuotaReturnBanner";
 import { SessionsView } from "./SessionsView";
 import { TeamBarSlot } from "./TeamBarSlot";
 import { t } from "../i18n";
+
+const SIDEBAR_ID = "app-sidebar";
+const subscribeMedia = (query: string) => (notify: () => void) => {
+  const list = window.matchMedia(query);
+  list.addEventListener("change", notify);
+  return () => list.removeEventListener("change", notify);
+};
+function useMediaQuery(query: string): boolean {
+  const subscribe = useMemo(() => subscribeMedia(query), [query]);
+  return useSyncExternalStore(subscribe, () => window.matchMedia(query).matches, () => false);
+}
+const folderName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? "";
 
 /** One workspace (personal/company): sessions, chat, browser desktop, terminal and dialogs. */
 export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitchWorkspace }: {
@@ -125,20 +135,40 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
   const [desktopRequest, setDesktopRequest] = useState<DesktopRequest>({ n: 0 });
   const [desktopMode, setDesktopMode] = useState<DesktopMode>("none");
   const focusMode = desktopMode !== "none";
-  const [sidebarPinned, setSidebarPinned] = useState(false);
-  const railHidden = railCollapsed(sidebarCollapsed, focusMode, sidebarPinned);
-  const railHiddenRef = useRef(railHidden);
-  railHiddenRef.current = railHidden;
-  const expandSidebar = useCallback(() => {
-    const next = afterEdgeClick();
-    setSidebarCollapsed(next.sidebarCollapsed);
-    setSidebarPinned(next.pinnedOpen);
+  // Sidebar: a docked column on wide windows (persisted), an overlay on narrow ones or over the browser.
+  const narrow = useMediaQuery(SIDEBAR_OVERLAY_QUERY);
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const { overlay: sidebarOverlay, open: sidebarOpen } = sidebarLayout({ collapsed: sidebarCollapsed, narrow, focusMode, overlayOpen });
+  useEffect(() => { setOverlayOpen(false); }, [sidebarOverlay]);
+  const sidebarState = useRef({ overlay: sidebarOverlay, open: sidebarOpen });
+  sidebarState.current = { overlay: sidebarOverlay, open: sidebarOpen };
+  const sidebarToggle = useRef<HTMLButtonElement>(null);
+  const focusSidebarOnOpen = useRef(false);
+  const setSidebarOpen = useCallback((open: boolean) => {
+    if (sidebarState.current.overlay) setOverlayOpen(open); else setSidebarCollapsed(!open);
+    // Never strand keyboard focus inside a sidebar that is about to become inert.
+    if (!open && document.getElementById(SIDEBAR_ID)?.contains(document.activeElement)) sidebarToggle.current?.focus();
+    focusSidebarOnOpen.current = open && sidebarState.current.overlay;
   }, []);
-  const toggleSidebar = useCallback(() => {
-    const next = afterRailToggle(railHiddenRef.current);
-    setSidebarCollapsed(next.sidebarCollapsed);
-    setSidebarPinned(next.pinnedOpen);
-  }, []);
+  const toggleSidebar = useCallback(() => setSidebarOpen(!sidebarState.current.open), [setSidebarOpen]);
+  const closeSidebarOverlay = useCallback(() => { if (sidebarState.current.overlay && sidebarState.current.open) setSidebarOpen(false); }, [setSidebarOpen]);
+  useEffect(() => {
+    if (!sidebarOverlay || !sidebarOpen) return;
+    // An open overlay behaves like a dialog: focus moves in, Escape closes it.
+    if (focusSidebarOnOpen.current) {
+      focusSidebarOnOpen.current = false;
+      document.querySelector<HTMLElement>(`#${SIDEBAR_ID} .sidebar-new`)?.focus();
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || terminalOwnsKeyboardEvent(event)) return;
+      if (document.querySelector(".modal-backdrop")) return;
+      event.preventDefault();
+      setSidebarOpen(false);
+      sidebarToggle.current?.focus();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [sidebarOverlay, sidebarOpen, setSidebarOpen]);
   const [chatCollapsed, setChatCollapsed] = useState(() => localStorage.getItem("orchestra.chat.collapsed") === "1");
   useEffect(() => { localStorage.setItem("orchestra.chat.collapsed", chatCollapsed ? "1" : "0"); }, [chatCollapsed]);
   const [chatWidgetOpen, setChatWidgetOpen] = useState(() => localStorage.getItem("orchestra.chat.widget") === "1");
@@ -466,6 +496,24 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     setMessageSkills([]);
     setSlash(undefined);
   };
+  const newSessionRef = useRef(newSession);
+  newSessionRef.current = newSession;
+  useEffect(() => {
+    const mac = isMacPlatform();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || terminalOwnsKeyboardEvent(event)) return;
+      if (sidebarShortcut(event, mac)) { event.preventDefault(); toggleSidebar(); return; }
+      const mod = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        newSessionRef.current();
+        setGroupId("");
+        composerInput.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleSidebar]);
   // Derived conversation data: recomputed only when the active session changes, not per render.
   const tasksById = useMemo(() => new Map(active ? delegationTasks(active, Date.now()).map((task) => [task.event.id, task]) : []), [active]);
   const conversationEvents = useMemo(() => active ? mainConversation(active) : [], [active]);
@@ -479,6 +527,9 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     : "", [active]);
   const selectConversation = (id: string) => { setSelected(id); setWorkerSelection(undefined); setTab("workspace"); };
   const selectWorker = (sessionId: string, taskId: string) => { setSelected(sessionId); setWorkerSelection({ sessionId, taskId }); setTab("workspace"); };
+  const activeProject = active ? groups.find((group) => group.id === active.groupId)?.name ?? folderName(active.cwd) : groups.find((group) => group.id === groupId)?.name ?? folderName(cwd);
+  const runningSince = useMemo(() => active?.status === "running" ? [...active.events].reverse().find((event) => event.agent === "user")?.time ?? active.createdAt : undefined, [active]);
+  const viewTitles: Record<string, string> = { tools: t("tools.title"), routing: t("side.settings"), sessions: t("sessions.title"), bots: t("bots.title") };
   const teamAgents = boot.agents.length ? availableAgents : allowedAgents;
   const sessionAction = (path: string, body?: unknown, method?: string) => safe(async () => { replaceFromServer(await api<Session>(path, body, method)); });
   return (
@@ -486,12 +537,16 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
     <MarkdownSessionContext.Provider value={active?.id}>
     <ViewerContext.Provider value={viewerApi}>
     <MotionConfig reducedMotion="user">
-      <div style={{ "--terminal-height": `${terminalHeight}px` } as React.CSSProperties} className={`app-shell ${railHidden ? "sidebar-collapsed" : "sidebar-expanded"}${isTauri() ? " tauri-app" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
-        <WindowHeader title={tab === "tools" ? t("tools.title") : active?.title} workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} onTools={() => setTab("tools")} toolsActive={tab === "tools"} onTerminal={() => toggleTerminal()} notifications={<NotificationsCenter workspaceId={workspaceId} cwd={shownCwd} connected={connected} onSession={selectConversation} onRefreshAuth={() => { void refreshModels(); }} />} />
+      <div style={{ "--terminal-height": `${terminalHeight}px` } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
+        <WindowHeader title={tab === "workspace" ? active?.title : viewTitles[tab]} project={tab === "workspace" ? activeProject : undefined} runningSince={tab === "workspace" ? runningSince : undefined}
+          sidebar={{ open: sidebarOpen, controls: SIDEBAR_ID, onToggle: toggleSidebar, buttonRef: sidebarToggle }}
+          workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} onTools={() => setTab("tools")} toolsActive={tab === "tools"} onSettings={() => setTab("routing")} settingsActive={tab === "routing"} onTerminal={() => toggleTerminal()} notifications={<NotificationsCenter workspaceId={workspaceId} cwd={shownCwd} connected={connected} onSession={selectConversation} onRefreshAuth={() => { void refreshModels(); }} />} />
         <TerminalPanel storageKey={workspaceId} cwd={shownCwd} homeCwd={boot.homeCwd} onHeightChange={setTerminalHeight} />
-        {railHidden && <button type="button" className="sidebar-handle" aria-label={t("sidebar.expand")} title={t("ws.sidebarExpandTitle")} onClick={expandSidebar}><ChevronRight size={14} aria-hidden /></button>}
-        <Sidebar key={workspaceId} workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} collapsed={false} hiddenRail={railHidden} onToggle={toggleSidebar} tab={tab} onNavigate={setTab} onSkills={() => { setSkillReturn(undefined); setModal("skills"); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
-          onNew={(id) => { newSession(); setGroupId(id ?? ""); }} selectedWorker={selectedWorker?.id} onSelectWorker={selectWorker} onSelect={selectConversation} onHelp={() => setModal("help")} onUsage={() => setModal("usage")}
+        {sidebarOverlay && sidebarOpen && <div className="sidebar-scrim" aria-hidden="true" onClick={() => setSidebarOpen(false)} />}
+        <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} onSwitchWorkspace={onSwitchWorkspace} otherRunning={otherRunning} tab={tab}
+          onNavigate={(next) => { setTab(next); closeSidebarOverlay(); }} onSkills={() => { closeSidebarOverlay(); setSkillReturn(undefined); setModal("skills"); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
+          onNew={(id) => { newSession(); setGroupId(id ?? ""); closeSidebarOverlay(); }} selectedWorker={selectedWorker?.id} onSelectWorker={(sessionId, taskId) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); }} onSelect={(id) => { selectConversation(id); closeSidebarOverlay(); }}
+          onHelp={() => { closeSidebarOverlay(); setModal("help"); }} onUsage={() => { closeSidebarOverlay(); setModal("usage"); }}
           onCreateGroup={(name) => safe(async () => {
             const group = await api<Group>("/groups", { name, workspaceId });
             setBoot((old) => ({ ...old, groups: [...old.groups.filter((item) => item.id !== group.id), group] }));
@@ -551,7 +606,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
         </button>}
         <main className={`${tab === "workspace" ? "chat-view" : "management-view"}${desktopMode === "max" ? (chatWidgetOpen ? " chat-float" : " chat-hidden") : ""}`}>
           {desktopMode === "max" && chatWidgetOpen && <button type="button" className="chat-float-close" onClick={() => setChatWidgetOpen(false)} aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")}><ChevronDown size={16} /></button>}
-          {tab === "routing" && <section className="glass routing-settings"><AppearanceSettings /></section>}
+          {tab === "routing" && <section className="panel routing-settings"><AppearanceSettings /></section>}
           {tab === "routing" && <AllowedAgentsSettings workspaceId={workspaceId} allowedAgents={allowedAgents} busy={busy}
             quotaFallback={quotaFallback} setQuotaFallback={setQuotaFallback} quotaThreshold={quotaThreshold} setQuotaThreshold={setQuotaThreshold}
             fallbackOrder={fallbackOrder} setFallbackOrder={setFallbackOrder}
@@ -571,7 +626,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
             setRoutingSettings(next);
             setRecommendation(undefined);
             return next;
-          }} /> : <section className="glass routing-settings"><p>{t("ws.settingsLoadFailed")}</p><button className="button light" onClick={() => void load()}>{t("ws.reload")}</button></section>)}
+          }} /> : <section className="panel routing-settings"><p>{t("ws.settingsLoadFailed")}</p><button className="button light" onClick={() => void load()}>{t("ws.reload")}</button></section>)}
           {tab === "tools" && <ToolsPanel workspaceId={workspaceId} cwd={shownCwd} onChange={() => {
             void api<Skill[]>(`/skills?cwd=${encodeURIComponent(shownCwd)}&workspace=${encodeURIComponent(workspaceId)}`).then((next) => {
               const available = new Set(next.map((skill) => skill.id));
@@ -584,27 +639,19 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
             <>
 
               <div className={`workspace-grid ${activityOpen ? "activity-open" : ""}`}>
-                <section className={`glass conversation${dragging ? " drop-target" : ""}`} {...dropHandlers}>
+                <section className={`conversation${dragging ? " drop-target" : ""}`} aria-label={selectedWorker ? t("ws.workerSession") : t("ws.conversation")} {...dropHandlers}>
                   {dragging && <div className="drop-overlay"><strong>{t("ws.dropHere")}</strong><span>{t("ws.dropKinds")}</span></div>}
-                  <div className="panel-header">
-                    <div>
-                      <MessageSquare size={17} />
-                      <h2>{selectedWorker ? t("ws.workerSession") : t("ws.conversation")}</h2>
-                      <span className="subtle-tag">
-                        {(active || mode === "manual") && <AgentMark agent={selectedWorker?.agent ?? active?.agent ?? agent} size="small" />}{selectedWorker ? selectedWorker.label : active ? names[active.agent] : mode === "auto" ? t("ws.autoAssign") : names[agent]}{(selectedWorker || active || mode === "manual") && <RemainingChip agent={selectedWorker?.agent ?? active?.agent ?? agent} />}
-                      </span>
-                    </div>
-                    <div className="chat-actions">
-                      {selectedWorker && active && <button className="button light" onClick={() => selectConversation(active.id)}>{t("ws.backToConversation")}</button>}
-                      {active?.status === "running" && <button className="button light" disabled={busy} onClick={() => stopSession(active.id)}><Square size={12} />{t("ws.stop")}</button>}
-                      <button className="icon-button" aria-label={t("ws.browser")} title={t("ws.browserTitle")} onClick={() => showBrowser(false)}><Globe size={18} /></button>
-                      {desktopMode !== "max" && <button className="icon-button" aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")} onClick={() => setChatCollapsed(true)}><PanelRightClose size={18} /></button>}
-                      <button className="icon-button" aria-label={t("activity.label")} aria-expanded={activityOpen} aria-controls="activity-panel" onClick={() => setActivityOpen((value) => !value)}><Activity size={18} /></button>
-                    </div>
-                  </div>
                   <TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
                     manual={{ agent, model, reasoningEffort, workers, workerConfigs }} availableAgents={teamAgents}
                     quotaFallback={quotaFallback} quotaThreshold={quotaThreshold} routingSettings={routingSettings} busy={busy}
+                    actions={<div className="chat-actions" role="group" aria-label={t("ws.chatActions")}>
+                      {selectedWorker && <span className="chat-actions-context" title={selectedWorker.label}>{t("ws.workerSession")} · {selectedWorker.label}</span>}
+                      {selectedWorker && active && <button type="button" className="chat-action-text" onClick={() => selectConversation(active.id)}>{t("ws.backToConversation")}</button>}
+                      {active?.status === "running" && <button type="button" className="chat-action-text" disabled={busy} onClick={() => stopSession(active.id)}><Square size={11} fill="currentColor" aria-hidden="true" />{t("ws.stop")}</button>}
+                      <button type="button" className="chat-action-icon" aria-label={t("ws.browser")} title={t("ws.browserTitle")} onClick={() => showBrowser(false)}><Globe size={18} aria-hidden="true" /></button>
+                      {desktopMode !== "max" && <button type="button" className="chat-action-icon" aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")} onClick={() => setChatCollapsed(true)}><PanelRightClose size={18} aria-hidden="true" /></button>}
+                      <button type="button" className="chat-action-icon" aria-label={t("activity.label")} title={t("activity.label")} aria-expanded={activityOpen} aria-controls="activity-panel" onClick={() => setActivityOpen((value) => !value)}><Activity size={18} aria-hidden="true" /></button>
+                    </div>}
                     onSave={(next, crew) => safe(async () => {
                       if (active) {
                         replaceFromServer(await api<Session>(`/sessions/${active.id}/team`, { ...next, workers: crew.map((worker) => worker.agent), workerConfigs: crew }, "PATCH"));
@@ -633,7 +680,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange, onSwitch
                       <MessageList active={active} events={conversationEvents} tasksById={tasksById} latestHandoffId={latestHandoffId} latestAssistantId={latestAssistant?.id}
                         choiceOptions={choiceOptions} streamingMessageId={streamingMessageId} busy={busy} bottomRef={bottom}
                         onUndoHandoff={(eventId) => void sessionAction(`/sessions/${active.id}/handoff/undo`, { eventId })}
-                        onOpenWorker={(workerId) => { selectWorker(active.id, workerId); expandSidebar(); }}
+                        onOpenWorker={(workerId) => { selectWorker(active.id, workerId); if (!sidebarState.current.overlay) setSidebarOpen(true); }}
                         onPromote={promoteLiveMessage}
                         onChoose={(option) => void send(false, option)} />
                     )}
