@@ -91,3 +91,26 @@
 .workspace-settings .button,
 .team-editor-actions .button { height: 32px; padding: 0 12px; border-radius: 8px; gap: 6px; font-size: calc(13px * var(--font-scale)); }
 .workspace-inline-form input, .workspace-add input, .workspace-confirm select { font-size: calc(13px * var(--font-scale)); }
+/* Settings › Workspaces › rules */
+.workspace-rules { padding-top: 10px; border-top: 1px solid var(--border); }
+.workspace-rules-body { display: grid; gap: 16px; margin-top: 10px; }
+.workspace-rules > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-secondary); font-weight: 600; list-style-position: outside; }
+.workspace-rules > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.workspace-rules-body > p { margin: 0 0 -6px; font-size: calc(12px * var(--font-scale)); }
+.workspace-tag.restricted { background: var(--warn-tint); color: var(--warn-fg); }
+.workspace-rule { display: grid; gap: 4px; min-width: 0; }
+.workspace-rule-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text); font-size: calc(13px * var(--font-scale)); }
+.workspace-rule > small, .workspace-defaults small { color: var(--text-subtle); font-size: calc(12px * var(--font-scale)); }
+.workspace-rule input[type="checkbox"] { flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--accent); }
+.workspace-rules .workspace-rule select { height: 32px; min-height: 32px; padding: 0 28px 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-raised); color: var(--text); font: inherit; font-size: calc(13px * var(--font-scale)); }
+.workspace-rule textarea { width: 100%; min-height: 64px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-raised); color: var(--text); font: inherit; font-size: calc(13px * var(--font-scale)); resize: vertical; }
+.workspace-rule textarea:focus-visible, .workspace-rule select:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.workspace-tool-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; padding: 0; list-style: none; }
+.workspace-tool-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 1px solid var(--border-strong); border-radius: 999px; font-family: var(--font-mono); font-size: calc(12px * var(--font-scale)); }
+.workspace-tool-chip button { display: inline-grid; place-items: center; width: 20px; height: 20px; min-height: 20px; padding: 0; border-radius: 999px; color: var(--icon); }
+.workspace-tool-chip button:hover:not(:disabled) { background: var(--bg-active); color: var(--text); }
+.workspace-tool-empty { color: var(--text-subtle); font-size: calc(12px * var(--font-scale)); }
+.policy-link { min-height: 0; margin-left: 8px; padding: 0; background: none; border: 0; color: inherit; font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.workspace-rules > summary::-webkit-details-marker { display: none; }
+.workspace-rules > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
+.workspace-rules[open] > summary::before { transform: rotate(45deg); }

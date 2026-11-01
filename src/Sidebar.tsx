@@ -20,10 +20,12 @@ type SidebarProps = {
   selectedWorker?: string; onSelectWorker?: (sessionId: string, workerId: string) => void;
   sessions: Session[]; groups: Group[]; busy: boolean; selected?: string; onNew: (groupId?: string) => void; onSelect: (id: string) => void; onHelp: () => void;
   onCreateGroup: (name: string) => Promise<boolean>; onRenameGroup: (id: string, name: string) => Promise<boolean>; onDeleteGroup: (id: string) => Promise<boolean>;
-  onRenameSession: (id: string, title: string) => Promise<boolean>; onDeleteSession: (id: string) => Promise<boolean>; onAssign: (id: string, groupId: string | null) => Promise<boolean>;
+  onRenameSession: (id: string, title: string) => Promise<boolean>; onDeleteSession: (id: string, removeWorktrees?: boolean) => Promise<boolean>; onAssign: (id: string, groupId: string | null) => Promise<boolean>;
   workspaceId?: WorkspaceId;
   onMoveSession?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>; onMoveGroup?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>;
   onUsage?: () => void;
+  /** Opens the settings window (⌘,); without it "Settings" falls back to the legacy settings tab. */
+  onSettings?: () => void;
   onDeleteWorker?: (sessionId: string, workerId: string) => Promise<boolean>;
 };
 type MenuState = { kind: "session" | "group" | "worker"; id: string; workerId?: string; x: number; y: number };
@@ -160,10 +162,16 @@ export function Sidebar(props: SidebarProps) {
     <button aria-label={t("side.saveName")} disabled={busy || !current.value.trim()}><Check size={14} /></button>
     <button type="button" aria-label={t("side.cancelRename")} onClick={() => setEditor(undefined)}><X size={14} /></button>
   </form>;
-  const confirmDelete = (kind: "group" | "session", id: string) => deleting?.kind === kind && deleting.id === id && <div className="sidebar-confirm" role="alert">
-    <p>{kind === "group" ? t("side.deleteProjectConfirm") : t("side.deleteChatConfirm", { name: deleting.name })}</p>
-    <div><button disabled={busy} onClick={async () => { if (await (kind === "group" ? props.onDeleteGroup(id) : props.onDeleteSession(id))) setDeleting(undefined); }}>{t("side.delete")}</button><button onClick={() => setDeleting(undefined)}>{t("side.cancel")}</button></div>
-  </div>;
+  const confirmDelete = (kind: "group" | "session", id: string) => {
+    if (deleting?.kind !== kind || deleting.id !== id) return false;
+    // Worker worktrees are kept by default; the extra button removes only those without uncommitted changes.
+    const worktrees = kind === "session" ? sessions.find((item) => item.id === id)?.worktrees?.length ?? 0 : 0;
+    return <div className="sidebar-confirm" role="alert">
+      <p>{kind === "group" ? t("side.deleteProjectConfirm") : t("side.deleteChatConfirm", { name: deleting.name })}</p>
+      {worktrees > 0 && <p>{t("wt.deleteSessionNote", { count: worktrees })}</p>}
+      <div><button disabled={busy} onClick={async () => { if (await (kind === "group" ? props.onDeleteGroup(id) : props.onDeleteSession(id))) setDeleting(undefined); }}>{worktrees > 0 ? t("wt.deleteKeep") : t("side.delete")}</button>{worktrees > 0 && <button disabled={busy} onClick={async () => { if (await props.onDeleteSession(id, true)) setDeleting(undefined); }}>{t("wt.deleteClean")}</button>}<button onClick={() => setDeleting(undefined)}>{t("side.cancel")}</button></div>
+    </div>;
+  };
   const sessionRow = (session: Session) => {
     const workers = delegationWorkers(session, Date.now());
     const open = workerTree.expanded.has(session.id);
@@ -207,7 +215,7 @@ export function Sidebar(props: SidebarProps) {
   const newChatKey = mac ? "⌘N" : "Ctrl+N";
   const searchKey = mac ? "⌘K" : "Ctrl+K";
   const footerItems: MenuItem[] = [
-    { kind: "action", label: t("side.settings"), icon: <Settings2 size={15} />, onSelect: () => onNavigate("routing") },
+    { kind: "action", label: t("side.settings"), icon: <Settings2 size={15} />, meta: <kbd>{mac ? "⌘," : "Ctrl+,"}</kbd>, onSelect: () => props.onSettings ? props.onSettings() : onNavigate("routing") },
     { kind: "action", label: t("header.tools"), icon: <Wrench size={15} />, meta: <kbd>{mac ? "⌘⇧T" : "F3"}</kbd>, onSelect: () => onNavigate("tools") },
     { kind: "action", label: t("side.bots"), icon: <Bot size={15} />, onSelect: () => onNavigate("bots") },
     { kind: "action", label: t("side.skills"), icon: <WandSparkles size={15} />, onSelect: onSkills },
@@ -216,7 +224,7 @@ export function Sidebar(props: SidebarProps) {
     { kind: "action", label: t("side.help"), icon: <CircleHelp size={15} />, onSelect: onHelp },
     { kind: "action", label: t("common.reload"), icon: <RotateCw size={15} />, meta: <kbd>{mac ? "⌘R" : "Ctrl+R"}</kbd>, onSelect: () => reloadApp() },
   ];
-  const managementTab = ["routing", "tools", "bots"].includes(tab);
+  const managementTab = ["routing", "tools", "bots", "usage"].includes(tab);
   return <aside id={props.id} className="rail" aria-label={t("side.label")} inert={railClosed || undefined}>
     <button className="sidebar-new" onClick={() => onNew()} aria-label={t("common.newChat")} title={`${t("common.newChat")} (${newChatKey})`}><SquarePen size={16} aria-hidden="true" /><span>{t("common.newChat")}</span><kbd aria-hidden="true">{newChatKey}</kbd></button>
     <label className="sidebar-search" title={`${t("side.search")} (${searchKey})`}><Search size={16} aria-hidden="true" /><input type="search" aria-label={t("side.search")} placeholder={t("side.searchShort")} value={query}

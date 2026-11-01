@@ -2,8 +2,8 @@ import { changeWorkerConfig } from "./team";
 import { normalizeWorkerConfigs } from "../server/workers";
 import { RemainingChip } from "./QuotaContext";
 import { AgentMark } from "./AgentMark";
-import { createContext, useContext, useState } from "react";
-import { Check, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { createContext, useContext } from "react";
+import { Plus, Trash2 } from "lucide-react";
 import type { AgentId, AgentSelection, SkillInfo, WorkspaceId } from "../server/types";
 import type { RoutingRecommendation, RoutingSettings } from "../server/routing";
 import { GlassSelect } from "./GlassSelect";
@@ -14,13 +14,6 @@ export const WorkspaceAgentPolicy = createContext<{ workspaceId: WorkspaceId; al
 
 const agents: AgentId[] = ["claude", "codex", "grok"];
 const names = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
-
-export function AuthBadges({ settings }: { settings?: RoutingSettings }) {
-  return <div className="auth-badges" aria-live="polite">{agents.map((id) => {
-    const option = settings?.modelOptions[id];
-    return option?.authStatus === "unauthenticated" ? <span className="auth-badge" key={id} role="status"><AgentMark agent={id} size="small" />{names[id]} · {option.authDetail}</span> : null;
-  })}</div>;
-}
 
 export function ModelChoice<T extends AgentSelection>({ value, settings, onChange, label, disabled = false, chooseAgent = true, excludedAgents = [], availableAgents, workerSession = false }: {
   value: T; settings?: RoutingSettings; onChange: (value: T) => void;
@@ -104,43 +97,5 @@ export function RecommendationCard({ value, settings, skills, editing, busy, run
       {[value.planner, value.orchestrator, ...value.workers].map((selection, i) => <span className="agent-label" key={i}><AgentMark agent={selection.agent} size="small" />{names[selection.agent]}: {selection.reason}</span>)}
       {value.skills.length > 0 && <span>{t("rt.skills", { list: value.skills.map((id) => skills.find((s) => s.id === id)?.name ?? id).join(", ") })}</span>}
     </div>}
-  </section>;
-}
-
-export function RoutingSettingsPage({ value, busy, onSave, onRefresh }: { value: RoutingSettings; busy: boolean; onSave: (next: RoutingSettings) => Promise<void>; onRefresh: () => Promise<RoutingSettings> }) {
-  const [planner, setPlanner] = useState(value.planner);
-  const [rules, setRules] = useState(JSON.stringify(value.rules, null, 2));
-  const [models, setModels] = useState(JSON.stringify(value.modelOptions, null, 2));
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshed, setRefreshed] = useState(false);
-  return <section className="panel routing-settings">
-    <h2>{t("rt.title")}</h2><p className="muted">{t("rt.intro")}</p>
-    <AuthBadges settings={value} />
-    <button className="button light" disabled={busy || refreshing} onClick={() => {
-      setError(""); setRefreshing(true); setRefreshed(false); setSaved(false);
-      void (async () => {
-        try { const next = await onRefresh(); setModels(JSON.stringify(next.modelOptions, null, 2)); setRefreshed(true); }
-        catch (e) { setError((e as Error).message); }
-        finally { setRefreshing(false); }
-      })();
-    }}><RefreshCw size={15} />{refreshing ? t("rt.checkingModels") : t("rt.refreshModels")}</button>
-    <p className="muted">{t("rt.refreshNote")}</p>
-    {refreshed && <p role="status">{t("rt.refreshed")}</p>}
-    <ModelChoice label={t("rt.analyzer")} value={planner} settings={value} onChange={(next) => { setPlanner(next); setSaved(false); }} />
-    <label>{t("rt.rules")}<textarea rows={14} value={rules} spellCheck={false} onChange={(e) => { setRules(e.target.value); setSaved(false); }} /></label>
-    <p className="muted">{t("rt.rulesHint")}</p>
-    <label>{t("rt.models")}<textarea disabled={refreshing} rows={14} value={models} spellCheck={false} onChange={(e) => { setModels(e.target.value); setSaved(false); }} /></label>
-    <div className="model-sources">{agents.map((id) => <p className="agent-label" key={id}><AgentMark agent={id} size="small" />{names[id]} · {value.modelOptions[id].source === "cli" ? t("rt.fromCli") : t("rt.preset")} · {value.modelOptions[id].sourceDetail}</p>)}</div>
-    {error && <p role="alert" className="routing-warning">{error}</p>}
-    <button className="button primary" disabled={busy || refreshing} onClick={() => {
-      setError(""); setSaved(false);
-      void (async () => {
-        try { await onSave({ ...value, planner, rules: JSON.parse(rules), modelOptions: JSON.parse(models) }); setSaved(true); }
-        catch (e) { setError((e as Error).message); }
-      })();
-    }}><Check size={15} />{busy ? t("rt.saving") : t("rt.save")}</button>
-    {saved && <p role="status">{t("rt.saved")}</p>}
   </section>;
 }

@@ -16,9 +16,10 @@ import type { WorkspaceId } from "../server/types";
 import { openTerminal, terminalOwnsKeyboardEvent } from "./terminal-events";
 import { useNow } from "./app/clock";
 import { t, translatedMap } from "./i18n";
+import { toastEnabled } from "./settings/notification-prefs";
+import { openSettings } from "./settings/settings-nav";
 
 const NOTIFICATIONS_EVENT = "orchestra:notifications";
-const criticalTypes = new Set<NotificationType>(["auth", "error", "permission"]);
 const toastStoragePrefix = "orchestra:notification-toasts:v1";
 
 const typeLabels = translatedMap<NotificationType>({
@@ -154,7 +155,7 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
   useEffect(() => {
     const seen = loadSeenToasts(workspaceId);
     const fresh = notifications.filter((notification) => {
-      if (notification.read || !criticalTypes.has(notification.type)) return false;
+      if (notification.read || !toastEnabled(notification.type)) return false;
       const version = toastVersion(notification);
       return !seen.has(version);
     }).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()).slice(0, 3);
@@ -321,6 +322,9 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
               </div>
             )}
           </div>
+          <footer className="notifications-footer">
+            <button type="button" onClick={() => { setOpen(false); openSettings("notifications"); }}>{t("set.noti.openSettings")}</button>
+          </footer>
           </section>
         ) : null}
       </div>

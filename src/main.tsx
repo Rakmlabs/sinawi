@@ -19,6 +19,7 @@ import "./browser.css";
 import "./Onboarding";
 import "./notifications.css";
 import "./window-header.css";
+import "./computer-use.css";
 import "./tools.css";
 import "./sidebar-menu.css";
 import "./beat.css";

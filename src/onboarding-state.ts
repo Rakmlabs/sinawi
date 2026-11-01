@@ -51,6 +51,7 @@ export function loginStatus(tools: SetupTool[] | undefined, auth: Partial<Record
 }
 
 export const SHORTCUTS: ReadonlyArray<[string, MessageKey]> = [
+  ["⌘,", "shortcut.settings"],
   ["⌘B", "shortcut.sidebar"],
   ["F1 / F2", "shortcut.workspace"],
   ["⌘⇧T · F3", "shortcut.tools"],

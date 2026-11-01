@@ -4,7 +4,7 @@ import { ArrowDown, ArrowLeft, ChevronDown, Folder, MessageSquare, PanelRightClo
 import { MarkdownSessionContext } from "../markdown-images";
 import { isNetworkFailure, teamAvailabilityWarning } from "../team";
 import { normalizeWorkerConfigs } from "../../server/workers";
-import { WorkspaceAgentPolicy, RecommendationCard, RoutingSettingsPage } from "../RoutingControls";
+import { WorkspaceAgentPolicy, RecommendationCard } from "../RoutingControls";
 import type { RoutingSettings, RoutingRecommendation } from "../../server/routing";
 import { historyEntries, numberedOptions, recentPaths, isUsageCommand } from "../composer";
 import { allowedAgentsForWorkspace } from "../../server/workspace-policy";
@@ -46,9 +46,17 @@ import { useChatScroll } from "./useChatScroll";
 import { useComposerCompletion } from "./useComposerCompletion";
 import { useModalFocusTrap } from "./useModalFocusTrap";
 import { ActivityPanel } from "./ActivityPanel";
-import { AllowedAgentsSettings } from "./AllowedAgentsSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { AppModal } from "./AppModal";
+import { BotEditor } from "./BotEditor";
+import { SessionPopover } from "./SessionPopover";
+import { SETTINGS_REOPEN_KEY, SettingsWindow } from "../settings/SettingsWindow";
+import { GeneralPage, NotificationsPage, ShortcutsPage, UpdatesPage } from "../settings/AppPages";
+import { EnvironmentPage } from "../settings/EnvironmentPage";
+import { AgentsPage, ProjectsPage, RoutingPage } from "../settings/WorkspacePages";
+import { SettingsPage } from "../settings/controls";
+import { isCategory, lastCategory, rememberCategory, settingsShortcut, SETTINGS_OPEN_EVENT, type SettingsCategory } from "../settings/settings-nav";
+import { UsagePanel } from "../UsagePanel";
 import { BotsView } from "./BotsView";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
@@ -56,6 +64,8 @@ import { QuotaReturnBanner } from "./QuotaReturnBanner";
 import { SessionsView } from "./SessionsView";
 import { TeamBarSlot } from "./TeamBarSlot";
 import { t } from "../i18n";
+import { ComputerUseLayer } from "../ComputerUse";
+import { handleComputerMessage } from "../computer-use";
 
 const SIDEBAR_ID = "app-sidebar";
 const subscribeMedia = (query: string) => (notify: () => void) => {
@@ -92,7 +102,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const scopedWorkspaces = useMemo(() => ({ ...workspacesApi, running: allSessions.length ? liveRunning : workspacesApi.running }), [workspacesApi, liveRunning, allSessions.length]);
   const [workerSelection, setWorkerSelection] = useState<{ sessionId: string; taskId: string }>();
   const [selected, setSelected] = useState<string>();
-  const [tab, setTab] = useState("workspace");
+  const [tab, setTab] = useState(() => isUsageCommand(window.location.pathname) ? "usage" : "workspace");
+  const [toolsTab, setToolsTab] = useState<{ tab: "mcp" | "skills"; n: number }>({ tab: "mcp", n: 0 });
   const [terminalHeight, setTerminalHeight] = useState(0);
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
@@ -209,8 +220,18 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     return () => { window.removeEventListener("orchestra:browser-command", onCommand); window.removeEventListener("keydown", onKey, { capture: true }); };
   }, [showBrowser]);
   const [error, setError] = useState("");
-  const [modal, setModal] = useState<string | undefined>(() => isUsageCommand(window.location.pathname) ? "usage" : undefined);
-  const [skillReturn, setSkillReturn] = useState<string>();
+  const [modal, setModal] = useState<string | undefined>();
+  // Settings window (⌘,): open category and an optional setting to highlight.
+  const [settingsView, setSettingsView] = useState<{ section: SettingsCategory; focus?: string } | undefined>(() => {
+    try {
+      const reopen = sessionStorage.getItem(SETTINGS_REOPEN_KEY);
+      sessionStorage.removeItem(SETTINGS_REOPEN_KEY);
+      return isCategory(reopen) ? { section: reopen } : undefined;
+    } catch { return undefined; }
+  });
+  const [sessionOptions, setSessionOptions] = useState(false);
+  const [botEditor, setBotEditor] = useState(false);
+  const [refreshingSkills, setRefreshingSkills] = useState(false);
   const sending = useRef(false);
   const liveQueue = useRef(Promise.resolve());
   const livePending = useRef(0);
@@ -218,8 +239,6 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const [busy, setBusy] = useState(false);
   const [routing, setRouting] = useState(false);
   const [chatError, setChatError] = useState("");
-  const [search, setSearch] = useState("");
-  const [botName, setBotName] = useState("");
   const [botA, setBotA] = useState("");
   const [botB, setBotB] = useState("");
   const [turns, setTurns] = useState(4);
@@ -312,6 +331,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const onServerMessage = (message: ServerMessage) => {
     if (message.type === "notifications") window.dispatchEvent(new Event("orchestra:notifications"));
     if (message.type === "browser-command") window.dispatchEvent(new CustomEvent("orchestra:browser-command", { detail: message }));
+    if (message.type.startsWith("computer-")) handleComputerMessage(message);
     if (message.type === "sessions") setSessions(message.sessions);
     if (message.type === "groups") setBoot((old) => ({ ...old, groups: message.groups }));
     if (message.type === "session_deleted") {
@@ -426,7 +446,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     });
   };
   const send = (executeRecommendation = false, message = prompt) => {
-    if (isUsageCommand(message)) { setModal("usage"); setPrompt(""); setSlash(undefined); return Promise.resolve(); }
+    if (isUsageCommand(message)) { setTab("usage"); setPrompt(""); setSlash(undefined); return Promise.resolve(); }
     if (active?.status === "running") return sendWhileRunning(message);
     if ((!message.trim() && !attachments.length) || !canSendBase || !attachmentsReady || sending.current) return Promise.resolve();
     sending.current = true;
@@ -472,7 +492,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     const sessionId = active.id;
     const handle = (event: KeyboardEvent) => {
       if (terminalOwnsKeyboardEvent(event) || browserOwnsFocus()) return;
-      if (event.defaultPrevented || modal || slash || fileCompletion) return;
+      if (event.defaultPrevented || modal || settingsView || sessionOptions || botEditor || slash || fileCompletion) return;
       const focused = document.activeElement;
       const controlSelection = focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement
         ? focused.selectionStart !== focused.selectionEnd
@@ -485,7 +505,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     };
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
-  }, [active?.id, active?.status, modal, Boolean(slash), Boolean(fileCompletion)]);
+  }, [active?.id, active?.status, modal, Boolean(settingsView), sessionOptions, botEditor, Boolean(slash), Boolean(fileCompletion)]);
   const assignGroup = async (sessionId: string, nextGroup: string | null) => {
     const updated = await api<Session>(`/sessions/${sessionId}/group`, { groupId: nextGroup }, "PATCH");
     replaceFromServer(updated);
@@ -543,11 +563,82 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const selectWorker = (sessionId: string, taskId: string) => { setSelected(sessionId); setWorkerSelection({ sessionId, taskId }); setTab("workspace"); };
   const activeProject = active ? groups.find((group) => group.id === active.groupId)?.name ?? folderName(active.cwd) : groups.find((group) => group.id === groupId)?.name ?? folderName(cwd);
   const runningSince = useMemo(() => active?.status === "running" ? [...active.events].reverse().find((event) => event.agent === "user")?.time ?? active.createdAt : undefined, [active]);
-  const viewTitles: Record<string, string> = { tools: t("tools.title"), routing: t("side.settings"), sessions: t("sessions.title"), bots: t("bots.title") };
+  const viewTitles: Record<string, string> = { tools: t("tools.title"), usage: t("side.usage"), sessions: t("sessions.title"), bots: t("bots.title") };
   const teamAgents = boot.agents.length ? availableAgents : allowedAgents;
-  const openWorkspaceSettings = () => {
-    setTab("routing");
-    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById("workspace-settings")?.scrollIntoView({ block: "start" })));
+  const openSettingsAt = useCallback((section?: SettingsCategory, focus?: string) => {
+    const next = section ?? lastCategory();
+    rememberCategory(next);
+    setSessionOptions(false);
+    setSettingsView({ section: next, focus });
+  }, []);
+  const closeSettings = useCallback(() => setSettingsView(undefined), []);
+  const openWorkspaceSettings = () => openSettingsAt("workspaces");
+  const openTools = (toolTab: "mcp" | "skills" = "mcp") => { setSettingsView(undefined); setToolsTab((old) => ({ tab: toolTab, n: old.n + 1 })); setTab("tools"); };
+  const openUsage = () => { setSettingsView(undefined); setTab("usage"); };
+  const settingsOpen = Boolean(settingsView);
+  useEffect(() => {
+    // ⌘, toggles the settings window; other parts of the app open it with openSettings().
+    const mac = isMacPlatform();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || terminalOwnsKeyboardEvent(event) || !settingsShortcut(event, mac)) return;
+      event.preventDefault();
+      if (settingsOpen) closeSettings(); else openSettingsAt();
+    };
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ section?: string; focus?: string }>).detail;
+      openSettingsAt(isCategory(detail?.section) ? detail.section : undefined, detail?.focus);
+    };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener(SETTINGS_OPEN_EVENT, onOpen);
+    return () => { window.removeEventListener("keydown", onKey, true); window.removeEventListener(SETTINGS_OPEN_EVENT, onOpen); };
+  }, [settingsOpen, openSettingsAt, closeSettings]);
+  const allowedChange = (next: AgentId[]) => {
+    setAllowedAgents(next);
+    const team = workspaceTeamDefaults(workspaceId, { agent, workers, model, reasoningEffort, workerConfigs, allowedAgents: next });
+    setAgent(team.agent); setWorkers(team.workers); setModel(team.model ?? ""); setReasoningEffort(team.reasoningEffort ?? "");
+    setWorkerConfigs(normalizeWorkerConfigs(team.workers, team.workerConfigs));
+    setRecommendation(undefined);
+  };
+  const refreshSkills = () => {
+    setRefreshingSkills(true);
+    void safe(async () => {
+      const next = await api<Skill[]>("/skills/refresh", { cwd: shownCwd, workspace: workspaceId });
+      setBoot((old) => ({ ...old, skills: next }));
+    }).finally(() => setRefreshingSkills(false));
+  };
+  const renderSettingsPage = (section: SettingsCategory, close: () => void) => {
+    switch (section) {
+      case "general": return <GeneralPage />;
+      case "appearance": return <AppearanceSettings />;
+      case "notifications": return <NotificationsPage openSystemSettings={() => { void workspaceApi("/setup/open-settings", { pane: "notifications" }).catch(() => undefined); }} />;
+      case "shortcuts": return <ShortcutsPage />;
+      case "environment": return <EnvironmentPage onClose={close} />;
+      case "updates": return <UpdatesPage />;
+      case "workspaces": return <SettingsPage><div className="settings-hosted settings-workspaces"><WorkspaceSettings currentId={workspaceId} busy={busy} cwd={cwd} onPickFolder={() => setModal("directory")} /></div></SettingsPage>;
+      case "agents": return <AgentsPage agents={boot.agents} routingSettings={routingSettings} allowedAgents={allowedAgents} onAllowedChange={allowedChange}
+        quotaFallback={quotaFallback} setQuotaFallback={setQuotaFallback} quotaThreshold={quotaThreshold} setQuotaThreshold={setQuotaThreshold}
+        fallbackOrder={fallbackOrder} setFallbackOrder={setFallbackOrder} autoSwitch={autoSwitch} setAutoSwitch={setAutoSwitch} />;
+      case "routing": return <RoutingPage value={routingSettings} onReload={() => void load()}
+        onSave={async (next) => { setRoutingSettings(await api<RoutingSettings>("/settings", next, "PUT")); setRecommendation(undefined); }}
+        onRefresh={async () => {
+          const next = await api<RoutingSettings>("/settings/models/refresh", {}, "POST");
+          setRoutingSettings(next);
+          setRecommendation(undefined);
+          return next;
+        }} />;
+      case "projects": return <ProjectsPage cwd={cwd} groups={groups} onPickFolder={() => setModal("directory")}
+        onCreateGroup={async (name) => { try { const group = await api<Group>("/groups", { name, workspaceId }); setBoot((old) => ({ ...old, groups: [...old.groups.filter((item) => item.id !== group.id), group] })); return true; } catch (e) { setError((e as Error).message); return false; } }}
+        onRenameGroup={async (id, name) => { try { const group = await api<Group>(`/groups/${id}`, { name }, "PATCH"); setBoot((old) => ({ ...old, groups: old.groups.map((item) => item.id === id ? group : item) })); return true; } catch (e) { setError((e as Error).message); return false; } }}
+        onDeleteGroup={async (id) => {
+          try {
+            await api(`/groups/${id}`, undefined, "DELETE");
+            setBoot((old) => ({ ...old, groups: old.groups.filter((item) => item.id !== id) }));
+            setSessions((old) => old.map((session) => session.groupId === id ? { ...session, groupId: undefined } : session));
+            if (groupId === id) setGroupId("");
+            return true;
+          } catch (e) { setError((e as Error).message); return false; }
+        }} />;
+    }
   };
   const sessionAction = (path: string, body?: unknown, method?: string) => safe(async () => { replaceFromServer(await api<Session>(path, body, method)); });
   return (
@@ -567,9 +658,9 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         <TerminalPanel storageKey={workspaceId} cwd={shownCwd} homeCwd={boot.homeCwd} onHeightChange={setTerminalHeight} />
         {sidebarOverlay && sidebarOpen && <div className="sidebar-scrim" aria-hidden="true" onClick={() => setSidebarOpen(false)} />}
         <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} tab={tab}
-          onNavigate={(next) => { setTab(next); closeSidebarOverlay(); }} onSkills={() => { closeSidebarOverlay(); setSkillReturn(undefined); setModal("skills"); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
+          onNavigate={(next) => { setTab(next); closeSidebarOverlay(); }} onSkills={() => { closeSidebarOverlay(); openTools("skills"); }} onSettings={() => { closeSidebarOverlay(); openSettingsAt(); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
           onNew={(id) => { newSession(); setGroupId(id ?? ""); closeSidebarOverlay(); }} selectedWorker={selectedWorker?.id} onSelectWorker={(sessionId, taskId) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); }} onSelect={(id) => { selectConversation(id); closeSidebarOverlay(); }}
-          onHelp={() => { closeSidebarOverlay(); setModal("help"); }} onUsage={() => { closeSidebarOverlay(); setModal("usage"); }}
+          onHelp={() => { closeSidebarOverlay(); openSettingsAt("environment", "env-onboarding"); }} onUsage={() => { closeSidebarOverlay(); openUsage(); }}
           onCreateGroup={(name) => safe(async () => {
             const group = await api<Group>("/groups", { name, workspaceId });
             setBoot((old) => ({ ...old, groups: [...old.groups.filter((item) => item.id !== group.id), group] }));
@@ -606,10 +697,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
             replaceFromServer(updated);
             setWorkerSelection((current) => current?.sessionId === sessionId && current.taskId === workerId ? undefined : current);
           })}
-          onDeleteSession={(id) => safe(async () => {
-            await api(`/sessions/${id}`, undefined, "DELETE");
+          onDeleteSession={(id, removeWorktrees) => safe(async () => {
+            const cleanup = await api<{ kept: { branch: string }[] } | undefined>(`/sessions/${id}${removeWorktrees ? "?worktrees=remove" : ""}`, undefined, "DELETE");
             setSessions((old) => old.filter((session) => session.id !== id));
             if (selected === id) newSession();
+            if (cleanup?.kept.length) setError(t("wt.deleteKept", { branches: cleanup.kept.map((item) => item.branch).join(", ") }));
           })} />
         <div
           className="sr-only"
@@ -628,29 +720,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         </button>}
         <main className={`${tab === "workspace" ? "chat-view" : "management-view"}${desktopMode === "max" ? (chatWidgetOpen ? " chat-float" : " chat-hidden") : ""}`}>
           {desktopMode === "max" && chatWidgetOpen && <button type="button" className="chat-float-close" onClick={() => setChatWidgetOpen(false)} aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")}><ChevronDown size={16} /></button>}
-          {tab === "routing" && <WorkspaceSettings currentId={workspaceId} busy={busy} cwd={cwd} onPickFolder={() => setModal("directory")} />}
-          {tab === "routing" && <section className="panel routing-settings"><AppearanceSettings /></section>}
-          {tab === "routing" && <AllowedAgentsSettings workspaceId={workspaceId} allowedAgents={allowedAgents} busy={busy}
-            quotaFallback={quotaFallback} setQuotaFallback={setQuotaFallback} quotaThreshold={quotaThreshold} setQuotaThreshold={setQuotaThreshold}
-            fallbackOrder={fallbackOrder} setFallbackOrder={setFallbackOrder}
-            onAllowedChange={(next) => {
-              setAllowedAgents(next);
-              const team = workspaceTeamDefaults(workspaceId, { agent, workers, model, reasoningEffort, workerConfigs, allowedAgents: next });
-              setAgent(team.agent); setWorkers(team.workers); setModel(team.model ?? ""); setReasoningEffort(team.reasoningEffort ?? "");
-              setWorkerConfigs(normalizeWorkerConfigs(team.workers, team.workerConfigs));
-              setRecommendation(undefined);
-            }} />}
-          {tab === "routing" && (routingSettings ? <RoutingSettingsPage value={routingSettings} busy={busy} onSave={async (next) => {
-            setBusy(true); setError("");
-            try { setRoutingSettings(await api<RoutingSettings>("/settings", next, "PUT")); }
-            finally { setBusy(false); }
-          }} onRefresh={async () => {
-            const next = await api<RoutingSettings>("/settings/models/refresh", {}, "POST");
-            setRoutingSettings(next);
-            setRecommendation(undefined);
-            return next;
-          }} /> : <section className="panel routing-settings"><p>{t("ws.settingsLoadFailed")}</p><button className="button light" onClick={() => void load()}>{t("ws.reload")}</button></section>)}
-          {tab === "tools" && <ToolsPanel workspaceId={workspaceId} cwd={shownCwd} onChange={() => {
+          {tab === "usage" && <section className="usage-page" aria-labelledby="usage-page-title"><header className="usage-page-head"><h2 id="usage-page-title">{t("side.usage")}</h2></header><UsagePanel initialWorkspace={workspaceId} /></section>}
+          {tab === "tools" && <ToolsPanel key={toolsTab.n} initialTab={toolsTab.tab} workspaceId={workspaceId} cwd={shownCwd} onChange={() => {
             void api<Skill[]>(`/skills?cwd=${encodeURIComponent(shownCwd)}&workspace=${encodeURIComponent(workspaceId)}`).then((next) => {
               const available = new Set(next.map((skill) => skill.id));
               setBoot((old) => ({ ...old, skills: next }));
@@ -696,13 +767,13 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                   {showChatBottom && !selectedWorker && <button type="button" className="chat-bottom-button" onClick={() => scrollToChatBottom()}><ArrowDown size={15} />{t("ws.toBottom")}</button>}
                   {!selectedWorker && <Composer completion={completion} attachments={attachmentState} prompt={prompt} setPrompt={setPrompt}
                     skills={skills} messageSkills={messageSkills} setMessageSkills={setMessageSkills} availableSkills={boot.skills}
-                    active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning}
+                    active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning} onOpenWorkspaceSettings={openWorkspaceSettings}
                     mode={mode} setMode={setMode} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
                     send={send} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
                       manual={{ agent, model, reasoningEffort, workers, workerConfigs }} availableAgents={teamAgents}
                       quotaFallback={quotaFallback} quotaThreshold={quotaThreshold} routingSettings={routingSettings} busy={busy}
-                      onAdvanced={() => setModal("settings")}
+                      onAdvanced={() => setSessionOptions(true)}
                       onSave={(next, crew) => safe(async () => {
                         if (active) {
                           replaceFromServer(await api<Session>(`/sessions/${active.id}/team`, { ...next, workers: crew.map((worker) => worker.agent), workerConfigs: crew }, "PATCH"));
@@ -721,7 +792,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
           {tab === "sessions" && <SessionsView sessions={sessions} onNew={newSession} onSelect={selectConversation} onStop={stopSession} />}
           {tab === "bots" && <BotsView bots={boot.bots} botA={botA} setBotA={setBotA} botB={botB} setBotB={setBotB} turns={turns} setTurns={setTurns}
             prompt={prompt} setPrompt={setPrompt} cwd={cwd} busy={busy} connected={connected}
-            onCreate={() => setModal("bot")} onPickFolder={() => setModal("directory")}
+            onCreate={() => setBotEditor(true)} onPickFolder={() => setModal("directory")}
             onUse={(b: Preset) => {
               setMode("manual");
               chooseAgent(b.agent);
@@ -751,30 +822,24 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
               setTab("workspace");
             })} />}
         </main>
-        {modal && <AppModal modal={modal} setModal={setModal} workspaceId={workspaceId} error={error} clearError={() => setError("")} busy={busy}
-          agents={boot.agents} availableSkills={boot.skills} skills={skills} setSkills={setSkills} search={search} setSearch={setSearch}
-          skillReturn={skillReturn} setSkillReturn={setSkillReturn} shownCwd={shownCwd} cwd={cwd}
-          onUseFolder={(path) => { setCwd(path); setModal(undefined); }}
-          botName={botName} setBotName={setBotName} agent={agent} chooseAgent={chooseAgent} allowedAgents={allowedAgents}
+        <ComputerUseLayer />
+        {settingsView && <SettingsWindow section={settingsView.section} focus={settingsView.focus} onClose={closeSettings}
+          onSection={(section) => { rememberCategory(section); setSettingsView({ section }); }}
+          renderPage={renderSettingsPage} onOpenTools={() => openTools()} onOpenUsage={openUsage} />}
+        {sessionOptions && <SessionPopover anchor={document.querySelector<HTMLElement>(".composer .team-picker")} onClose={() => setSessionOptions(false)} busy={busy} hasActive={Boolean(active)}
+          agent={agent} allowedAgents={allowedAgents} chooseAgent={chooseAgent}
           model={model} reasoningEffort={reasoningEffort} onModelChange={(nextModel, nextEffort) => { setModel(nextModel); setReasoningEffort(nextEffort); }}
-          routingSettings={routingSettings} autoSwitch={autoSwitch} setAutoSwitch={setAutoSwitch} systemPrompt={systemPrompt} setSystemPrompt={setSystemPrompt}
-          onOpenRouting={() => { setModal(undefined); setTab("routing"); }}
-          onRefreshSkills={() => void safe(async () => {
-            const next = await api<Skill[]>("/skills/refresh", { cwd: shownCwd, workspace: workspaceId });
-            setBoot((old) => ({ ...old, skills: next }));
-          })}
-          onSaveBot={() => void safe(async () => {
-            await api("/bots", {
-              name: botName,
-              agent,
-              model,
-              skills,
-              systemPrompt,
-            });
+          routingSettings={routingSettings} systemPrompt={systemPrompt} setSystemPrompt={setSystemPrompt}
+          availableSkills={boot.skills} skills={skills} setSkills={setSkills} onRefreshSkills={refreshSkills} refreshingSkills={refreshingSkills}
+          autoSwitch={autoSwitch} quotaFallback={quotaFallback} />}
+        {botEditor && <BotEditor initialAgent={agent} allowedAgents={allowedAgents} routingSettings={routingSettings} availableSkills={boot.skills}
+          onClose={() => setBotEditor(false)}
+          onSave={(draft) => safe(async () => {
+            await api("/bots", { name: draft.name, agent: draft.agent, model: draft.model, skills: draft.skills, systemPrompt: draft.systemPrompt });
             await load();
-            setBotName("");
-            setModal(undefined);
           })} />}
+        {modal && <AppModal modal={modal} setModal={setModal} workspaceId={workspaceId} error={error} clearError={() => setError("")} cwd={cwd}
+          onUseFolder={(path) => { setCwd(path); setModal(undefined); }} />}
       </div>
     </MotionConfig>
     {viewer && <FileViewer items={viewer.items} index={viewer.index} onIndex={(index) => setViewer({ items: viewer.items, index })} onClose={() => setViewer(null)} />}

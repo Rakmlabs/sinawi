@@ -9,6 +9,7 @@ import type { AttachmentsState } from "./useAttachments";
 import type { ComposerCompletion } from "./useComposerCompletion";
 import type { AgentId, Session, SkillInfo as Skill } from "../../server/types";
 import { t } from "../i18n";
+import { isWorkspacePolicyMessage } from "../../server/workspace-policy";
 import { Beat } from "../Beat";
 
 export type ComposerProps = {
@@ -27,6 +28,8 @@ export type ComposerProps = {
   liveNote: string;
   chatError: string;
   unavailableWarning: string | undefined;
+  /** Opens Settings › Workspaces; offered when something is blocked by this workspace's settings. */
+  onOpenWorkspaceSettings?: () => void;
   mode: "auto" | "manual";
   setMode: (mode: "auto" | "manual") => void;
   agent: AgentId;
@@ -43,7 +46,7 @@ export type ComposerProps = {
 };
 
 export function Composer(props: ComposerProps) {
-  const { completion, prompt, setPrompt, skills, messageSkills, setMessageSkills, active, sessionRunning, busy, routing, liveNote, chatError, unavailableWarning, mode, setMode, agent, cwd, shownCwd, canSend, choiceOptions, send, stopActive, openModal, openViewer } = props;
+  const { completion, prompt, setPrompt, skills, messageSkills, setMessageSkills, active, sessionRunning, busy, routing, liveNote, chatError, unavailableWarning, onOpenWorkspaceSettings, mode, setMode, agent, cwd, shownCwd, canSend, choiceOptions, send, stopActive, openModal, openViewer } = props;
   const { slash, setSlash, setSkillIndex, fileCompletion, setFileCompletion, fileSuggestions, setFileSuggestions, fileIndex, setFileIndex, composerInput, historyIndex, historyDraft, lastEscape, filteredSkills, highlightedSkill } = completion;
   const { attachments, attachFiles, removeAttachment, pasteImage, fileInput, dragging } = props.attachments;
   const skillName = (id: string) => props.availableSkills.find((skill) => skill.id === id)?.name ?? id;
@@ -77,8 +80,8 @@ export function Composer(props: ComposerProps) {
   return <div className="composer-area">
     {routing && <div className="thinking" role="status"><Beat /> {t("comp.routing")}</div>}
     {liveNote && <div className="thinking" role="status"><Beat /> {liveNote}</div>}
-    {chatError && <div className="message error-banner" role="alert">{chatError}</div>}
-    {unavailableWarning && <p className="composer-warning" role="alert">{unavailableWarning}</p>}
+    {chatError && <div className="message error-banner" role="alert">{chatError}{onOpenWorkspaceSettings && isWorkspacePolicyMessage(chatError) && <button type="button" className="policy-link" onClick={onOpenWorkspaceSettings}>{t("wsset.openSettings")}</button>}</div>}
+    {unavailableWarning && <p className="composer-warning" role="alert">{unavailableWarning}{onOpenWorkspaceSettings && unavailableWarning === t("team.noAllowedAgents") && <button type="button" className="policy-link" onClick={onOpenWorkspaceSettings}>{t("wsset.openSettings")}</button>}</p>}
     <div className={`composer${dragging ? " drop-target" : ""}`}>
       {slash && (
         <ComposerPopover anchor={composerInput}>

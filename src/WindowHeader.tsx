@@ -6,6 +6,7 @@ import { SinawiMark } from "./SinawiMark";
 import { Beat } from "./Beat";
 import { Elapsed } from "./app/Elapsed";
 import { railToggleLabel } from "./sidebar-rail";
+import { ComputerIndicator } from "./ComputerUse";
 
 export function isTauri() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -64,6 +65,7 @@ export function WindowHeader({ title, project, runningSince, sidebar, workspace,
         {extra}
         {onTerminal && <button className="header-icon-button" type="button" aria-label={t("header.terminal")} title={t("header.terminalTitle")} onClick={onTerminal}><SquareTerminal size={18} aria-hidden="true" /></button>}
         {onBrowser && <button className="header-icon-button" type="button" aria-label={t("ws.browser")} title={t("ws.browserTitle")} onClick={onBrowser}><Globe size={18} aria-hidden="true" /></button>}
+        <ComputerIndicator />
         {notifications}
         {activity && <button className="header-icon-button" type="button" aria-label={t("activity.label")} title={t("activity.title")} aria-expanded={activity.open} aria-controls={activity.controls} onClick={activity.onToggle}><Activity size={18} aria-hidden="true" /></button>}
       </div>

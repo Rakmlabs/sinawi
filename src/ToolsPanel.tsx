@@ -48,7 +48,7 @@ const statusLabels: Record<string, string> = translatedMap({
   "app-level": "tools.appLevel",
 });
 
-/** The tools API takes any workspace id (it still accepts the legacy "work" alias). */
+/** The tools API takes any workspace id. */
 function workspaceParam(workspaceId: WorkspaceId) {
   return workspaceId;
 }

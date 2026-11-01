@@ -10,19 +10,21 @@ import { UpdateBanner } from "../updates/UpdateBanner";
 
 /** Workspace shell: loads the user-defined workspaces and mounts one WorkspaceApp for the current one. */
 export function App() {
-  const { workspaces, workspaceError, updateDefaults, switchWorkspace, createWorkspace, renameWorkspace, deleteWorkspace, saveDefaults, retry } = useWorkspaceState();
+  const { workspaces, workspaceError, updateDefaults, switchWorkspace, createWorkspace, renameWorkspace, deleteWorkspace, saveDefaults, saveSettings, retry } = useWorkspaceState();
   const { onboarding, setOnboarding, onboardingView, setOnboardingView, dismiss } = useOnboardingView();
   const api = useMemo<WorkspacesApi>(() => ({
     workspaces: workspaces?.workspaces ?? [],
     currentId: workspaces?.currentWorkspaceId,
     defaults: workspaces?.defaults ?? {},
+    settings: workspaces?.settings ?? {},
     running: workspaces?.runningByWorkspace ?? {},
     switchTo: switchWorkspace,
     create: createWorkspace,
     rename: renameWorkspace,
     remove: deleteWorkspace,
     saveDefaults,
-  }), [workspaces, switchWorkspace, createWorkspace, renameWorkspace, deleteWorkspace, saveDefaults]);
+    saveSettings,
+  }), [workspaces, switchWorkspace, createWorkspace, renameWorkspace, deleteWorkspace, saveDefaults, saveSettings]);
   return <WorkspacesContext.Provider value={api}>
     {onboardingView === "open" && workspaces && <Onboarding progress={onboarding} onProgress={setOnboarding} workspaceId={workspaces.currentWorkspaceId} onSwitchWorkspace={switchWorkspace}
       onMinimize={() => setOnboardingView("min")} onClose={dismiss} />}

@@ -10,6 +10,7 @@ import { t, tx } from "./i18n";
 import { useWorkspaces } from "./workspace-context";
 import { workspaceName } from "./workspaces";
 import { SinawiMark } from "./SinawiMark";
+import { ComputerUseStatus } from "./ComputerUse";
 
 export type SetupInfo = { platform: string; tools: SetupTool[]; permissions: Record<PermissionId, PermissionState> };
 type Group = { id: string; name: string; workspaceId?: WorkspaceId };
@@ -156,6 +157,7 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
             {(row.id === "files" || !native[row.id] || native[row.id] === "unknown") && (row.state !== "ok" || progress.acknowledged.includes(row.id)) ? <label className="ob-check"><input type="checkbox" checked={progress.acknowledged.includes(row.id)} onChange={() => ack(row.id)} />{t("ob.turnedOn")}</label> : null}
           </div>
         </div>)}</div>
+        <div className="ob-list"><ComputerUseStatus workspaceId={workspaceId} /></div>
         <p className="ob-muted">{tx("ob.perm.note")}</p>
       </>;
       case "workspaces": return <>
