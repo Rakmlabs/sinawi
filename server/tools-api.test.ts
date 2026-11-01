@@ -51,7 +51,9 @@ test("tools API returns workspace-aware MCP and skill states and persists toggle
     assert.deepEqual(personal.body.skills, [{ name: "Review", source: "Test", agents: ["codex"], description: "Review code", enabled: true }]);
     const disabled = await request(app, "PUT", "/api/tools/skill", { name: "Review", enabled: false, workspace: "personal" });
     assert.equal(disabled.body.skills[0].enabled, false);
-    assert.equal((await request(app, "GET", "/api/tools?workspace=work")).body.skills[0].enabled, true);
+    assert.equal((await request(app, "GET", "/api/tools?workspace=company")).body.skills[0].enabled, true);
+    // The old "work" alias is gone: no workspace id is special.
+    assert.equal((await request(app, "GET", "/api/tools?workspace=work")).status, 500);
 
     const claude = await request(app, "PUT", "/api/tools/mcp", { agent: "claude", name: "docs", enabled: false, workspace: "personal" });
     assert.equal(claude.body.mcp.find((item: any) => item.agent === "claude").appEnabled, false);
@@ -59,9 +61,22 @@ test("tools API returns workspace-aware MCP and skill states and persists toggle
     const grok = await request(app, "PUT", "/api/tools/mcp", { agent: "grok", name: "bbanana", enabled: false, workspace: "personal" });
     assert.equal(grok.status, 200);
     assert.ok(calls.some(([file, args]) => file === "grok" && args.join(" ") === "mcp disable bbanana"));
-    assert.equal((await request(app, "PUT", "/api/tools/mcp", { agent: "grok", name: "bbanana", enabled: true, workspace: "company" })).status, 400);
+    // The migrated company workspace keeps its old lock, now as a blocked-tools setting.
+    const lockedToggle = await request(app, "PUT", "/api/tools/mcp", { agent: "grok", name: "bbanana", enabled: true, workspace: "company" });
+    assert.equal(lockedToggle.status, 400);
+    assert.equal(lockedToggle.body.code, "workspace-policy");
     const company = await request(app, "GET", "/api/tools?workspace=company");
     assert.ok(company.body.mcp.filter((item: any) => item.name === "bbanana").every((item: any) => item.forcedOff && item.status === "locked"));
+
+    // Unblocking it in the workspace settings lifts the lock.
+    assert.equal((await request(app, "PATCH", "/api/workspaces/company", { settings: { blockedTools: [] } })).status, 200);
+    assert.ok((await request(app, "GET", "/api/tools?workspace=company")).body.mcp.every((item: any) => !item.forcedOff));
+    assert.equal((await request(app, "PUT", "/api/tools/mcp", { agent: "grok", name: "bbanana", enabled: true, workspace: "company" })).status, 200);
+    // And blocking a tool in another workspace locks it there.
+    await request(app, "PATCH", "/api/workspaces/personal", { settings: { blockedTools: ["grok:bbanana"] } });
+    const personalLocked = await request(app, "GET", "/api/tools?workspace=personal");
+    assert.equal(personalLocked.body.mcp.find((item: any) => item.agent === "grok" && item.name === "bbanana").forcedOff, true);
+    assert.equal(personalLocked.body.mcp.find((item: any) => item.agent === "codex" && item.name === "bbanana").forcedOff, undefined);
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

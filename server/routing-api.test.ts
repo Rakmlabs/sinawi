@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mediaBlockedMessage } from "./workspace-policy.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Duplex } from "node:stream";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -531,7 +532,7 @@ test("manual media execution refuses to start when Grok is unavailable", async (
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("company APIs reject detected and media-rule requests before creating or continuing sessions", async () => {
+test("migrated company settings reject detected and media-rule requests before creating or continuing sessions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-next22-company-media-"));
   const companySession: Session = {
     id: "company-media-session", title: "Company", agent: "claude", workers: ["grok"], cwd: directory,
@@ -552,7 +553,8 @@ test("company APIs reject detected and media-rule requests before creating or co
     modelRunner: async () => { throw new Error("No CLI in fixture"); },
     routingRunner: async () => { launches++; return { exitCode: 0, finalText: "{}" }; },
   });
-  const expected = { error: "영상·이미지 생성은 개인 공간에서만 가능" };
+  // An install from before workspace settings: the migrated company workspace keeps media off.
+  const expected = { error: mediaBlockedMessage, code: "workspace-policy" };
   try {
     const routed = await request(app, "POST", "/api/route", { workspaceId: "company", prompt: "이미지 생성해줘", cwd: directory });
     assert.deepEqual(routed, { status: 400, body: expected });

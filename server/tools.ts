@@ -3,7 +3,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import type { AgentId, WorkspaceId } from "./types.js";
+import type { AgentId, WorkspaceId, WorkspacePolicy } from "./types.js";
+import { isToolLocked } from "./workspace-policy.js";
 
 const execFileAsync = promisify(execFile);
 const safeName = /^[\w.@:/ ()-]{1,200}$/;
@@ -200,7 +201,7 @@ function parseList(agent: AgentId, stdout: string): McpToolInfo[] {
   });
 }
 
-export async function discoverMcpTools(workspace: WorkspaceId, options: { runner?: ToolCommandRunner; disabledMcp?: readonly string[] } = {}): Promise<McpToolInfo[]> {
+export async function discoverMcpTools(_workspace: WorkspaceId, options: { runner?: ToolCommandRunner; disabledMcp?: readonly string[]; policy?: WorkspacePolicy } = {}): Promise<McpToolInfo[]> {
   const runner = options.runner ?? defaultRunner;
   const disabled = new Set(options.disabledMcp ?? []);
   const agents: AgentId[] = ["codex", "claude", "grok"];
@@ -209,7 +210,7 @@ export async function discoverMcpTools(workspace: WorkspaceId, options: { runner
     catch { return []; }
   }));
   return results.flat().map((tool) => decorate(tool)).map((tool) => {
-    const forcedOff = workspace === "company" && tool.name.toLocaleLowerCase() === "bbanana";
+    const forcedOff = isToolLocked(options.policy, tool.agent, tool.name);
     const appEnabled = tool.nativeEnabled && !disabled.has(`${tool.agent}:${tool.name}`) && !forcedOff;
     return {
       ...tool,
@@ -217,7 +218,7 @@ export async function discoverMcpTools(workspace: WorkspaceId, options: { runner
       status: forcedOff ? "locked" as const
         : !appEnabled && tool.agent === "claude" ? "app-disabled" as const
         : !appEnabled ? "disabled" as const : tool.status,
-      ...(forcedOff ? { forcedOff: true, reason: "회사 공간에서는 bbanana를 사용할 수 없습니다." }
+      ...(forcedOff ? { forcedOff: true, reason: "이 작업 공간 설정에서 차단된 도구입니다." }
         : tool.agent === "claude" ? { reason: tool.reason ?? "Claude MCP는 앱 수준에서만 켜고 끌 수 있습니다." } : {}),
     };
   });

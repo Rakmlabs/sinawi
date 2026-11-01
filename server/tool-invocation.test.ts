@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildInvocation, prepareCliInvocation, type RunCliOptions } from "./cli.js";
 import { Orchestra } from "./orchestra.js";
-import { mutateToolSettings } from "./store.js";
+import { mutateToolSettings, workspaceToolSettings } from "./store.js";
+import { defaultWorkspacePolicy } from "./workspace-policy.js";
 import { withWorkspaceMcpBlocks } from "./server.js";
 import { RoutingService, defaultRoutingSettings } from "./routing.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
@@ -14,15 +15,15 @@ import { createQuotaFallbackRunner } from "./router-fallback.js";
 test("Claude app-level MCP blocks are passed to both fresh and resumed CLI invocations", async () => {
   const invocation = await prepareCliInvocation({ agent: "claude", cwd: "/tmp", prompt: "work", resumeSessionId: "prior", blockedMcp: ["mcp__example__*"] });
   const denied = invocation.args.flatMap((arg, index) => invocation.args[index - 1] === "--disallowedTools" ? [arg] : []);
-  assert.deepEqual(denied, ["mcp__example__*", "mcp__bbanana__*"]);
+  assert.deepEqual(denied, ["mcp__example__*"]);
   assert.ok(invocation.args.includes("--resume"));
   const plain = buildInvocation({ agent: "claude", cwd: "/tmp", prompt: "work" }).args;
-  assert.equal(plain[plain.indexOf("--disallowedTools") + 1], "mcp__bbanana__*");
+  assert.equal(plain.includes("--disallowedTools"), false);
 });
 
 test("Orchestra applies workspace app-level MCP blocks at the runner boundary", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "tool-invocation-"));
-  await mutateToolSettings((settings) => { settings.personal.disabledMcp = ["claude:example"]; }, cwd);
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "personal").disabledMcp = ["claude:example"]; }, cwd);
   const calls: RunCliOptions[] = [];
   const orchestra = new Orchestra(undefined, async (options) => {
     calls.push(options);
@@ -40,7 +41,7 @@ test("Orchestra applies workspace app-level MCP blocks at the runner boundary", 
 
 test("route and automatic-switch planners receive workspace MCP blocks", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "tool-router-"));
-  await mutateToolSettings((settings) => { settings.personal.disabledMcp = ["codex:route-tool"]; }, cwd);
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "personal").disabledMcp = ["codex:route-tool"]; }, cwd);
   const calls: RunCliOptions[] = [];
   const runner = withWorkspaceMcpBlocks(async (options) => {
     calls.push(options);
@@ -65,7 +66,7 @@ test("route and automatic-switch planners receive workspace MCP blocks", async (
 
 test("quota fallback derives MCP blocks from the fallback agent", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "tool-router-fallback-"));
-  await mutateToolSettings((settings) => { settings.personal.disabledMcp = ["codex:first", "claude:fallback"]; }, cwd);
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "personal").disabledMcp = ["codex:first", "claude:fallback"]; }, cwd);
   const calls: RunCliOptions[] = [];
   const protectedRunner = withWorkspaceMcpBlocks(async (options) => {
     calls.push(options);
@@ -88,4 +89,29 @@ test("workspace MCP blocks override Codex native state and reach Grok deny flags
   assert.equal(codex.args[index + 1], 'mcp_servers."docs.local".enabled=false');
   const grok = await prepareCliInvocation({ agent: "grok", cwd: "/tmp", prompt: "work", blockedMcp: ["mcp__docs__*"] });
   assert.equal(grok.args[grok.args.indexOf("--deny") + 1], "mcp__docs__*");
+});
+
+test("workspace-locked tools and the Grok MCP switch reach orchestra and planner runs", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "tool-policy-"));
+  const policy = { ...defaultWorkspacePolicy(), grokMcp: false, blockedTools: ["media-tool", "claude:docs"] };
+  const calls: RunCliOptions[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => {
+    calls.push(options);
+    return { exitCode: 0, finalText: "complete" };
+  }, undefined, undefined, undefined, undefined, cwd, undefined, undefined, undefined, (id) => id === "team" ? policy : defaultWorkspacePolicy());
+  const session = await orchestra.create({ prompt: "Review code", agent: "claude", workers: ["grok"], cwd, workspaceId: "team" });
+  const deadline = Date.now() + 3000;
+  while (session.status === "running" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  const claude = calls.find((call) => call.agent === "claude")!;
+  assert.deepEqual(claude.lockedMcp, ["media-tool", "docs"]);
+  assert.deepEqual(claude.blockedMcp, ["mcp__media-tool__*", "mcp__docs__*"]);
+
+  const planned: RunCliOptions[] = [];
+  const runner = withWorkspaceMcpBlocks(async (options) => { planned.push(options); return { exitCode: 0, finalText: "" }; }, cwd, (id) => id === "team" ? policy : defaultWorkspacePolicy());
+  await runner({ agent: "grok", cwd, prompt: "route", readOnly: true, onLine: () => undefined, usageContext: { workspaceId: "team", sessionId: "p", role: "router" } });
+  await runner({ agent: "grok", cwd, prompt: "route", readOnly: true, onLine: () => undefined, usageContext: { workspaceId: "other", sessionId: "q", role: "router" } });
+  assert.deepEqual(planned[0].lockedMcp, ["media-tool"]);
+  assert.deepEqual(planned[0].blockedMcp, ["mcp__media-tool__*", "mcp__*"]);
+  assert.equal(planned[1].lockedMcp, undefined);
+  assert.deepEqual(planned[1].blockedMcp, []);
 });

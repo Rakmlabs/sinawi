@@ -8,9 +8,10 @@ import { promisify, stripVTControlCharacters } from "node:util";
 import { runCli, type RunCliOptions } from "./cli.js";
 import { filterEnabledSkills, publicSkills } from "./skills.js";
 import { loadToolSettings, workspaceToolSettings } from "./store.js";
-import type { AgentId, AgentSelection, SkillInfo } from "./types.js";
+import type { AgentId, AgentSelection, SkillInfo, WorkspacePolicy } from "./types.js";
+import { assertMediaAllowed } from "./workspace-policy.js";
 import { defaultDataDir, envVar } from "./runtime.js";
-import { companyMediaUnavailableMessage, imageTextKeywords, imageVisualKeywords, isMediaRule, mediaGenerationRequired, mediaRouteRequired, mediaSkills, mediaUnavailableMessage, stripPreviewAttachments, videoKeywords } from "./media-routing.js";
+import { imageTextKeywords, imageVisualKeywords, isMediaRule, mediaGenerationRequired, mediaRouteRequired, mediaSkills, mediaUnavailableMessage, stripPreviewAttachments, videoKeywords } from "./media-routing.js";
 
 const agentIds = new Set<AgentId>(["codex", "claude", "grok"]);
 const execFileAsync = promisify(execFile);
@@ -70,14 +71,15 @@ const smartMediaRules: RoutingRule[] = [
   },
   {
     id: "image-text", label: "텍스트/디자인 이미지", keywords: [...imageTextKeywords], orchestrator: "grok", workers: ["codex", "grok"],
-    reason: "Codex 내장 이미지 생성(GPT image)·bbanana GPT Image가 글자·레이아웃·정확한 편집에 강함",
+    reason: "Codex 내장 이미지 생성(GPT image)이 글자·레이아웃·정확한 편집에 강함",
   },
   {
     id: "image-visual", label: "실사/분위기 이미지", keywords: [...imageVisualKeywords], orchestrator: "grok", workers: ["grok", "codex"],
-    reason: "Grok Imagine(image_gen/edit/image_to_video)·bbanana가 실사·인물·분위기, 영상 연계, 빠른 변형에 강함",
+    reason: "Grok Imagine(image_gen/edit/image_to_video)이 실사·인물·분위기, 영상 연계, 빠른 변형에 강함",
   },
 ];
 
+// Exactly what older versions shipped, so saved copies are recognized and replaced; never shown for new installs.
 const legacyImageRule: RoutingRule = {
   id: "image", label: "이미지 생성",
   keywords: ["generate image", "create image", "edit image", "generate photo", "edit photo", "image generation", "image editing"],
@@ -565,7 +567,7 @@ export class RoutingService {
     finally { release(); }
   }
 
-  async recommend(prompt: string, cwd: string, explicitSkills: string[] = [], availableAgents?: AgentId[], usageContext?: RunCliOptions["usageContext"], allowedAgents?: AgentId[]): Promise<RouteRecommendation> {
+  async recommend(prompt: string, cwd: string, explicitSkills: string[] = [], availableAgents?: AgentId[], usageContext?: RunCliOptions["usageContext"], allowedAgents?: AgentId[], policy?: WorkspacePolicy): Promise<RouteRecommendation> {
     let settings = await this.loadSettings();
     const workspaceId = usageContext?.workspaceId ?? "personal";
     const loadEnabledSkills = async () => {
@@ -573,10 +575,8 @@ export class RoutingService {
       return filterEnabledSkills(await (this.options.skillLoader ?? publicSkills)(cwd), disabled);
     };
     const media = mediaRouteRequired(prompt, settings.rules);
-    if (usageContext?.workspaceId === "company" && mediaRouteRequired(prompt, settings.rules)) {
-      throw new Error(companyMediaUnavailableMessage);
-    }
-    if (usageContext?.workspaceId === "company") {
+    if (media) assertMediaAllowed(policy);
+    if (policy && !policy.mediaGeneration) {
       settings = { ...settings, rules: settings.rules.filter((rule) => !isMediaRule(rule.id)) };
     }
     if (media && (availableAgents && !availableAgents.includes("grok") || allowedAgents && !allowedAgents.includes("grok") || settings.modelOptions.grok.authStatus === "unauthenticated")) {
@@ -596,7 +596,7 @@ export class RoutingService {
     if (media) {
       const skills = await loadEnabledSkills();
       const configuredMediaRule = matchedRule(prompt, { ...settings, rules: settings.rules.filter((rule) => isMediaRule(rule.id)) });
-      const reason = configuredMediaRule?.reason ?? "이미지·영상 생성은 bbanana MCP와 Grok Imagine을 사용합니다.";
+      const reason = configuredMediaRule?.reason ?? "이미지·영상 생성은 Grok Imagine과 연결된 미디어 도구를 사용합니다.";
       const mediaWorkers = (configuredMediaRule?.workers ?? ["codex", "grok"]).filter((agent) => !available || available.includes(agent));
       return withExplicitSkills({
         planner: choice(settings, "grok", "미디어 생성 도구를 지원하는 Grok으로 직접 분류했습니다."),

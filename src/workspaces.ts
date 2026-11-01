@@ -1,4 +1,4 @@
-import { allowedAgentsForWorkspace } from "../server/workspace-policy";
+import { allowedAgentsForWorkspace, normalizeWorkspacePolicy } from "../server/workspace-policy";
 import type { ProviderQuota } from "../server/quota";
 import type { AgentId, Group, Session, WorkspaceId, WorkspaceState } from "../server/types";
 import { remainingQuota } from "./quota-data";
@@ -19,10 +19,15 @@ export function normalizeWorkspaces(raw: Omit<WorkspaceState, "workspaces"> & { 
     ? (raw.workspaces as unknown[]).filter((item): item is WorkspaceSummary => Boolean(item) && typeof (item as WorkspaceSummary).id === "string" && typeof (item as WorkspaceSummary).name === "string")
     : [];
   const workspaces = listed.length ? listed : (Object.keys(defaults) as WorkspaceId[]).map((id) => ({ id, name: id }));
-  for (const workspace of workspaces) defaults[workspace.id] ??= {};
+  const settings: NonNullable<WorkspaceState["settings"]> = {};
+  for (const workspace of workspaces) {
+    defaults[workspace.id] ??= {};
+    // An older server without settings: everything allowed, as it was there.
+    settings[workspace.id] = normalizeWorkspacePolicy(raw.settings?.[workspace.id]);
+  }
   const currentWorkspaceId = workspaces.some((workspace) => workspace.id === raw.currentWorkspaceId) ? raw.currentWorkspaceId : workspaces[0]?.id ?? raw.currentWorkspaceId;
   const running = raw.runningByWorkspace && typeof raw.runningByWorkspace === "object" ? raw.runningByWorkspace as Record<string, number> : {};
-  return { ...raw, currentWorkspaceId, defaults, workspaces, runningByWorkspace: running };
+  return { ...raw, currentWorkspaceId, defaults, settings, workspaces, runningByWorkspace: running };
 }
 
 /** Display name; the server's seeded `default` workspace keeps a localized name until renamed. */

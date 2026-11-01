@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Orchestra } from "./orchestra.js";
 import { publicSkills } from "./skills.js";
-import { mutateToolSettings } from "./store.js";
+import { mutateToolSettings, workspaceToolSettings } from "./store.js";
 import type { RunCliOptions } from "./cli.js";
 import type { Session } from "./types.js";
 
@@ -35,7 +35,7 @@ async function fixture() {
 
 test("disabled skills are excluded from explicit create, planner and worker injection", async () => {
   const { cwd, skill, prompts, orchestra } = await fixture();
-  await mutateToolSettings((settings) => { settings.personal.disabledSkills = [skill.name]; }, cwd);
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "personal").disabledSkills = [skill.name]; }, cwd);
   const session = await orchestra.create({ prompt: "Check code", agent: "codex", workers: ["grok"], planner: { agent: "codex" }, cwd, skills: [skill.id] });
   await settled(session);
   assert.ok(prompts.length >= 3);
@@ -47,7 +47,7 @@ test("disabling a saved skill affects followups and remains scoped to its worksp
   const session = await orchestra.create({ prompt: "Check code", agent: "codex", workers: ["grok"], cwd, skills: [skill.id] });
   await settled(session);
   assert.ok(prompts.some((prompt) => prompt.includes("SECRET_SKILL_INSTRUCTIONS")));
-  await mutateToolSettings((settings) => { settings.personal.disabledSkills = [skill.name]; }, cwd);
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "personal").disabledSkills = [skill.name]; }, cwd);
   prompts.length = 0;
   await orchestra.followup(session.id, "Check again", [skill.id]);
   await settled(session);
@@ -60,7 +60,7 @@ test("disabling a saved skill affects followups and remains scoped to its worksp
 
 test("disabled bot skills never enter conversation prompts", async () => {
   const { cwd, skill, prompts, orchestra } = await fixture();
-  await mutateToolSettings((settings) => { settings.personal.disabledSkills = [skill.name]; }, cwd);
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "personal").disabledSkills = [skill.name]; }, cwd);
   const bot = { name: "Fixture", agent: "codex" as const, skills: [skill.id], systemPrompt: "", createdAt: new Date().toISOString() };
   const session = await orchestra.conversation({ botA: "a", botB: "b", prompt: "Discuss code", turns: 2, cwd }, [{ ...bot, id: "a" }, { ...bot, id: "b" }]);
   await settled(session);
@@ -70,7 +70,7 @@ test("disabled bot skills never enter conversation prompts", async () => {
 
 test("disabled legacy media attachments do not block company creates, restored followups or bots", async () => {
   const { cwd, orchestra } = await fixture();
-  await mutateToolSettings((settings) => { settings.company.disabledSkills = ["marketing-shorts"]; }, cwd);
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "company").disabledSkills = ["marketing-shorts"]; }, cwd);
   const session = await orchestra.create({ prompt: "Review code", agent: "claude", workers: ["grok"], cwd, workspaceId: "company", skills: ["marketing-shorts"] });
   await settled(session);
   assert.equal(session.agent, "claude");

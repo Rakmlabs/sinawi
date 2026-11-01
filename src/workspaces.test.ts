@@ -95,7 +95,8 @@ test("chat and project search scopes content before matching and retains project
 
 test("new teams replace saved prohibited agents without retaining their model or worker configuration", async () => {
   const { workspaceTeamDefaults } = await import("./workspaces");
-  const team = workspaceTeamDefaults("company", { agent: "codex", model: "codex-only", reasoningEffort: "xhigh", workers: ["codex"], workerConfigs: [{ agent: "codex", model: "gpt" }] });
+  // The workspace's allowed-agents setting (not its id) decides what is prohibited.
+  const team = workspaceTeamDefaults("company", { allowedAgents: ["claude", "grok"], agent: "codex", model: "codex-only", reasoningEffort: "xhigh", workers: ["codex"], workerConfigs: [{ agent: "codex", model: "gpt" }] });
   assert.equal(team.agent, "claude");
   assert.equal(team.model, undefined);
   assert.equal(team.reasoningEffort, undefined);

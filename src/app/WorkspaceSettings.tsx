@@ -1,22 +1,23 @@
 import { useState, type FormEvent } from "react";
 import { Check, FolderOpen, Pencil, Plus, Trash2, X } from "lucide-react";
 import { AgentMark } from "../AgentMark";
-import { allowedAgentsForWorkspace } from "../../server/workspace-policy";
+import { allowedAgentsForWorkspace, defaultWorkspacePolicy, toolNamePattern } from "../../server/workspace-policy";
 import { useWorkspaces } from "../workspace-context";
 import { workspaceName } from "../workspaces";
 import { names } from "./labels";
-import type { AgentId, WorkspaceId } from "../../server/types";
+import type { AgentId, WorkspaceId, WorkspacePolicy } from "../../server/types";
 import { t } from "../i18n";
 
 const AGENTS: AgentId[] = ["codex", "claude", "grok"];
 
 /**
- * Settings › Workspaces: add, rename, switch and delete user-defined workspaces, and edit the
- * defaults of the workspaces that are not open. The open workspace's folder comes from the
- * composer's folder picker and its agents from the "allowed agents" section below.
+ * Settings › Workspaces: add, rename, switch and delete user-defined workspaces, edit the defaults
+ * of the workspaces that are not open, and every workspace's rules (media, computer control, Grok
+ * MCP, blocked tools, ...). The open workspace's folder comes from the composer's folder picker and
+ * its agents from the "allowed agents" section below.
  */
 export function WorkspaceSettings({ currentId, busy, cwd, onPickFolder }: { currentId: WorkspaceId; busy: boolean; cwd: string; onPickFolder: () => void }) {
-  const { workspaces, defaults, running, switchTo, create, rename, remove, saveDefaults } = useWorkspaces();
+  const { workspaces, defaults, settings, running, switchTo, create, rename, remove, saveDefaults, saveSettings } = useWorkspaces();
   const [adding, setAdding] = useState("");
   const [renaming, setRenaming] = useState<{ id: WorkspaceId; value: string }>();
   const [deleting, setDeleting] = useState<{ id: WorkspaceId; moveTo: WorkspaceId }>();
@@ -99,13 +100,15 @@ export function WorkspaceSettings({ currentId, busy, cwd, onPickFolder }: { curr
               <dt>{t("wsset.agents")}</dt>
               <dd className="workspace-agents">{current
                 ? <>{allowedAgentsLabel(allowed)}<small>{t("wsset.agentsBelow")}</small></>
-                : AGENTS.map((id) => <label key={id} className="workspace-agent">
+                : <>{AGENTS.map((id) => <label key={id} className="workspace-agent">
                   <input type="checkbox" checked={allowed.includes(id)} disabled={locked}
                     onChange={(event) => void run(() => saveDefaults(workspace.id, { ...own, allowedAgents: event.target.checked ? [...allowed, id] : allowed.filter((item) => item !== id) }))} />
                   <AgentMark agent={id} size="small" />{names[id]}
-                </label>)}</dd>
+                </label>)}<small>{t("wsset.agentsHint")}</small></>}</dd>
             </div>
           </dl>
+          <WorkspaceRules workspaceId={workspace.id} policy={settings[workspace.id] ?? defaultWorkspacePolicy()} open={current} locked={locked}
+            save={(patch) => run(() => saveSettings(workspace.id, patch))} />
         </li>;
       })}
     </ul>
@@ -118,4 +121,85 @@ export function WorkspaceSettings({ currentId, busy, cwd, onPickFolder }: { curr
 
 function allowedAgentsLabel(allowed: AgentId[]) {
   return allowed.length ? allowed.map((id) => names[id]).join(" · ") : t("wsset.noAgents");
+}
+
+/** Restrictions that differ from a fresh workspace, for the collapsed summary. */
+function restrictionCount(policy: WorkspacePolicy) {
+  return Number(!policy.mediaGeneration) + Number(!policy.grokMcp) + policy.blockedTools.length;
+}
+
+function RuleToggle({ id, settingId, label, hint, checked, disabled, onChange }: { id: string; settingId?: string; label: string; hint: string; checked: boolean; disabled: boolean; onChange: (value: boolean) => void }) {
+  return <div className="workspace-rule" data-setting-id={settingId}>
+    <label className="workspace-rule-head" htmlFor={id}>
+      <span>{label}</span>
+      <input id={id} type="checkbox" role="switch" checked={checked} disabled={disabled} aria-describedby={`${id}-hint`} onChange={(event) => onChange(event.target.checked)} />
+    </label>
+    <small id={`${id}-hint`}>{hint}</small>
+  </div>;
+}
+
+/** Editable list of MCP server names, optionally scoped to one agent (`agent:name`). */
+function ToolList({ id, label, hint, values, scoped, disabled, onChange }: { id: string; label: string; hint: string; values: string[]; scoped: boolean; disabled: boolean; onChange: (next: string[]) => Promise<boolean> }) {
+  const [draft, setDraft] = useState("");
+  const [agent, setAgent] = useState<"" | AgentId>("");
+  const name = draft.trim();
+  const valid = !name || toolNamePattern.test(name);
+  const entry = scoped && agent ? `${agent}:${name}` : name;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!name || !valid || disabled) return;
+    if (values.some((value) => value.toLocaleLowerCase() === entry.toLocaleLowerCase())) { setDraft(""); return; }
+    if (await onChange([...values, entry])) setDraft("");
+  };
+  const show = (value: string) => {
+    const [prefix, rest] = value.includes(":") ? value.split(":") : ["", value];
+    return prefix ? `${rest} · ${names[prefix as AgentId] ?? prefix}` : rest;
+  };
+  return <div className="workspace-rule">
+    <span className="workspace-rule-head" id={`${id}-label`}>{label}</span>
+    <small id={`${id}-hint`}>{hint}</small>
+    <ul className="workspace-tool-chips" aria-labelledby={`${id}-label`}>
+      {values.length ? values.map((value) => <li key={value} className="workspace-tool-chip">
+        <span>{show(value)}</span>
+        <button type="button" aria-label={t("wsset.removeTool", { name: show(value) })} disabled={disabled} onClick={() => void onChange(values.filter((item) => item !== value))}><X size={12} /></button>
+      </li>) : <li className="workspace-tool-empty">{t("wsset.noTools")}</li>}
+    </ul>
+    <form className="workspace-inline-form" onSubmit={(event) => void submit(event)}>
+      <input aria-label={`${label} · ${t("wsset.toolName")}`} aria-describedby={`${id}-hint`} aria-invalid={!valid} placeholder={t("wsset.toolPlaceholder")} maxLength={100} value={draft} onChange={(event) => setDraft(event.target.value)} />
+      {scoped && <select aria-label={t("wsset.toolAgent")} value={agent} disabled={disabled} onChange={(event) => setAgent(event.target.value as "" | AgentId)}>
+        <option value="">{t("wsset.allAgents")}</option>
+        {AGENTS.map((item) => <option key={item} value={item}>{names[item]}</option>)}
+      </select>}
+      <button type="submit" className="button light" disabled={disabled || !name || !valid}><Plus size={14} />{t("wsset.addTool")}</button>
+    </form>
+    {!valid && <small className="workspace-warning" role="alert">{t("wsset.invalidTool")}</small>}
+  </div>;
+}
+
+/** One workspace's rules; each change is saved on its own and applies from the next run. */
+function WorkspaceRules({ workspaceId, policy, open, locked, save }: { workspaceId: WorkspaceId; policy: WorkspacePolicy; open: boolean; locked: boolean; save: (patch: Partial<WorkspacePolicy>) => Promise<boolean> }) {
+  const [prompt, setPrompt] = useState<string>();
+  const count = restrictionCount(policy);
+  const key = workspaceId;
+  const draftPrompt = prompt ?? policy.mediaPrompt ?? "";
+  return <details className="workspace-rules" open={open}>
+    <summary><span>{t("wsset.rules")}</span><span className={`workspace-tag${count ? " restricted" : ""}`}>{count ? t("wsset.rulesSummary", { count }) : t("wsset.rulesNone")}</span>{policy.computerUse && <span className="workspace-tag">{t("wsset.computerUse")}</span>}</summary>
+    <div className="workspace-rules-body">
+    <p className="muted">{t("wsset.rulesBody")}</p>
+    <RuleToggle id={`ws-${key}-media`} label={t("wsset.media")} hint={t("wsset.mediaHint")} checked={policy.mediaGeneration} disabled={locked} onChange={(value) => void save({ mediaGeneration: value })} />
+    <RuleToggle id={`ws-${key}-computer`} settingId={open ? "ws-computer" : undefined} label={t("wsset.computerUse")} hint={t("wsset.computerUseHint")} checked={policy.computerUse} disabled={locked} onChange={(value) => void save({ computerUse: value })} />
+    <RuleToggle id={`ws-${key}-grok-mcp`} label={t("wsset.grokMcp")} hint={t("wsset.grokMcpHint")} checked={policy.grokMcp} disabled={locked} onChange={(value) => void save({ grokMcp: value })} />
+    <ToolList id={`ws-${key}-blocked`} label={t("wsset.blockedTools")} hint={t("wsset.blockedToolsHint")} values={policy.blockedTools} scoped disabled={locked} onChange={(next) => save({ blockedTools: next })} />
+    <ToolList id={`ws-${key}-alerts`} label={t("wsset.alertTools")} hint={t("wsset.alertToolsHint")} values={policy.authAlertTools} scoped={false} disabled={locked} onChange={(next) => save({ authAlertTools: next })} />
+    {policy.mediaGeneration && <div className="workspace-rule">
+      <label className="workspace-rule-head" htmlFor={`ws-${key}-media-prompt`}>{t("wsset.mediaPrompt")}</label>
+      <small id={`ws-${key}-media-prompt-hint`}>{t("wsset.mediaPromptHint")}</small>
+      <textarea id={`ws-${key}-media-prompt`} aria-describedby={`ws-${key}-media-prompt-hint`} rows={3} maxLength={4000} placeholder={t("wsset.mediaPromptPlaceholder")} value={draftPrompt} disabled={locked} onChange={(event) => setPrompt(event.target.value)} />
+      {draftPrompt !== (policy.mediaPrompt ?? "") && <div className="workspace-confirm-actions">
+        <button type="button" className="button light" onClick={() => setPrompt(undefined)}>{t("side.cancel")}</button>
+        <button type="button" className="button light" disabled={locked} onClick={async () => { if (await save({ mediaPrompt: draftPrompt.trim() })) setPrompt(undefined); }}>{t("wsset.save")}</button>
+      </div>}
+    </div>}
+    </div>
+  </details>;
 }

@@ -3,9 +3,15 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
-import { ensureCompanyGrokGuard } from "./grok-mcp-guard.js";
+import { ensureGrokMcpGuard } from "./grok-mcp-guard.js";
 
-test("creates the company Grok guard at the git root and excludes it locally", async () => {
+// The user's own Grok config tells the guard where a locked server lives.
+const userConfigDir = await mkdtemp(join(tmpdir(), "grok-user-config-"));
+const userConfigPath = join(userConfigDir, "config.toml");
+await writeFile(userConfigPath, '[mcp_servers.example]\nurl = "https://mcp.example.test/mcp"\nenabled = true\n\n[mcp_servers.secret]\ncommand = "secret-mcp"\nenv = { TOKEN = "x" }\n');
+const ensureCompanyGrokGuard = (cwd: string) => ensureGrokMcpGuard(cwd, ["example"], { userConfigPath });
+
+test("creates the workspace Grok guard at the git root and excludes it locally", async () => {
   const root = await mkdtemp(join(tmpdir(), "grok-guard-"));
   const nested = join(root, "packages", "app");
   await mkdir(join(root, ".git", "info"), { recursive: true });
@@ -14,18 +20,18 @@ test("creates the company Grok guard at the git root and excludes it locally", a
   await ensureCompanyGrokGuard(nested);
 
   assert.equal(await readFile(join(root, ".grok", "config.toml"), "utf8"),
-    '[mcp_servers.bbanana]\nurl = "https://www.bbanana.ai/mcp"\nenabled = false\n');
+    '[mcp_servers.example]\nurl = "https://mcp.example.test/mcp"\nenabled = false\n');
   assert.equal(await readFile(join(root, ".git", "info", "exclude"), "utf8"), ".grok/\n");
 });
 
-test("rewrites only the bbanana table and preserves other Grok project settings", async () => {
+test("rewrites only the example table and preserves other Grok project settings", async () => {
   const root = await mkdtemp(join(tmpdir(), "grok-guard-"));
   await mkdir(join(root, ".git", "info"), { recursive: true });
   await mkdir(join(root, ".grok"));
   await writeFile(join(root, ".grok", "config.toml"), [
     'model = "grok-4.7"',
     "",
-    "[mcp_servers.bbanana]",
+    "[mcp_servers.example]",
     'url = "https://old.invalid/mcp"',
     "enabled = true",
     "custom = 1",
@@ -42,7 +48,7 @@ test("rewrites only the bbanana table and preserves other Grok project settings"
 
   const config = await readFile(join(root, ".grok", "config.toml"), "utf8");
   assert.match(config, /model = "grok-4\.7"/);
-  assert.match(config, /\[mcp_servers\.bbanana\]\nurl = "https:\/\/www\.bbanana\.ai\/mcp"\nenabled = false/);
+  assert.match(config, /\[mcp_servers\.example\]\nurl = "https:\/\/mcp\.example\.test\/mcp"\nenabled = false/);
   assert.doesNotMatch(config, /old\.invalid|custom = 1|enabled = true\n\n\[mcp_servers\.other\]/);
   assert.match(config, /\[mcp_servers\.other\]\nurl = "https:\/\/other\.invalid\/mcp"\nenabled = true/);
   assert.equal((await readFile(join(root, ".git", "info", "exclude"), "utf8")).match(/\.grok\//g)?.length, 1);
@@ -57,13 +63,13 @@ test("uses cwd outside a git repository and does not create git metadata", async
   await assert.rejects(readFile(join(cwd, ".git", "info", "exclude"), "utf8"), { code: "ENOENT" });
 });
 
-test("recognizes quoted bbanana table keys and preserves bytes around the replaced table", async () => {
+test("recognizes quoted example table keys and preserves bytes around the replaced table", async () => {
   const root = await mkdtemp(join(tmpdir(), "grok-guard-quoted-"));
   await mkdir(join(root, ".grok"));
   const prefix = 'model = "grok-4.7"\n\n';
   const suffix = "# settings for the next server stay here\n\n[mcp_servers.other]\nenabled = true\n";
   await writeFile(join(root, ".grok", "config.toml"), prefix + [
-    '[mcp_servers."bbanana"]',
+    '[mcp_servers."example"]',
     "enabled = true",
     "custom = 1",
     suffix,
@@ -72,7 +78,7 @@ test("recognizes quoted bbanana table keys and preserves bytes around the replac
   await ensureCompanyGrokGuard(root);
 
   assert.equal(await readFile(join(root, ".grok", "config.toml"), "utf8"),
-    prefix + '[mcp_servers.bbanana]\nurl = "https://www.bbanana.ai/mcp"\nenabled = false\n' + suffix);
+    prefix + '[mcp_servers.example]\nurl = "https://mcp.example.test/mcp"\nenabled = false\n' + suffix);
 });
 
 test("preserves every existing byte when appending and resolves relative cwd paths", async () => {
@@ -86,17 +92,30 @@ test("preserves every existing byte when appending and resolves relative cwd pat
   await ensureCompanyGrokGuard(relative(process.cwd(), nested));
 
   assert.equal(await readFile(join(nested, ".grok", "config.toml"), "utf8"),
-    existing + '\n\n[mcp_servers.bbanana]\nurl = "https://www.bbanana.ai/mcp"\nenabled = false\n');
+    existing + '\n\n[mcp_servers.example]\nurl = "https://mcp.example.test/mcp"\nenabled = false\n');
 });
 
-test("preserves comments following an otherwise empty bbanana table", async () => {
+test("preserves comments following an otherwise empty example table", async () => {
   const root = await mkdtemp(join(tmpdir(), "grok-guard-empty-table-"));
   await mkdir(join(root, ".grok"));
   const suffix = "# retained separator comment\n\n[mcp_servers.other]\nenabled = true\n";
-  await writeFile(join(root, ".grok", "config.toml"), "[mcp_servers.bbanana]\n" + suffix);
+  await writeFile(join(root, ".grok", "config.toml"), "[mcp_servers.example]\n" + suffix);
 
   await ensureCompanyGrokGuard(root);
 
   assert.equal(await readFile(join(root, ".grok", "config.toml"), "utf8"),
-    '[mcp_servers.bbanana]\nurl = "https://www.bbanana.ai/mcp"\nenabled = false\n' + suffix);
+    '[mcp_servers.example]\nurl = "https://mcp.example.test/mcp"\nenabled = false\n' + suffix);
+});
+
+test("locks several servers, copies only location keys and skips an empty list", async () => {
+  const root = await mkdtemp(join(tmpdir(), "grok-guard-multi-"));
+  await ensureGrokMcpGuard(root, [], { userConfigPath });
+  await assert.rejects(readFile(join(root, ".grok", "config.toml"), "utf8"), { code: "ENOENT" });
+
+  await ensureGrokMcpGuard(root, ["example", "secret", "unknown.tool"], { userConfigPath });
+  const config = await readFile(join(root, ".grok", "config.toml"), "utf8");
+  assert.match(config, /\[mcp_servers\.example\]\nurl = "https:\/\/mcp\.example\.test\/mcp"\nenabled = false/);
+  assert.match(config, /\[mcp_servers\.secret\]\ncommand = "secret-mcp"\nenabled = false/);
+  assert.doesNotMatch(config, /TOKEN/);
+  assert.match(config, /\[mcp_servers\."unknown\.tool"\]\nenabled = false/);
 });

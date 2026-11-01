@@ -1,6 +1,6 @@
 import { runCli } from "./cli.js";
 import type { RoutingRule, RoutingSettings } from "./routing.js";
-import type { AgentId, WorkspaceId } from "./types.js";
+import type { AgentId } from "./types.js";
 import type { UsageContext } from "./usage.js";
 import { isMediaRule, mediaGenerationRequired, mediaRouteRequired, stripPreviewAttachments } from "./media-routing.js";
 
@@ -68,9 +68,9 @@ function keywordScore(input: string, keyword: string): number {
 }
 
 /** Deterministic, side-effect-free first pass used before any CLI classifier. */
-export function classifyTask(prompt: string, rules: RoutingRule[], workspaceId: WorkspaceId = "personal"): AutoSwitchRecommendation | undefined {
+export function classifyTask(prompt: string, rules: RoutingRule[], mediaAllowed = true): AutoSwitchRecommendation | undefined {
   const mediaRoute = mediaRouteRequired(prompt, rules);
-  if (workspaceId === "company" && mediaRoute) return;
+  if (!mediaAllowed && mediaRoute) return;
   const mediaRule = mediaRoute ? rules.find((rule) => isMediaRule(rule.id) && rule.keywords.some((keyword) => keywordScore(prompt, keyword) > 0)) : undefined;
   if (mediaRule) {
     return {
@@ -164,12 +164,13 @@ export async function recommendAutoSwitch(
   signal?: AbortSignal,
   usageContext?: UsageContext,
   timeoutMs = 3_000,
+  /** Off when the workspace's settings turn media generation off. */
+  mediaAllowed = true,
 ): Promise<AutoSwitchRecommendation | undefined> {
   const available = new Set(availableAgents);
-  const workspaceId = usageContext?.workspaceId ?? "personal";
-  if (workspaceId === "company" && mediaRouteRequired(prompt, settings.rules)) return;
-  const routingRules = workspaceId === "company" ? settings.rules.filter((rule) => !isMediaRule(rule.id)) : settings.rules;
-  const direct = classifyTask(prompt, routingRules, workspaceId);
+  if (!mediaAllowed && mediaRouteRequired(prompt, settings.rules)) return;
+  const routingRules = mediaAllowed ? settings.rules : settings.rules.filter((rule) => !isMediaRule(rule.id));
+  const direct = classifyTask(prompt, routingRules, mediaAllowed);
   if (direct) {
     if (!authenticated(direct.agent, settings, available)) return;
     const workers = direct.workers.filter((worker) => authenticated(worker, settings, available));

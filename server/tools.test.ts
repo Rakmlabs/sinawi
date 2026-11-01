@@ -57,7 +57,7 @@ test("Codex MCP editing ignores fake headers and enabled assignments inside mult
   assert.throws(() => setCodexMcpEnabled('[mcp_servers.bbanana]\nnotes = """unterminated\n', "bbanana", false), /TOML/);
 });
 
-test("MCP discovery parses native state, applies app state, and locks company bbanana", async () => {
+test("MCP discovery parses native state, applies app state, and locks the workspace's blocked tools", async () => {
   const runner = async (file: string, args: string[]) => {
     assert.deepEqual(args, ["mcp", "list"]);
     if (file === "codex") return { stdout: "Name URL Status\nbbanana https://codex.test/mcp enabled\n" };
@@ -67,10 +67,15 @@ test("MCP discovery parses native state, applies app state, and locks company bb
   const personal = await discoverMcpTools("personal", { runner, disabledMcp: ["claude:docs"] });
   assert.equal(personal.find((tool) => tool.agent === "claude")?.appEnabled, false);
   assert.equal(personal.find((tool) => tool.name === "search")?.["url/command"], "search-server");
-  const company = await discoverMcpTools("company", { runner });
-  const banana = company.filter((tool) => tool.name === "bbanana");
+  // No workspace id is special: "company" without a policy locks nothing.
+  assert.ok((await discoverMcpTools("company", { runner })).every((tool) => !tool.forcedOff));
+  const policy = { mediaGeneration: true, computerUse: false, grokMcp: true, blockedTools: ["bbanana", "claude:docs"], authAlertTools: [] };
+  const locked = await discoverMcpTools("team", { runner, policy });
+  const banana = locked.filter((tool) => tool.name === "bbanana");
   assert.ok(banana.length >= 2);
-  assert.ok(banana.every((tool) => tool.forcedOff && !tool.appEnabled && tool.status === "locked"));
+  assert.ok(banana.every((tool) => tool.forcedOff && !tool.appEnabled && tool.status === "locked" && /작업 공간 설정/.test(tool.reason ?? "")));
+  assert.equal(locked.find((tool) => tool.agent === "claude")?.forcedOff, true);
+  assert.equal(locked.find((tool) => tool.name === "search")?.forcedOff, undefined);
 });
 
 test("MCP discovery ignores CLI diagnostics and reports Claude connection health separately", async () => {

@@ -3,14 +3,15 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadBots, loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, mutateBots, mutateGroups, mutateToolSettings, saveSessions, saveWorkspaceState } from "./store.js";
+import { legacyMediaPrompt, loadBots, loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, mutateBots, mutateGroups, mutateToolSettings, saveSessions, saveWorkspaceState, workspaceToolSettings } from "./store.js";
+import { defaultWorkspacePolicy } from "./workspace-policy.js";
 import type { Session } from "./types.js";
 
 test("tool settings persist disabled skills and MCP tools per workspace", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-tool-settings-"));
   await mutateToolSettings((settings) => {
-    settings.personal.disabledSkills.push("review");
-    settings.company.disabledMcp.push("claude:docs");
+    workspaceToolSettings(settings, "personal").disabledSkills.push("review");
+    workspaceToolSettings(settings, "company").disabledMcp.push("claude:docs");
   }, directory);
   assert.deepEqual(await loadToolSettings(directory), {
     personal: { disabledSkills: ["review"], disabledMcp: [] },
@@ -81,7 +82,8 @@ test("concurrent legacy migration reads do not collide with each other or lose g
 test("a fresh install starts with a single default workspace and persists it", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-workspaces-"));
   const initial = await loadWorkspaceState(directory);
-  assert.deepEqual(initial, { currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: { default: {} } });
+  // Everything is allowed in a fresh install.
+  assert.deepEqual(initial, { currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: { default: {} }, settings: { default: defaultWorkspacePolicy() } });
   // Persisted, so data created later cannot flip the install to the legacy pair.
   assert.deepEqual(JSON.parse(await readFile(join(directory, "workspaces.json"), "utf8")), initial);
   await saveSessions([{ id: "s", title: "S", agent: "codex", workers: [], cwd: directory, status: "done", createdAt: "2026-01-01T00:00:00.000Z", events: [], workspaceId: "default" }], directory);
@@ -96,8 +98,66 @@ test("an old workspaces file migrates to the personal/company pair keeping its i
     currentWorkspaceId: "company",
     workspaces: [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }],
     defaults: { personal: { cwd: "/p" }, company: { cwd: "/c", allowedAgents: ["claude"] } },
+    settings: {
+      personal: { mediaGeneration: true, computerUse: false, grokMcp: true, blockedTools: ["claude:bbanana"], authAlertTools: ["bbanana"], mediaPrompt: legacyMediaPrompt },
+      company: { mediaGeneration: false, computerUse: false, grokMcp: true, blockedTools: ["bbanana"], authAlertTools: ["bbanana"] },
+    },
   });
   assert.deepEqual(JSON.parse(await readFile(join(directory, "workspaces.json"), "utf8")), migrated);
+});
+
+test("the exact legacy personal/company pair gets its old hard-coded rules written once as settings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orchestra-workspaces-policy-migration-"));
+  await writeFile(join(directory, "workspaces.json"), JSON.stringify({
+    currentWorkspaceId: "personal",
+    workspaces: [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }],
+    defaults: { personal: {}, company: { allowedAgents: ["codex", "claude"] } },
+  }));
+  const migrated = await loadWorkspaceState(directory);
+  // Codex was filtered out of the configured list, so the setting now says exactly that.
+  assert.deepEqual(migrated.defaults.company.allowedAgents, ["claude"]);
+  assert.equal(migrated.settings?.company.mediaGeneration, false);
+  assert.deepEqual(migrated.settings?.company.blockedTools, ["bbanana"]);
+  assert.equal(migrated.settings?.personal.mediaPrompt, legacyMediaPrompt);
+
+  // Without an allowed-agents setting only Claude and Grok ran there.
+  await writeFile(join(directory, "workspaces.json"), JSON.stringify({ currentWorkspaceId: "personal", workspaces: [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }], defaults: {} }));
+  assert.deepEqual((await loadWorkspaceState(directory)).defaults.company.allowedAgents, ["claude", "grok"]);
+
+  // Once written, the settings are the user's: unblocking media and allowing Codex sticks.
+  const state = await loadWorkspaceState(directory);
+  state.settings!.company = { ...state.settings!.company, mediaGeneration: true, blockedTools: [] };
+  state.defaults.company.allowedAgents = ["codex", "claude", "grok"];
+  await saveWorkspaceState(state, directory);
+  const reloaded = await loadWorkspaceState(directory);
+  assert.equal(reloaded.settings?.company.mediaGeneration, true);
+  assert.deepEqual(reloaded.settings?.company.blockedTools, []);
+  assert.deepEqual(reloaded.defaults.company.allowedAgents, ["codex", "claude", "grok"]);
+});
+
+test("a workspace list that merely contains an id company is an ordinary install with everything allowed", async () => {
+  for (const workspaces of [
+    [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }, { id: "side", name: "사이드" }],
+    [{ id: "company", name: "회사" }],
+    [{ id: "personal", name: "Me" }, { id: "company", name: "Work" }],
+  ]) {
+    const directory = await mkdtemp(join(tmpdir(), "orchestra-workspaces-policy-other-"));
+    await writeFile(join(directory, "workspaces.json"), JSON.stringify({ currentWorkspaceId: workspaces[0].id, workspaces, defaults: { company: { allowedAgents: ["codex", "claude"] } } }));
+    const state = await loadWorkspaceState(directory);
+    for (const { id } of workspaces) assert.deepEqual(state.settings?.[id], defaultWorkspacePolicy());
+    assert.deepEqual(state.defaults.company.allowedAgents, ["codex", "claude"]);
+  }
+});
+
+test("an install without a company workspace migrates to settings with everything allowed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orchestra-workspaces-policy-plain-"));
+  await writeFile(join(directory, "workspaces.json"), JSON.stringify({
+    currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }, { id: "work", name: "Work" }], defaults: { default: { allowedAgents: ["claude"] } },
+  }));
+  const state = await loadWorkspaceState(directory);
+  assert.deepEqual(state.settings, { default: defaultWorkspacePolicy(), work: defaultWorkspacePolicy() });
+  assert.deepEqual(state.defaults, { default: { allowedAgents: ["claude"] }, work: {} });
+  assert.deepEqual(JSON.parse(await readFile(join(directory, "workspaces.json"), "utf8")).settings, state.settings);
 });
 
 test("data from before workspaces.json existed keeps the legacy pair", async () => {
@@ -114,6 +174,7 @@ test("workspace selection, list and defaults persist; invalid entries are droppe
   initial.workspaces.push({ id: "side-project", name: "사이드" });
   initial.currentWorkspaceId = "side-project";
   initial.defaults["side-project"] = { cwd: "/side", mode: "manual", agent: "claude", workers: ["codex"], autoSwitch: false };
+  initial.settings!["side-project"] = { ...defaultWorkspacePolicy(), mediaGeneration: false, blockedTools: ["grok:media"] };
   await saveWorkspaceState(initial, directory);
   assert.deepEqual(await loadWorkspaceState(directory), initial);
 
@@ -121,11 +182,13 @@ test("workspace selection, list and defaults persist; invalid entries are droppe
     currentWorkspaceId: "gone",
     workspaces: [{ id: "a", name: "  A  " }, { id: "a", name: "dup" }, { id: "Bad Id", name: "x" }, { id: "b" }],
     defaults: { a: { cwd: "/a" }, stale: { cwd: "/stale" } },
+    settings: { a: { mediaGeneration: "no", blockedTools: ["ok", "bad name"] }, stale: {} },
   }));
   assert.deepEqual(await loadWorkspaceState(directory), {
     currentWorkspaceId: "a",
     workspaces: [{ id: "a", name: "A" }, { id: "b", name: "b" }],
     defaults: { a: { cwd: "/a" }, b: {} },
+    settings: { a: { ...defaultWorkspacePolicy(), blockedTools: ["ok"] }, b: defaultWorkspacePolicy() },
   });
 });
 

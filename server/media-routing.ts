@@ -41,9 +41,6 @@ export function mediaSkills(prompt: string, skills: SkillInfo[]): string[] {
   return skills.filter((skill) => [skill.id, skill.name].some((name) => /(?:^|[:/])marketing-shorts$/i.test(name))).map((skill) => skill.id);
 }
 
-export const companyMediaUnavailableMessage = "영상·이미지 생성은 개인 공간에서만 가능";
-export const personalMediaPromptHint = "Codex는 내장 이미지 생성(GPT image)을 사용할 수 있고, bbanana MCP 도구로 이미지·영상 생성이 가능하다. 생성 전에 사용할 모델과 예상 크레딧을 먼저 보여주고 확인받은 뒤 생성하라. 시안은 저가/무료 모델, 최종본만 고급 모델. Grok은 자체 Imagine 도구도 사용 가능.";
-
 export function isMediaRule(id: string): boolean {
   return ["media-generation", "marketing-shorts", "video", "image", "image-text", "image-visual"].includes(id);
 }

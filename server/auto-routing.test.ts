@@ -47,7 +47,7 @@ test("smart media rules keep video ahead of image matches and preserve worker pr
   });
 });
 
-test("company automatic routing never selects media requests or media rule ids", async () => {
+test("automatic routing never selects media requests or media rule ids when the workspace turns media off", async () => {
   const config = settings();
   config.rules.push({ id: "image", label: "image", keywords: ["render-pack"], orchestrator: "grok", workers: ["codex", "grok"], reason: "media" });
   let calls = 0;
@@ -55,14 +55,16 @@ test("company automatic routing never selects media requests or media rule ids",
     calls += 1;
     return { exitCode: 0, finalText: '{"agent":"grok","confidence":0.99,"reason":"media"}' };
   };
-  const context: UsageContext = { workspaceId: "company", sessionId: "company-media", role: "router" };
+  const context: UsageContext = { workspaceId: "team", sessionId: "team-media", role: "router" };
 
-  assert.equal(await recommendAutoSwitch("로고 이미지를 만들어줘", process.cwd(), config, ["claude", "grok"], runner, undefined, context), undefined);
-  assert.equal(await recommendAutoSwitch("render-pack", process.cwd(), config, ["claude", "grok"], runner, undefined, context), undefined);
+  assert.equal(await recommendAutoSwitch("로고 이미지를 만들어줘", process.cwd(), config, ["claude", "grok"], runner, undefined, context, undefined, false), undefined);
+  assert.equal(await recommendAutoSwitch("render-pack", process.cwd(), config, ["claude", "grok"], runner, undefined, context, undefined, false), undefined);
   assert.equal(calls, 0);
+  // The same id in another workspace with media on is routed normally.
+  assert.equal((await recommendAutoSwitch("render-pack", process.cwd(), config, ["claude", "grok"], runner, undefined, { ...context, workspaceId: "company" }))?.agent, "grok");
 });
 
-test("ordinary company image and video terminology is not treated as media generation", () => {
+test("ordinary image and video terminology is not treated as media generation", () => {
   const cases = [
     ["Docker image 버그 수정", "codex"],
     ["CSS clip-path 디자인", "claude"],
@@ -72,7 +74,7 @@ test("ordinary company image and video terminology is not treated as media gener
 
   for (const [prompt, expectedAgent] of cases) {
     assert.equal(mediaRouteRequired(prompt, defaultRoutingSettings.rules), false, prompt);
-    assert.equal(classifyTask(prompt, defaultRoutingSettings.rules, "company")?.agent, expectedAgent, prompt);
+    assert.equal(classifyTask(prompt, defaultRoutingSettings.rules, false)?.agent, expectedAgent, prompt);
   }
 });
 

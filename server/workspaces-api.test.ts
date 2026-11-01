@@ -176,3 +176,63 @@ test("session and group move routes accept any existing workspace and reject unk
     assert.equal((await loadSessions(directory)).find((item) => item.id === "grouped")?.workspaceId, "client-x");
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("workspace settings are validated, merged, cloned into new workspaces and enforced by the APIs", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orchestra-ws-settings-"));
+  await saveWorkspaceState({ currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: { default: {} } }, directory);
+  const { app, websocket } = server(directory);
+  try {
+    const initial = await request(app, "GET", "/api/workspaces");
+    assert.deepEqual(initial.body.settings.default, { mediaGeneration: true, computerUse: false, grokMcp: true, blockedTools: [], authAlertTools: [] });
+
+    for (const settings of [{ mediaGeneration: "off" }, { computerUse: 1 }, { blockedTools: ["has space"] }, { blockedTools: ["nobody:x"] }, { authAlertTools: "x" }, "bad"]) {
+      const rejected = await request(app, "PATCH", "/api/workspaces/default", { settings });
+      assert.equal(rejected.status, 400, JSON.stringify(settings));
+    }
+    assert.equal((await request(app, "PATCH", "/api/workspaces/missing", { settings: { grokMcp: false } })).status, 404);
+    assert.deepEqual((await loadWorkspaceState(directory)).settings?.default.blockedTools, []);
+
+    const updated = await request(app, "PATCH", "/api/workspaces/default", { settings: { mediaGeneration: false, computerUse: true, blockedTools: ["media-tool", "claude:docs"] } });
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.workspaces[0].name, "기본");
+    assert.deepEqual(updated.body.settings.default, { mediaGeneration: false, computerUse: true, grokMcp: true, blockedTools: ["media-tool", "claude:docs"], authAlertTools: [] });
+    // Partial updates keep the other fields; the defaults route accepts settings too.
+    const merged = await request(app, "PATCH", "/api/workspaces", { workspaceId: "default", settings: { grokMcp: false } });
+    assert.equal(merged.body.settings.default.mediaGeneration, false);
+    assert.equal(merged.body.settings.default.grokMcp, false);
+
+    const created = await request(app, "POST", "/api/workspaces", { name: "Media", settings: { mediaGeneration: true } });
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.body.settings.media, { ...merged.body.settings.default, mediaGeneration: true });
+    assert.equal((await request(app, "POST", "/api/workspaces", { name: "Bad", settings: { grokMcp: "x" } })).status, 400);
+
+    const blocked = await request(app, "POST", "/api/sessions", { workspaceId: "default", cwd: directory, prompt: "광고 영상을 만들어줘", agent: "claude", workers: ["grok"] });
+    assert.equal(blocked.status, 400);
+    assert.equal(blocked.body.code, "workspace-policy");
+
+    const allowedAgents = await request(app, "PATCH", "/api/workspaces", { workspaceId: "media", defaults: { allowedAgents: ["claude"] } });
+    assert.equal(allowedAgents.status, 200);
+    const codex = await request(app, "POST", "/api/sessions", { workspaceId: "media", cwd: directory, prompt: "hello", agent: "codex", workers: ["claude"] });
+    assert.equal(codex.status, 400);
+    assert.equal(codex.body.code, "workspace-policy");
+
+    const removed = await request(app, "DELETE", "/api/workspaces/media?moveTo=default");
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.settings.media, undefined);
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("computer requests need a run token even when the workspace allows computer use", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workspaces-cu-"));
+  const { app, websocket } = server(directory);
+  try {
+    // Enabling via the API is allowed: it is not the boundary (the native approval alert is).
+    assert.equal((await request(app, "PATCH", "/api/workspaces/default", { settings: { computerUse: true } })).status, 200);
+    const forged = await request(app, "POST", "/api/computer/click", { args: { x: 1, y: 1 }, session: "any-session", cwd: "/" });
+    assert.equal(forged.status, 422);
+    assert.match(forged.body.error, /SINAWI_COMPUTER_TOKEN/);
+    assert.equal((await request(app, "GET", "/api/computer/state")).body.busy, 0);
+    // In-flight commands of a workspace that is turned off are failed by ComputerBridge.revokeWorkspace (computer-bridge.test.ts).
+    assert.equal((await request(app, "PATCH", "/api/workspaces/default", { settings: { computerUse: false } })).status, 200);
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+});

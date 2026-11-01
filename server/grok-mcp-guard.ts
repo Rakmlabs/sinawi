@@ -1,7 +1,33 @@
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
 
-const bbananaTable = '[mcp_servers.bbanana]\nurl = "https://www.bbanana.ai/mcp"\nenabled = false\n';
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const tableKey = (name: string) => /^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name);
+
+function tableHeader(name: string): RegExp {
+  const key = escapeRegex(name);
+  return new RegExp(`^[ \\t]*\\[[ \\t]*mcp_servers[ \\t]*\\.[ \\t]*(?:${key}|"${key}"|'${key}')[ \\t]*\\][^\\r\\n]*(?:\\r?\\n|$)`, "m");
+}
+
+/** Body of `[mcp_servers.<name>]` in a TOML text, without the header. */
+function tableBody(text: string, name: string): string | undefined {
+  const header = tableHeader(name).exec(text);
+  if (header?.index === undefined) return undefined;
+  const remaining = text.slice(header.index + header[0].length);
+  const nextHeader = /^[ \t]*\[[^\r\n]+\][^\r\n]*(?:\r?\n|$)/m.exec(remaining);
+  return remaining.slice(0, nextHeader?.index ?? remaining.length);
+}
+
+/**
+ * The deny table for one server. Grok needs to know where the server is to match the project entry
+ * with the user's one, so its `url`/`command`/`args` lines are copied from the user config (never `env`).
+ */
+function denyTable(name: string, userConfig: string): string {
+  const body = tableBody(userConfig, name) ?? "";
+  const location = body.split(/\r?\n/u).filter((line) => /^[ \t]*(?:url|command|args)[ \t]*=/u.test(line)).map((line) => `${line.trim()}\n`).join("");
+  return `[mcp_servers.${tableKey(name)}]\n${location}enabled = false\n`;
+}
 
 async function gitEntryKind(directory: string): Promise<"directory" | "file" | undefined> {
   try {
@@ -21,8 +47,8 @@ async function findGitRoot(cwd: string): Promise<{ root: string; gitDirectory: b
   }
 }
 
-function guardedConfig(existing: string): string {
-  const header = /^[ \t]*\[[ \t]*mcp_servers[ \t]*\.[ \t]*(?:bbanana|"bbanana"|'bbanana')[ \t]*\][^\r\n]*(?:\r?\n|$)/m.exec(existing);
+function guardedConfig(existing: string, name: string, table: string): string {
+  const header = tableHeader(name).exec(existing);
   if (header?.index !== undefined) {
     const bodyStart = header.index + header[0].length;
     const remaining = existing.slice(bodyStart);
@@ -36,10 +62,10 @@ function guardedConfig(existing: string): string {
       const value = line[0].replace(/\r?\n$/u, "").trim();
       if (value && !value.startsWith("#")) preservedSuffix = (line.index ?? 0) + line[0].length;
     }
-    return existing.slice(0, header.index) + bbananaTable + body.slice(preservedSuffix) + existing.slice(bodyEnd);
+    return existing.slice(0, header.index) + table + body.slice(preservedSuffix) + existing.slice(bodyEnd);
   }
-  if (!existing) return bbananaTable;
-  return `${existing}${existing.endsWith("\n") ? "\n" : "\n\n"}${bbananaTable}`;
+  if (!existing) return table;
+  return `${existing}${existing.endsWith("\n") ? "\n" : "\n\n"}${table}`;
 }
 
 function withLocalExclude(existing: string): string {
@@ -55,14 +81,20 @@ async function optionalText(path: string): Promise<string> {
   }
 }
 
-/** Installs the project-level bbanana deny config used for every company Grok run. */
-export async function ensureCompanyGrokGuard(cwd: string): Promise<void> {
+/**
+ * Installs the project-level Grok config that turns off the MCP servers a workspace locks.
+ * `--deny` alone does not stop Grok from connecting to a server, so the run also disables it here.
+ */
+export async function ensureGrokMcpGuard(cwd: string, names: readonly string[], options: { userConfigPath?: string } = {}): Promise<void> {
+  if (!names.length) return;
   const absoluteCwd = resolve(cwd);
   const git = await findGitRoot(absoluteCwd);
   const root = git?.root ?? absoluteCwd;
   const configPath = join(root, ".grok", "config.toml");
   const currentConfig = await optionalText(configPath);
-  const nextConfig = guardedConfig(currentConfig);
+  const userConfig = await optionalText(options.userConfigPath ?? join(homedir(), ".grok", "config.toml")).catch(() => "");
+  let nextConfig = currentConfig;
+  for (const name of names) nextConfig = guardedConfig(nextConfig, name, denyTable(name, userConfig));
   if (nextConfig !== currentConfig) {
     await mkdir(dirname(configPath), { recursive: true });
     await writeFile(configPath, nextConfig);

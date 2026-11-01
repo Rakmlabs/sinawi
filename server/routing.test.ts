@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { routingInput } from "./server.js";
-import { mutateToolSettings } from "./store.js";
+import { mutateToolSettings, workspaceToolSettings } from "./store.js";
+import { defaultWorkspacePolicy, mediaBlockedMessage, WorkspacePolicyError } from "./workspace-policy.js";
 import {
   defaultRoutingSettings, discoverLocalModels, loadRoutingSettings, RoutingService, saveRoutingSettings, validateRoutingSettings,
   type PlannerRunner,
@@ -44,8 +45,10 @@ test("personal media defaults put video, text images, then visual images before 
   assert.deepEqual(defaultRoutingSettings.rules[0]?.workers, ["grok", "codex"]);
   assert.deepEqual(defaultRoutingSettings.rules[1]?.workers, ["codex", "grok"]);
   assert.deepEqual(defaultRoutingSettings.rules[2]?.workers, ["grok", "codex"]);
-  assert.match(defaultRoutingSettings.rules[1]?.reason ?? "", /Codex 내장 이미지 생성\(GPT image\)·bbanana GPT Image/);
-  assert.match(defaultRoutingSettings.rules[2]?.reason ?? "", /Grok Imagine\(image_gen\/edit\/image_to_video\)·bbanana/);
+  assert.match(defaultRoutingSettings.rules[1]?.reason ?? "", /Codex 내장 이미지 생성\(GPT image\)/);
+  assert.match(defaultRoutingSettings.rules[2]?.reason ?? "", /Grok Imagine\(image_gen\/edit\/image_to_video\)/);
+  // Shipped defaults name no third-party tool.
+  assert.ok(defaultRoutingSettings.rules.every((rule) => !/bbanana/i.test(rule.reason)));
 });
 
 test("saved settings replace the shipped image rule with the ordered smart media rules", async () => {
@@ -106,18 +109,19 @@ test("legacy image migration preserves unrelated customized media rules", async 
   assert.equal(loaded.rules.at(-1)?.id, "custom");
 });
 
-test("company routing rejects media requests and media rule matches with the personal-only message", async () => {
+test("routing rejects media requests and media rule matches when the workspace turns media off", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-next22-company-media-"));
   const settings = structuredClone(defaultRoutingSettings);
   settings.rules.find((rule) => rule.id === "video")!.keywords = ["cinematic"];
   await saveRoutingSettings(settings, directory);
   const service = new RoutingService({ dataDir: directory, skillLoader: async () => [], runner: async () => { throw new Error("must not run"); } });
-  const usageContext = { workspaceId: "company" as const, sessionId: "company-session", role: "router" as const };
+  const usageContext = { workspaceId: "team", sessionId: "team-session", role: "router" as const };
+  const policy = { ...defaultWorkspacePolicy(), mediaGeneration: false };
 
   for (const prompt of ["로고 이미지를 만들어줘", "cinematic campaign"]) {
     await assert.rejects(
-      () => service.recommend(prompt, directory, [], ["claude", "grok"], usageContext, ["claude", "grok"]),
-      (error: unknown) => error instanceof Error && error.message === "영상·이미지 생성은 개인 공간에서만 가능",
+      () => service.recommend(prompt, directory, [], ["claude", "grok"], usageContext, ["claude", "grok"], policy),
+      (error: unknown) => error instanceof WorkspacePolicyError && error.message === mediaBlockedMessage,
     );
   }
 });
@@ -406,7 +410,7 @@ test("smart media routing applies the first matching ordered rule with its worke
 test("routing excludes workspace-disabled skills from automatic and explicit attachment", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-next23-disabled-routing-skill-"));
   await saveRoutingSettings(structuredClone(defaultRoutingSettings), directory);
-  await mutateToolSettings((settings) => { settings.personal.disabledSkills = ["marketing-shorts"]; }, directory);
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "personal").disabledSkills = ["marketing-shorts"]; }, directory);
   const skill = { id: "hashed-shorts", name: "marketing-shorts", source: "Test", description: "쇼츠 영상" };
   const service = new RoutingService({ dataDir: directory, skillLoader: async () => [skill] });
   const usageContext = { workspaceId: "personal" as const, sessionId: "route", role: "router" as const };

@@ -1,7 +1,8 @@
 import { readdir, rename, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isArray, isPlainObject, readJsonFile, writeJsonFile } from "./json-file.js";
-import type { Bot, Group, Session, ToolSettings, ToolWorkspaceSettings, WorkspaceDefaults, WorkspaceInfo, WorkspaceState } from "./types.js";
+import type { Bot, Group, Session, ToolSettings, ToolWorkspaceSettings, WorkspaceDefaults, WorkspaceInfo, WorkspacePolicy, WorkspaceState } from "./types.js";
+import { defaultWorkspacePolicy, normalizeWorkspacePolicy } from "./workspace-policy.js";
 import { normalizeWorkerConfigs } from "./workers.js";
 import { defaultDataDir } from "./runtime.js";
 
@@ -150,10 +151,44 @@ function sanitizeWorkspaces(value: unknown): WorkspaceInfo[] {
   return result;
 }
 
+/**
+ * Rules older versions hard-coded for the owner's "company" workspace (and, for every workspace of
+ * such an install, a Claude-only tool lock, an auth alert and the media worker hint). Written once onto
+ * an install's settings when it predates per-workspace settings, so its behaviour stays exactly the same.
+ * Nothing else may special-case a workspace id.
+ */
+const legacyLockedTool = "bbanana";
+export const legacyMediaPrompt = "Codex는 내장 이미지 생성(GPT image)을 사용할 수 있고, bbanana MCP 도구로 이미지·영상 생성이 가능하다. 생성 전에 사용할 모델과 예상 크레딧을 먼저 보여주고 확인받은 뒤 생성하라. 시안은 저가/무료 모델, 최종본만 고급 모델. Grok은 자체 Imagine 도구도 사용 가능.";
+
+function legacyPolicies(workspaces: readonly WorkspaceInfo[], defaults: Record<string, WorkspaceDefaults>): Record<string, WorkspacePolicy> {
+  const settings: Record<string, WorkspacePolicy> = {};
+  // Only the exact personal/company pair of older versions is the owner's install; any other list
+  // that happens to contain an id "company" is an ordinary workspace.
+  const ownerInstall = workspaces.length === legacyWorkspaces.length && legacyWorkspaces.every((legacy, index) => workspaces[index].id === legacy.id && workspaces[index].name === legacy.name);
+  for (const { id } of workspaces) {
+    const policy = defaultWorkspacePolicy();
+    if (ownerInstall) {
+      // Claude never got this tool in any workspace; its auth state was the only one worth an alert.
+      policy.blockedTools = [`claude:${legacyLockedTool}`];
+      policy.authAlertTools = [legacyLockedTool];
+      if (id === "personal") policy.mediaPrompt = legacyMediaPrompt;
+      if (id === "company") {
+        policy.mediaGeneration = false;
+        policy.blockedTools = [legacyLockedTool];
+        // Codex was filtered out of whatever was configured; without a configuration only Claude and Grok ran.
+        const configured = defaults[id].allowedAgents ?? ["claude", "grok"];
+        defaults[id] = { ...defaults[id], allowedAgents: configured.filter((agent) => agent !== "codex") };
+      }
+    }
+    settings[id] = policy;
+  }
+  return settings;
+}
+
 async function readWorkspaceState(directory: string): Promise<{ state: WorkspaceState; migrated: boolean }> {
   const stored = await loadObject<Partial<WorkspaceState>>(resolve(directory, "workspaces.json"));
   let workspaces = sanitizeWorkspaces(stored?.workspaces);
-  const migrated = !workspaces.length;
+  let migrated = !workspaces.length;
   if (migrated) workspaces = structuredClone(stored || await hasLegacyData(directory) ? legacyWorkspaces : freshWorkspaces);
   const storedDefaults = stored?.defaults && typeof stored.defaults === "object" ? stored.defaults : {};
   const defaults: Record<string, WorkspaceDefaults> = {};
@@ -161,8 +196,18 @@ async function readWorkspaceState(directory: string): Promise<{ state: Workspace
     const value = (storedDefaults as Record<string, unknown>)[id];
     defaults[id] = value && typeof value === "object" && !Array.isArray(value) ? value as WorkspaceDefaults : {};
   }
+  const storedSettings = stored?.settings && typeof stored.settings === "object" && !Array.isArray(stored.settings) ? stored.settings as Record<string, unknown> : undefined;
+  let settings: Record<string, WorkspacePolicy>;
+  if (storedSettings) {
+    settings = {};
+    for (const { id } of workspaces) settings[id] = normalizeWorkspacePolicy(storedSettings[id]);
+  } else {
+    // Written before per-workspace settings existed (or a fresh install): one-time migration.
+    settings = legacyPolicies(workspaces, defaults);
+    migrated = true;
+  }
   const current = workspaces.some((item) => item.id === stored?.currentWorkspaceId) ? stored!.currentWorkspaceId! : workspaces[0].id;
-  return { state: { currentWorkspaceId: current, workspaces, defaults }, migrated };
+  return { state: { currentWorkspaceId: current, workspaces, defaults, settings }, migrated };
 }
 
 /** Loads the workspace list, migrating (and persisting) files written before workspaces were configurable. */
@@ -197,7 +242,7 @@ export async function loadToolSettings(directory = dataDir): Promise<ToolSetting
     disabledSkills: Array.isArray(value?.disabledSkills) ? [...new Set(value.disabledSkills.filter((item): item is string => typeof item === "string"))] : [],
     disabledMcp: Array.isArray(value?.disabledMcp) ? [...new Set(value.disabledMcp.filter((item): item is string => typeof item === "string"))] : [],
   });
-  const settings: ToolSettings = { personal: normalize(stored?.personal), company: normalize(stored?.company) };
+  const settings: ToolSettings = {};
   for (const [id, value] of Object.entries(stored ?? {})) {
     if (workspaceIdPattern.test(id) && value && typeof value === "object") settings[id] = normalize(value);
   }
