@@ -540,7 +540,7 @@ test("company sessions reject Codex in every configured role before starting a C
 
 test("workspace settings can narrow personal agents and company settings still cannot enable Codex", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-policy-"));
-  const allowed = (workspaceId: "personal" | "company") => workspaceId === "personal"
+  const allowed = (workspaceId: string) => workspaceId === "personal"
     ? ["claude", "grok"] as const
     : ["codex", "claude", "grok"] as const;
   const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "done" }), undefined, undefined, undefined, allowed);

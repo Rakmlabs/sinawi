@@ -78,17 +78,55 @@ test("concurrent legacy migration reads do not collide with each other or lose g
   assert.deepEqual((await loadGroups(directory)).map((group) => group.id), ["legacy", "new"]);
 });
 
-test("workspace selection and defaults persist independently", async () => {
+test("a fresh install starts with a single default workspace and persists it", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-workspaces-"));
   const initial = await loadWorkspaceState(directory);
-  assert.deepEqual(initial, { currentWorkspaceId: "personal", defaults: { personal: {}, company: {} } });
-
-  initial.currentWorkspaceId = "company";
-  initial.defaults.personal = { cwd: "/personal", mode: "auto", agent: "codex", workers: ["claude"], autoSwitch: true };
-  initial.defaults.company = { cwd: "/company", mode: "manual", agent: "claude", workers: ["codex"], autoSwitch: false };
-  await saveWorkspaceState(initial, directory);
-
+  assert.deepEqual(initial, { currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: { default: {} } });
+  // Persisted, so data created later cannot flip the install to the legacy pair.
+  assert.deepEqual(JSON.parse(await readFile(join(directory, "workspaces.json"), "utf8")), initial);
+  await saveSessions([{ id: "s", title: "S", agent: "codex", workers: [], cwd: directory, status: "done", createdAt: "2026-01-01T00:00:00.000Z", events: [], workspaceId: "default" }], directory);
   assert.deepEqual(await loadWorkspaceState(directory), initial);
+});
+
+test("an old workspaces file migrates to the personal/company pair keeping its ids and defaults", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orchestra-workspaces-legacy-"));
+  await writeFile(join(directory, "workspaces.json"), JSON.stringify({ currentWorkspaceId: "company", defaults: { personal: { cwd: "/p" }, company: { cwd: "/c", allowedAgents: ["claude"] } } }));
+  const migrated = await loadWorkspaceState(directory);
+  assert.deepEqual(migrated, {
+    currentWorkspaceId: "company",
+    workspaces: [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }],
+    defaults: { personal: { cwd: "/p" }, company: { cwd: "/c", allowedAgents: ["claude"] } },
+  });
+  assert.deepEqual(JSON.parse(await readFile(join(directory, "workspaces.json"), "utf8")), migrated);
+});
+
+test("data from before workspaces.json existed keeps the legacy pair", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orchestra-workspaces-nofile-"));
+  await mutateGroups((groups) => { groups.push({ id: "g", name: "G", createdAt: "2026-01-01T00:00:00.000Z", workspaceId: "personal" }); }, directory);
+  const state = await loadWorkspaceState(directory);
+  assert.deepEqual(state.workspaces.map((item) => item.id), ["personal", "company"]);
+  assert.equal(state.currentWorkspaceId, "personal");
+});
+
+test("workspace selection, list and defaults persist; invalid entries are dropped on load", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orchestra-workspaces-save-"));
+  const initial = await loadWorkspaceState(directory);
+  initial.workspaces.push({ id: "side-project", name: "사이드" });
+  initial.currentWorkspaceId = "side-project";
+  initial.defaults["side-project"] = { cwd: "/side", mode: "manual", agent: "claude", workers: ["codex"], autoSwitch: false };
+  await saveWorkspaceState(initial, directory);
+  assert.deepEqual(await loadWorkspaceState(directory), initial);
+
+  await writeFile(join(directory, "workspaces.json"), JSON.stringify({
+    currentWorkspaceId: "gone",
+    workspaces: [{ id: "a", name: "  A  " }, { id: "a", name: "dup" }, { id: "Bad Id", name: "x" }, { id: "b" }],
+    defaults: { a: { cwd: "/a" }, stale: { cwd: "/stale" } },
+  }));
+  assert.deepEqual(await loadWorkspaceState(directory), {
+    currentWorkspaceId: "a",
+    workspaces: [{ id: "a", name: "A" }, { id: "b", name: "b" }],
+    defaults: { a: { cwd: "/a" }, b: {} },
+  });
 });
 
 test("sessions are stored one file each and only changed sessions are rewritten", async () => {

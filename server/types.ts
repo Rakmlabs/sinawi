@@ -1,5 +1,6 @@
 export type AgentId = "codex" | "claude" | "grok";
-export type WorkspaceId = "personal" | "company";
+/** User-defined workspace id: 1–64 chars of `[a-z0-9-]`. Legacy installs keep "personal" and "company". */
+export type WorkspaceId = string;
 export type SessionStatus = "running" | "done" | "error" | "stopped";
 export type EventType = "warning" | "message" | "tool" | "command" | "edit" | "status" | "error" | "delegation" | "handoff";
 
@@ -112,9 +113,16 @@ export interface WorkspaceDefaults {
   fallbackOrder?: Partial<Record<AgentId, AgentId[]>>;
 }
 
+export interface WorkspaceInfo {
+  id: WorkspaceId;
+  name: string;
+}
+
 export interface WorkspaceState {
   currentWorkspaceId: WorkspaceId;
-  defaults: Record<WorkspaceId, WorkspaceDefaults>;
+  /** Ordered list of user-defined workspaces; never empty. */
+  workspaces: WorkspaceInfo[];
+  defaults: Record<string, WorkspaceDefaults>;
 }
 
 export interface ToolWorkspaceSettings {
@@ -122,10 +130,7 @@ export interface ToolWorkspaceSettings {
   disabledMcp: string[];
 }
 
-export interface ToolSettings {
-  personal: ToolWorkspaceSettings;
-  company: ToolWorkspaceSettings;
-}
+export type ToolSettings = Record<string, ToolWorkspaceSettings>;
 
 export interface UpdateTeamInput extends AgentSelection {
   workers: AgentId[];

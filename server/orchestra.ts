@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { runCli } from "./cli.js";
-import { workerSessionId, setWorkerSessionId, loadToolSettings } from "./store.js";
+import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
 import { enabledPublicSkills, resolveSkillPrompt } from "./skills.js";
 import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Session, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
@@ -121,7 +121,7 @@ export class Orchestra {
   }
 
   private async isMediaRequest(prompt: string, skills: string[] = [], workspaceId: Session["workspaceId"] = "personal"): Promise<boolean> {
-    const disabled = new Set((await loadToolSettings(this.usageDataDir))[workspaceId].disabledSkills.map((name) => name.toLocaleLowerCase()));
+    const disabled = new Set(workspaceToolSettings(await loadToolSettings(this.usageDataDir), workspaceId).disabledSkills.map((name) => name.toLocaleLowerCase()));
     return skills.some((id) => isMediaRule(id) && !disabled.has(id.toLocaleLowerCase())) || (this.mediaRequestResolver
       ? await this.mediaRequestResolver(prompt)
       : mediaRouteRequired(prompt, []));
@@ -201,7 +201,7 @@ export class Orchestra {
     this.assertPolicy(workspaceId, [agent, ...workers, ...(input.planner ? [input.planner.agent] : [])]);
     const cwd = resolve(input.cwd);
     if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
-    const selectedSkills = [...new Set([...(input.skills ?? []), ...mediaSkills(input.prompt, await enabledPublicSkills(cwd, false, (await loadToolSettings(this.usageDataDir))[workspaceId].disabledSkills))])];
+    const selectedSkills = [...new Set([...(input.skills ?? []), ...mediaSkills(input.prompt, await enabledPublicSkills(cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), workspaceId).disabledSkills))])];
     const session: Session = {
       id: randomUUID(), title: titleFrom(input.prompt), agent,
       workers, cwd, model,
@@ -233,7 +233,7 @@ export class Orchestra {
     if (requiresGrokMedia && session.agent !== "grok") {
       throw new Error(mediaUnavailableMessage);
     }
-    const skills = await resolveSkillPrompt(skillIds, session.cwd, (await loadToolSettings(this.usageDataDir))[session.workspaceId].disabledSkills);
+    const skills = await resolveSkillPrompt(skillIds, session.cwd, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills);
     if (!this.isCurrentRun(session, controller.signal)) return;
     let plan = "";
     if (session.planner) {
@@ -545,7 +545,7 @@ export class Orchestra {
     let lastCompleteMessage = "";
     const output: string[] = [];
     let quotaErrorEvidence = false;
-    const disabledMcp = (await loadToolSettings(this.usageDataDir))[session.workspaceId].disabledMcp;
+    const disabledMcp = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledMcp;
     this.requireCurrentRun(session, signal);
     const blockedMcp = disabledMcp.filter((key) => key.startsWith(`${agent}:`))
       .map((key) => `mcp__${key.slice(agent.length + 1)}__*`);
@@ -727,7 +727,7 @@ export class Orchestra {
     }
     if (controller.signal.aborted) return session;
     const config = this.configs.get(id) ?? { skills: [], systemPrompt: "" };
-    const selectedSkills = [...new Set([...config.skills, ...skills, ...mediaSkills(prompt, await enabledPublicSkills(session.cwd, false, (await loadToolSettings(this.usageDataDir))[session.workspaceId].disabledSkills))])];
+    const selectedSkills = [...new Set([...config.skills, ...skills, ...mediaSkills(prompt, await enabledPublicSkills(session.cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills))])];
     void this.execute(session, prompt, selectedSkills, config.systemPrompt, controller, mediaRequest)
       .catch((error) => this.fail(session, error, controller));
     return session;
@@ -954,7 +954,7 @@ export class Orchestra {
     for (let index = 0; index < Math.min(Math.max(turns, 1), 20); index++) {
       if (controller.signal.aborted) return this.finishStopped(session, controller);
       const bot = index % 2 === 0 ? botA : botB;
-      const skills = await resolveSkillPrompt(bot.skills, session.cwd, (await loadToolSettings(this.usageDataDir))[session.workspaceId].disabledSkills);
+      const skills = await resolveSkillPrompt(bot.skills, session.cwd, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills);
       const prompt = `${bot.systemPrompt}${skills}\n\n상대 봇의 메시지에 응답하세요. 현재 ${index + 1}/${turns}턴입니다.\n\n${message}`;
       const result = await this.runAgent(session, bot.agent, prompt, bot.model, undefined, undefined, controller.signal);
       if (result.exitCode !== 0) throw new Error(`${bot.name} 실행 실패 (코드 ${result.exitCode})`);

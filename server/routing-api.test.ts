@@ -8,10 +8,14 @@ import test from "node:test";
 import type { Express } from "express";
 import { createServer } from "./server.js";
 import { defaultRoutingSettings } from "./routing.js";
-import { loadGroups, loadSessions, loadWorkspaceState, mutateGroups, saveSessions } from "./store.js";
+import { loadGroups, loadSessions, loadWorkspaceState, mutateGroups, saveSessions, saveWorkspaceState } from "./store.js";
 import type { Session } from "./types.js";
 import { saveProviderQuota } from "./quota.js";
 import { envVar } from "./runtime.js";
+
+// These fixtures predate configurable workspaces and use the legacy personal/company pair.
+const seedLegacyWorkspaces = (directory: string) => saveWorkspaceState({ currentWorkspaceId: "personal", workspaces: [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }], defaults: { personal: {}, company: {} } }, directory);
+
 
 // Exercise Express and JSON middleware without requiring a TCP listener.
 function request(app: Express, method: string, path: string, body?: unknown, origin?: string): Promise<{ status: number; body: any }> {
@@ -103,9 +107,11 @@ test("workspace API filters sessions and groups and persists workspace defaults"
     assert.equal(updated.status, 200);
     assert.equal(updated.body.currentWorkspaceId, "company");
     assert.equal(updated.body.defaults.company.cwd, "/company");
-    assert.deepEqual(await loadWorkspaceState(directory), updated.body);
+    const { runningByWorkspace, ...persisted } = updated.body;
+    assert.deepEqual(runningByWorkspace, { personal: 0, company: 0 });
+    assert.deepEqual(await loadWorkspaceState(directory), persisted);
 
-    const beforeInvalid = structuredClone(updated.body);
+    const beforeInvalid = structuredClone(persisted);
     const invalidSnapshot = await request(app, "PATCH", "/api/workspaces", {
       currentWorkspaceId: "personal",
       defaultsByWorkspace: { personal: { cwd: "/new-personal", mode: "auto" }, company: { mode: "broken" } },
@@ -150,6 +156,7 @@ test("moving a session detaches it while moving a group carries its sessions", a
 
 test("group mutations broadcast a complete groups snapshot", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-group-broadcast-"));
+  await seedLegacyWorkspaces(directory);
   const { app, websocket } = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: [], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [] });
   const messages: any[] = [];
   const client = { readyState: 1, send: (raw: string) => messages.push(JSON.parse(raw)) };
@@ -416,6 +423,7 @@ test("skills API isolates selected project folders and refresh bypasses cached d
 
 test("workspace allowed agents persist and company routing excludes Codex in every role", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-policy-api-"));
+  await seedLegacyWorkspaces(directory);
   const updatedAt = new Date().toISOString();
   await saveProviderQuota({ agent: "claude", windows: [{ key: "five_hour", label: "5시간", remainingPercent: 3 }], updatedAt }, directory);
   await saveProviderQuota({ agent: "grok", windows: [{ key: "weekly", label: "주간", remainingPercent: 4 }], updatedAt }, directory);
@@ -449,6 +457,7 @@ test("workspace allowed agents persist and company routing excludes Codex in eve
 
 test('workspace quota fallback settings persist and reject invalid policies', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'orchestra-fallback-settings-'));
+  await seedLegacyWorkspaces(directory);
   const { app, websocket } = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: [], modelRunner: async () => { throw new Error('fixture'); } });
   try {
     const defaults = { quotaFallback: false, quotaThreshold: 7, fallbackOrder: { codex: ['grok', 'claude'] } };
@@ -564,6 +573,7 @@ test("company APIs reject detected and media-rule requests before creating or co
 
 test("notifications API isolates workspaces, validates reports and supports read and clear", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-notification-api-"));
+  await seedLegacyWorkspaces(directory);
   const { app, websocket, notifications } = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: [], modelRunner: async () => { throw new Error("fixture"); } });
   try {
     const created = await request(app, "POST", "/api/notifications", { workspace: "personal", type: "error", title: "터미널 오류", body: "실패", key: "terminal:load" });
@@ -582,6 +592,7 @@ test("notifications API isolates workspaces, validates reports and supports read
 
 test("auth notifications resolve after login and focus refresh is throttled", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-auth-notifications-"));
+  await seedLegacyWorkspaces(directory);
   let loggedIn = false;
   let calls = 0;
   const { app, websocket } = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: ["grok"], authDiscovery: { sleep: async () => {} }, modelRunner: async (command) => {

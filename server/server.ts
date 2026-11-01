@@ -27,7 +27,7 @@ import { Orchestra } from "./orchestra.js";
 import { discoverFiles } from "./files.js";
 import { enabledPublicSkills, publicSkills } from "./skills.js";
 import { RoutingService, type ModelCommandRunner, type PlannerRunner } from "./routing.js";
-import { createCoalescedSaver, loadBots, loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, mutateBots, mutateGroups, mutateToolSettings, mutateWorkspaceState, saveSessions } from "./store.js";
+import { workspaceIdPattern, createCoalescedSaver, loadBots, loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, workspaceToolSettings, mutateBots, mutateGroups, mutateToolSettings, mutateWorkspaceState, saveSessions } from "./store.js";
 import { discoverMcpTools, updateMcpTool, type ToolCommandRunner } from "./tools.js";
 import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, Session, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
 import { randomUUID } from "node:crypto";
@@ -37,7 +37,6 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const agentIds = new Set<AgentId>(["codex", "claude", "grok"]);
-const workspaceIds = new Set<WorkspaceId>(["personal", "company"]);
 const execFileAsync = promisify(execFile);
 type FolderRunner = (file: string, args: string[]) => Promise<{ stdout: string; stderr?: string }>;
 
@@ -128,20 +127,29 @@ function agent(value: unknown): AgentId {
   return value as AgentId;
 }
 
-function workspace(value: unknown, fallback?: WorkspaceId): WorkspaceId {
-  if (value == null && fallback) return fallback;
-  if (!workspaceIds.has(value as WorkspaceId)) throw new Error("워크스페이스가 올바르지 않습니다.");
-  return value as WorkspaceId;
+/** Checks the id format only; existence is checked against the live workspace list. */
+export function workspaceIdFormat(value: unknown): WorkspaceId {
+  if (typeof value !== "string" || !workspaceIdPattern.test(value)) throw new Error("워크스페이스가 올바르지 않습니다.");
+  return value;
 }
 
-function queryWorkspace(value: unknown): WorkspaceId | undefined {
-  return value == null ? undefined : workspace(value);
+export function workspaceName(value: unknown): string {
+  if (typeof value !== "string") throw new Error("워크스페이스 이름이 필요합니다.");
+  const name = value.trim();
+  if (!name || name.length > 40) throw new Error("워크스페이스 이름은 1~40자여야 합니다.");
+  return name;
 }
 
-function toolsWorkspace(value: unknown, fallback: WorkspaceId = "personal"): WorkspaceId {
-  if (value === "work") return "company";
-  return workspace(value, fallback);
+/** Id for a new workspace: the slugified name, or `ws-<random>` when that is empty or taken. */
+export function newWorkspaceId(name: string, taken: ReadonlySet<string>): WorkspaceId {
+  const slug = name.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64).replace(/-+$/, "");
+  if (slug && !taken.has(slug)) return slug;
+  let id: string;
+  do id = `ws-${randomUUID().slice(0, 8)}`; while (taken.has(id));
+  return id;
 }
+
+type WorkspaceResolver = (value: unknown, fallback?: WorkspaceId) => WorkspaceId;
 
 function ids(value: unknown, max = 20): string[] {
   if (value == null) return [];
@@ -185,7 +193,7 @@ function conversationSettings(body: any): ConversationSettings {
   return { mode: body?.mode, autoSwitch: body?.autoSwitch };
 }
 
-function startInput(body: any): StartSessionInput {
+function startInput(body: any, workspace: WorkspaceResolver, fallbackWorkspace: WorkspaceId): StartSessionInput {
   return {
     ...conversationSettings(body),
     prompt: string(body?.prompt), agent: agent(body?.agent),
@@ -195,7 +203,7 @@ function startInput(body: any): StartSessionInput {
     skills: ids(body?.skills),
     systemPrompt: optionalString(body?.systemPrompt, 50_000), resumeSessionId: optionalString(body?.resumeSessionId, 500),
     groupId: optionalString(body?.groupId, 500),
-    workspaceId: workspace(body?.workspaceId, "personal"),
+    workspaceId: workspace(body?.workspaceId, fallbackWorkspace),
   };
 }
 
@@ -253,7 +261,7 @@ export function routingInput(body: any): { prompt: string; cwd: string; skills: 
 export function withWorkspaceMcpBlocks(runner: PlannerRunner, dataDir?: string): PlannerRunner {
   return async (options) => {
     const workspaceId = options.usageContext?.workspaceId ?? "personal";
-    const disabled = (await loadToolSettings(dataDir))[workspaceId].disabledMcp;
+    const disabled = workspaceToolSettings(await loadToolSettings(dataDir), workspaceId).disabledMcp;
     const prefix = `${options.agent}:`;
     const blockedMcp = disabled
       .filter((key) => key.startsWith(prefix) && key.length > prefix.length)
@@ -329,10 +337,27 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const persistSessions = (sessions: Session[]) => sessionWriter.flush({ sessions, changed: new Set() });
   const persistAllSessions = (sessions: Session[]) => sessionWriter.flush({ sessions });
   const scheduleSessions = (sessions: Session[], changedIds: string[]) => sessionWriter.schedule({ sessions, changed: new Set(changedIds) });
-  let workspaceState: WorkspaceState = { currentWorkspaceId: "personal", defaults: { personal: {}, company: {} } };
-  const allowedFor = (id: WorkspaceId) => allowedAgentsForWorkspace(id, workspaceState.defaults[id].allowedAgents);
+  let workspaceState: WorkspaceState = { currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: {} };
+  const currentWorkspace = () => workspaceState.currentWorkspaceId;
+  const workspace: WorkspaceResolver = (value, fallback) => {
+    if (value == null && fallback) return fallback;
+    const id = workspaceIdFormat(value);
+    if (!workspaceState.workspaces.some((item) => item.id === id)) throw new Error("워크스페이스가 올바르지 않습니다.");
+    return id;
+  };
+  const queryWorkspace = (value: unknown) => value == null ? undefined : workspace(value);
+  // "work" is the legacy alias the tools panel used for the company workspace.
+  const toolsWorkspace = (value: unknown) => workspace(value === "work" ? "company" : value, currentWorkspace());
+  const runningByWorkspace = () => {
+    const counts: Record<string, number> = Object.fromEntries(workspaceState.workspaces.map((item) => [item.id, 0]));
+    for (const session of orchestra.list()) if (session.status === "running") counts[session.workspaceId] = (counts[session.workspaceId] ?? 0) + 1;
+    return counts;
+  };
+  /** Workspace route responses: the persisted state plus running-session counts per workspace. */
+  const workspacesPayload = () => ({ ...workspaceState, runningByWorkspace: runningByWorkspace() });
+  const allowedFor = (id: WorkspaceId) => allowedAgentsForWorkspace(id, workspaceState.defaults[id]?.allowedAgents);
   const quotaAwareAgents = async (agents: AgentId[], workspaceId: WorkspaceId) => {
-    const defaults = workspaceState.defaults[workspaceId];
+    const defaults = workspaceState.defaults[workspaceId] ?? {};
     if (defaults.quotaFallback === false) return agents;
     const quotas = await loadProviderQuotas(options.dataDir, options.modelHomeDir);
     const eligible = agents.filter((id) => !exhaustionFromQuota(quotas.find((quota) => quota.agent === id), defaults.quotaThreshold ?? 3).exhausted);
@@ -340,7 +365,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   };
   const fallbackContext = async (workspaceId: WorkspaceId) => {
     await modelsReady;
-    const defaults = workspaceState.defaults[workspaceId];
+    const defaults = workspaceState.defaults[workspaceId] ?? {};
     const settings = await routing.loadSettings();
     const available = await getAvailableAgents();
     const authenticated = available.filter((id) => settings.modelOptions[id].authStatus !== "unauthenticated");
@@ -373,7 +398,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   // Settings errors remain visible through the API without blocking session recovery.
   const syncAuthNotifications = async () => {
     const settings = await routing.loadSettings();
-    for (const workspaceId of ["personal", "company"] as const) {
+    for (const { id: workspaceId } of workspaceState.workspaces) {
       for (const id of agentIds) {
         const option = settings.modelOptions[id];
         const note = allowedFor(workspaceId).includes(id) ? authNotification(workspaceId, id, option.authStatus, option.authDetail) : undefined;
@@ -415,7 +440,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       });
       const invocation = Promise.resolve().then(() => (options.limitsRunner ?? runCli)({
         agent: "claude", prompt: ".", model: "haiku", cwd: process.cwd(), signal: controller.signal,
-        usageContext: { workspaceId: "personal", sessionId: randomUUID(), role: "router", dataDir: options.dataDir },
+        usageContext: { workspaceId: currentWorkspace(), sessionId: randomUUID(), role: "router", dataDir: options.dataDir },
         onLine: () => undefined,
       }));
       try {
@@ -447,12 +472,12 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   terminal.registerRoutes(app);
   registerSetupRoutes(app);
   app.get("/api/notifications", async (req, res) => {
-    try { res.json(await notifications.list(workspace(req.query.workspace, "personal"))); }
+    try { res.json(await notifications.list(workspace(req.query.workspace, currentWorkspace()))); }
     catch (error) { errorResponse(res, error); }
   });
   app.post("/api/notifications", async (req, res) => {
     try {
-      const workspaceId = workspace(req.body?.workspace ?? req.body?.workspaceId, "personal");
+      const workspaceId = workspace(req.body?.workspace ?? req.body?.workspaceId, currentWorkspace());
       const type = string(req.body?.type, 30) as NotificationType;
       if (!["auth", "quota", "permission", "run-finished", "error", "info"].includes(type)) throw new Error("알림 종류가 올바르지 않습니다.");
       // Client reports are informational; executable actions originate in server sources.
@@ -461,13 +486,13 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   app.post("/api/notifications/read", async (req, res) => {
     try {
-      const workspaceId = workspace(req.body?.workspace ?? req.body?.workspaceId, "personal");
+      const workspaceId = workspace(req.body?.workspace ?? req.body?.workspaceId, currentWorkspace());
       await notifications.read(workspaceId, req.body?.all === true ? "all" : ids(req.body?.ids, 200));
       res.json(await notifications.list(workspaceId));
     } catch (error) { errorResponse(res, error); }
   });
   app.delete("/api/notifications", async (req, res) => {
-    try { await notifications.clear(workspace(req.query.workspace, "personal")); res.status(204).end(); }
+    try { await notifications.clear(workspace(req.query.workspace, currentWorkspace())); res.status(204).end(); }
     catch (error) { errorResponse(res, error); }
   });
 
@@ -480,7 +505,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       let defaultCwd = resolve(homedir(), "opencodeproject");
       try { if (!(await stat(defaultCwd)).isDirectory()) defaultCwd = process.cwd(); } catch { defaultCwd = process.cwd(); }
       const groups = await loadGroups(options.dataDir);
-      const disabled = workspaceId ? (await loadToolSettings(options.dataDir))[workspaceId].disabledSkills : [];
+      const disabled = workspaceId ? workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId).disabledSkills : [];
       res.json({ agents, skills: await enabledPublicSkills(undefined, false, disabled), bots: await loadBots(options.dataDir), groups: workspaceId ? groups.filter((group) => group.workspaceId === workspaceId) : groups, defaultCwd, homeCwd: homedir() });
     } catch (error) { errorResponse(res, error, 500); }
   });
@@ -490,7 +515,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const cwd = req.query.cwd === undefined ? process.cwd() : resolve(string(req.query.cwd, 4_096));
       if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
       const workspaceId = toolsWorkspace(req.query.workspace);
-      const disabled = (await loadToolSettings(options.dataDir))[workspaceId].disabledSkills;
+      const disabled = workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId).disabledSkills;
       res.json(await enabledPublicSkills(cwd, false, disabled));
     } catch (error) { errorResponse(res, error); }
   });
@@ -499,13 +524,13 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const cwd = resolve(string(req.body?.cwd, 4_096));
       if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
       const workspaceId = toolsWorkspace(req.body?.workspace);
-      const disabled = (await loadToolSettings(options.dataDir))[workspaceId].disabledSkills;
+      const disabled = workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId).disabledSkills;
       res.json(await enabledPublicSkills(cwd, true, disabled));
     } catch (error) { errorResponse(res, error); }
   });
 
   const toolsPayload = async (workspaceId: WorkspaceId, cwd = process.cwd()) => {
-    const settings = (await loadToolSettings(options.dataDir))[workspaceId];
+    const settings = workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId);
     const skillLoader = options.toolSkillLoader ?? publicSkills;
     const skills = await skillLoader(cwd);
     const disabled = new Set(settings.disabledSkills.map((name) => name.toLocaleLowerCase()));
@@ -547,8 +572,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       await updateMcpTool({ agent: id, name, enabled: req.body.enabled }, { runner: options.toolRunner, codexConfigPath: options.codexConfigPath });
       await mutateToolSettings((settings) => {
         const key = `${id}:${name}`;
-        const values = settings[workspaceId].disabledMcp.filter((item) => item !== key);
-        settings[workspaceId].disabledMcp = req.body.enabled ? values : [...values, key];
+        const target = workspaceToolSettings(settings, workspaceId);
+        const values = target.disabledMcp.filter((item) => item !== key);
+        target.disabledMcp = req.body.enabled ? values : [...values, key];
       }, options.dataDir);
       res.json(await toolsPayload(workspaceId, cwd));
     } catch (error) { errorResponse(res, error); }
@@ -561,8 +587,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const name = string(req.body?.name, 200);
       if (typeof req.body?.enabled !== "boolean") throw new Error("스킬 사용 설정이 올바르지 않습니다.");
       await mutateToolSettings((settings) => {
-        const values = settings[workspaceId].disabledSkills.filter((item) => item.toLocaleLowerCase() !== name.toLocaleLowerCase());
-        settings[workspaceId].disabledSkills = req.body.enabled ? values : [...values, name];
+        const target = workspaceToolSettings(settings, workspaceId);
+        const values = target.disabledSkills.filter((item) => item.toLocaleLowerCase() !== name.toLocaleLowerCase());
+        target.disabledSkills = req.body.enabled ? values : [...values, name];
       }, options.dataDir);
       res.json(await toolsPayload(workspaceId, cwd));
     } catch (error) { errorResponse(res, error); }
@@ -591,7 +618,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       await modelsReady;
       const input = routingInput(req.body);
       if (!(await stat(input.cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
-      const workspaceId = workspace(req.body?.workspaceId, "personal");
+      const workspaceId = workspace(req.body?.workspaceId, currentWorkspace());
       await assertMediaAvailable(input.prompt, workspaceId);
       const permitted = (await getAvailableAgents()).filter((id) => allowedFor(workspaceId).includes(id));
       const available = await quotaAwareAgents(permitted, workspaceId);
@@ -629,35 +656,96 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
 
   app.get("/api/workspaces", async (_req, res) => {
-    try { res.json(await loadWorkspaceState(options.dataDir)); }
+    try { workspaceState = await loadWorkspaceState(options.dataDir); res.json(workspacesPayload()); }
     catch (error) { errorResponse(res, error, 500); }
   });
+  const workspaceNotFound = (error: unknown) => error instanceof Error && error.message === "워크스페이스를 찾을 수 없습니다.";
   app.patch("/api/workspaces", async (req, res) => {
     try {
       const currentWorkspaceId = req.body?.currentWorkspaceId == null ? undefined : workspace(req.body.currentWorkspaceId);
       let defaultsByWorkspace: Record<WorkspaceId, WorkspaceDefaults> | undefined;
       if (req.body?.defaultsByWorkspace != null) {
         const input = req.body.defaultsByWorkspace;
-        if (!input || typeof input !== "object" || Array.isArray(input) || input.personal == null || input.company == null) throw new Error("워크스페이스 기본 설정이 올바르지 않습니다.");
-        defaultsByWorkspace = { personal: workspaceDefaults(input.personal), company: workspaceDefaults(input.company) };
+        if (!input || typeof input !== "object" || Array.isArray(input) || !Object.keys(input).length) throw new Error("워크스페이스 기본 설정이 올바르지 않습니다.");
+        defaultsByWorkspace = {};
+        for (const [id, value] of Object.entries(input)) defaultsByWorkspace[workspace(id)] = workspaceDefaults(value);
       }
       const singleWorkspaceId = req.body?.defaults == null ? undefined : workspace(req.body?.workspaceId);
       const singleDefaults = req.body?.defaults == null ? undefined : workspaceDefaults(req.body.defaults);
-      const state = await mutateWorkspaceState((state) => {
+      workspaceState = await mutateWorkspaceState((state) => {
+        const known = new Set(state.workspaces.map((item) => item.id));
+        for (const id of [currentWorkspaceId, singleWorkspaceId, ...Object.keys(defaultsByWorkspace ?? {})]) if (id && !known.has(id)) throw new Error("워크스페이스를 찾을 수 없습니다.");
         if (currentWorkspaceId) state.currentWorkspaceId = currentWorkspaceId;
-        if (defaultsByWorkspace) state.defaults = defaultsByWorkspace;
+        if (defaultsByWorkspace) Object.assign(state.defaults, defaultsByWorkspace);
         if (singleWorkspaceId && singleDefaults) state.defaults[singleWorkspaceId] = singleDefaults;
         return state;
       }, options.dataDir);
-      workspaceState = state;
-      res.json(state);
+      res.json(workspacesPayload());
+    } catch (error) { errorResponse(res, error, workspaceNotFound(error) ? 404 : 400); }
+  });
+  app.post("/api/workspaces", async (req, res) => {
+    try {
+      const name = workspaceName(req.body?.name);
+      workspaceState = await mutateWorkspaceState((state) => {
+        const id = newWorkspaceId(name, new Set(state.workspaces.map((item) => item.id)));
+        state.workspaces.push({ id, name });
+        // A new workspace starts from the current one's defaults (folder, allowed agents, team, ...).
+        state.defaults[id] = structuredClone(state.defaults[state.currentWorkspaceId] ?? {});
+        return state;
+      }, options.dataDir);
+      res.status(201).json(workspacesPayload());
     } catch (error) { errorResponse(res, error); }
+  });
+  app.patch("/api/workspaces/:id", async (req, res) => {
+    try {
+      const id = workspaceIdFormat(routeParam(req.params.id));
+      const name = workspaceName(req.body?.name);
+      workspaceState = await mutateWorkspaceState((state) => {
+        const found = state.workspaces.find((item) => item.id === id);
+        if (!found) throw new Error("워크스페이스를 찾을 수 없습니다.");
+        found.name = name;
+        return state;
+      }, options.dataDir);
+      res.json(workspacesPayload());
+    } catch (error) { errorResponse(res, error, workspaceNotFound(error) ? 404 : 400); }
+  });
+  app.delete("/api/workspaces/:id", async (req, res) => {
+    const conflict = (message: string) => Object.assign(new Error(message), { status: 409 });
+    try {
+      const id = workspaceIdFormat(routeParam(req.params.id));
+      const requestedMoveTo = req.query.moveTo == null || req.query.moveTo === "" ? undefined : workspaceIdFormat(req.query.moveTo);
+      let moveTo = "";
+      workspaceState = await mutateWorkspaceState(async (state) => {
+        const index = state.workspaces.findIndex((item) => item.id === id);
+        if (index < 0) throw new Error("워크스페이스를 찾을 수 없습니다.");
+        if (state.workspaces.length === 1) throw conflict("마지막 워크스페이스는 삭제할 수 없습니다.");
+        if (orchestra.list().some((session) => session.workspaceId === id && session.status === "running")) throw conflict("실행 중인 세션이 있는 워크스페이스는 삭제할 수 없습니다.");
+        const remaining = state.workspaces.filter((item) => item.id !== id);
+        moveTo = requestedMoveTo ?? remaining[0].id;
+        if (!remaining.some((item) => item.id === moveTo)) throw new Error(requestedMoveTo === id ? "삭제할 워크스페이스로는 옮길 수 없습니다." : "옮길 워크스페이스를 찾을 수 없습니다.");
+        // Move the contents before dropping the workspace so a failed write leaves nothing orphaned.
+        await mutateGroups((groups) => { for (const group of groups) if (group.workspaceId === id) group.workspaceId = moveTo; }, options.dataDir);
+        for (const session of orchestra.list()) if (session.workspaceId === id) orchestra.setWorkspace(session.id, moveTo, false);
+        await persistSessions(orchestra.list());
+        state.workspaces = remaining;
+        delete state.defaults[id];
+        if (state.currentWorkspaceId === id) state.currentWorkspaceId = moveTo;
+        return state;
+      }, options.dataDir);
+      broadcastGroups(await loadGroups(options.dataDir));
+      await mutateToolSettings((settings) => { delete settings[id]; }, options.dataDir).catch(() => undefined);
+      await notifications.clear(id).catch(() => undefined);
+      res.json(workspacesPayload());
+    } catch (error) {
+      const status = (error as { status?: number })?.status ?? (workspaceNotFound(error) ? 404 : 400);
+      errorResponse(res, error, status);
+    }
   });
 
   app.post("/api/sessions", async (req, res) => {
     try {
-      const input = startInput(req.body);
-      await assertMediaAvailable(input.prompt, input.workspaceId ?? "personal");
+      const input = startInput(req.body, workspace, currentWorkspace());
+      await assertMediaAvailable(input.prompt, input.workspaceId ?? currentWorkspace());
       if (input.groupId && !(await loadGroups(options.dataDir)).some((group) => group.id === input.groupId && group.workspaceId === input.workspaceId)) throw new Error("그룹을 찾을 수 없습니다.");
       res.status(201).json(await orchestra.create(input));
     }
@@ -795,7 +883,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.post("/api/groups", async (req, res) => {
     try {
       const name = string(req.body?.name, 100);
-      const workspaceId = workspace(req.body?.workspaceId, "personal");
+      const workspaceId = workspace(req.body?.workspaceId, currentWorkspace());
       const group: Group = { id: randomUUID(), name, createdAt: new Date().toISOString(), workspaceId };
       await mutateGroups((groups) => {
         if (groups.some((item) => item.workspaceId === workspaceId && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error("같은 이름의 그룹이 이미 있습니다.");
@@ -889,7 +977,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try {
       const requestedTurns = Number(req.body?.turns);
       if (!Number.isFinite(requestedTurns) || !Number.isInteger(requestedTurns)) throw new Error("대화 턴 수는 정수여야 합니다.");
-      const input: ConversationInput = { botA: string(req.body?.botA, 100), botB: string(req.body?.botB, 100), turns: Math.min(Math.max(requestedTurns, 1), 20), prompt: string(req.body?.prompt), cwd: string(req.body?.cwd, 4_096), workspaceId: workspace(req.body?.workspaceId, "personal") };
+      const input: ConversationInput = { botA: string(req.body?.botA, 100), botB: string(req.body?.botB, 100), turns: Math.min(Math.max(requestedTurns, 1), 20), prompt: string(req.body?.prompt), cwd: string(req.body?.cwd, 4_096), workspaceId: workspace(req.body?.workspaceId, currentWorkspace()) };
       res.status(201).json(await orchestra.conversation(input, await loadBots(options.dataDir)));
     } catch (error) { errorResponse(res, error); }
   });

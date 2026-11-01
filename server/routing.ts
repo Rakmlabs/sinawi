@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { runCli, type RunCliOptions } from "./cli.js";
 import { filterEnabledSkills, publicSkills } from "./skills.js";
-import { loadToolSettings } from "./store.js";
+import { loadToolSettings, workspaceToolSettings } from "./store.js";
 import type { AgentId, AgentSelection, SkillInfo } from "./types.js";
 import { defaultDataDir, envVar } from "./runtime.js";
 import { companyMediaUnavailableMessage, imageTextKeywords, imageVisualKeywords, isMediaRule, mediaGenerationRequired, mediaRouteRequired, mediaSkills, mediaUnavailableMessage, stripPreviewAttachments, videoKeywords } from "./media-routing.js";
@@ -569,7 +569,7 @@ export class RoutingService {
     let settings = await this.loadSettings();
     const workspaceId = usageContext?.workspaceId ?? "personal";
     const loadEnabledSkills = async () => {
-      const disabled = (await loadToolSettings(this.options.dataDir))[workspaceId].disabledSkills;
+      const disabled = workspaceToolSettings(await loadToolSettings(this.options.dataDir), workspaceId).disabledSkills;
       return filterEnabledSkills(await (this.options.skillLoader ?? publicSkills)(cwd), disabled);
     };
     const media = mediaRouteRequired(prompt, settings.rules);

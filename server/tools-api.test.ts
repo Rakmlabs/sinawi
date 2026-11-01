@@ -7,6 +7,11 @@ import { join } from "node:path";
 import test from "node:test";
 import type { Express } from "express";
 import { createServer } from "./server.js";
+import { saveWorkspaceState } from "./store.js";
+
+// These fixtures predate configurable workspaces and use the legacy personal/company pair.
+const seedLegacyWorkspaces = (directory: string) => saveWorkspaceState({ currentWorkspaceId: "personal", workspaces: [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }], defaults: { personal: {}, company: {} } }, directory);
+
 
 function request(app: Express, method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
@@ -29,6 +34,7 @@ function request(app: Express, method: string, path: string, body?: unknown): Pr
 
 test("tools API returns workspace-aware MCP and skill states and persists toggles", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-tools-api-"));
+  await seedLegacyWorkspaces(directory);
   const codexConfigPath = join(directory, "config.toml");
   await writeFile(codexConfigPath, "[mcp_servers.bbanana]\nenabled = true\n");
   const calls: Array<[string, string[]]> = [];
@@ -61,6 +67,7 @@ test("tools API returns workspace-aware MCP and skill states and persists toggle
 
 test("disabled skills are excluded from workspace skill discovery", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-tools-skills-"));
+  await seedLegacyWorkspaces(directory);
   const cwd = join(directory, "project");
   await mkdir(join(cwd, ".agents", "skills", "workspace-review"), { recursive: true });
   await writeFile(join(cwd, ".agents", "skills", "workspace-review", "SKILL.md"), "---\nname: Workspace Review\ndescription: Review fixture\n---\n");
@@ -75,6 +82,7 @@ test("disabled skills are excluded from workspace skill discovery", async () => 
 
 test("tools API includes skills from the requested working folder", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-tools-cwd-"));
+  await seedLegacyWorkspaces(directory);
   const seen: Array<string | undefined> = [];
   const toolSkillLoader = async (cwd?: string) => {
     seen.push(cwd);

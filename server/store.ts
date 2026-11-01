@@ -1,7 +1,7 @@
-import { readdir, rename, rm } from "node:fs/promises";
+import { readdir, rename, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isArray, isPlainObject, readJsonFile, writeJsonFile } from "./json-file.js";
-import type { Bot, Group, Session, ToolSettings, WorkspaceState } from "./types.js";
+import type { Bot, Group, Session, ToolSettings, ToolWorkspaceSettings, WorkspaceDefaults, WorkspaceInfo, WorkspaceState } from "./types.js";
 import { normalizeWorkerConfigs } from "./workers.js";
 import { defaultDataDir } from "./runtime.js";
 
@@ -120,15 +120,57 @@ export function loadSessions(directory = dataDir): Promise<Session[]> {
   return operation;
 }
 
+export const workspaceIdPattern = /^[a-z0-9-]{1,64}$/;
+export const legacyWorkspaces: WorkspaceInfo[] = [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }];
+export const freshWorkspaces: WorkspaceInfo[] = [{ id: "default", name: "기본" }];
+
+async function exists(path: string): Promise<boolean> {
+  try { await stat(path); return true; } catch { return false; }
+}
+
+// Data written before workspaces were configurable belongs to the fixed personal/company pair.
+async function hasLegacyData(directory: string): Promise<boolean> {
+  for (const name of ["sessions", "sessions.json", "groups.json", "tool-settings.json", "notifications.json"]) {
+    if (await exists(resolve(directory, name))) return true;
+  }
+  return false;
+}
+
+function sanitizeWorkspaces(value: unknown): WorkspaceInfo[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: WorkspaceInfo[] = [];
+  for (const item of value) {
+    const id = (item as WorkspaceInfo | undefined)?.id;
+    const name = (item as WorkspaceInfo | undefined)?.name;
+    if (typeof id !== "string" || !workspaceIdPattern.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    result.push({ id, name: typeof name === "string" && name.trim() ? name.trim().slice(0, 40) : id });
+  }
+  return result;
+}
+
+async function readWorkspaceState(directory: string): Promise<{ state: WorkspaceState; migrated: boolean }> {
+  const stored = await loadObject<Partial<WorkspaceState>>(resolve(directory, "workspaces.json"));
+  let workspaces = sanitizeWorkspaces(stored?.workspaces);
+  const migrated = !workspaces.length;
+  if (migrated) workspaces = structuredClone(stored || await hasLegacyData(directory) ? legacyWorkspaces : freshWorkspaces);
+  const storedDefaults = stored?.defaults && typeof stored.defaults === "object" ? stored.defaults : {};
+  const defaults: Record<string, WorkspaceDefaults> = {};
+  for (const { id } of workspaces) {
+    const value = (storedDefaults as Record<string, unknown>)[id];
+    defaults[id] = value && typeof value === "object" && !Array.isArray(value) ? value as WorkspaceDefaults : {};
+  }
+  const current = workspaces.some((item) => item.id === stored?.currentWorkspaceId) ? stored!.currentWorkspaceId! : workspaces[0].id;
+  return { state: { currentWorkspaceId: current, workspaces, defaults }, migrated };
+}
+
+/** Loads the workspace list, migrating (and persisting) files written before workspaces were configurable. */
 export async function loadWorkspaceState(directory = dataDir): Promise<WorkspaceState> {
-  const stored = await loadObject<WorkspaceState>(resolve(directory, "workspaces.json"));
-  return {
-    currentWorkspaceId: stored?.currentWorkspaceId === "company" ? "company" : "personal",
-    defaults: {
-      personal: stored?.defaults?.personal ?? {},
-      company: stored?.defaults?.company ?? {},
-    },
-  };
+  const { state, migrated } = await readWorkspaceState(directory);
+  // Persist the migration so later data (e.g. new sessions) cannot change which pair a fresh install picks.
+  if (migrated) await saveObject(resolve(directory, "workspaces.json"), state);
+  return state;
 }
 
 export function saveWorkspaceState(state: WorkspaceState, directory = dataDir): Promise<void> {
@@ -150,12 +192,21 @@ export function mutateWorkspaceState<T>(mutator: (state: WorkspaceState) => T | 
 }
 
 export async function loadToolSettings(directory = dataDir): Promise<ToolSettings> {
-  const stored = await loadObject<Partial<ToolSettings>>(resolve(directory, "tool-settings.json"));
-  const normalize = (value: ToolSettings["personal"] | undefined) => ({
+  const stored = await loadObject<Record<string, Partial<ToolWorkspaceSettings>>>(resolve(directory, "tool-settings.json"));
+  const normalize = (value: Partial<ToolWorkspaceSettings> | undefined): ToolWorkspaceSettings => ({
     disabledSkills: Array.isArray(value?.disabledSkills) ? [...new Set(value.disabledSkills.filter((item): item is string => typeof item === "string"))] : [],
     disabledMcp: Array.isArray(value?.disabledMcp) ? [...new Set(value.disabledMcp.filter((item): item is string => typeof item === "string"))] : [],
   });
-  return { personal: normalize(stored?.personal), company: normalize(stored?.company) };
+  const settings: ToolSettings = { personal: normalize(stored?.personal), company: normalize(stored?.company) };
+  for (const [id, value] of Object.entries(stored ?? {})) {
+    if (workspaceIdPattern.test(id) && value && typeof value === "object") settings[id] = normalize(value);
+  }
+  return settings;
+}
+
+/** Tool settings of one workspace, created empty when the workspace has none yet. */
+export function workspaceToolSettings(settings: ToolSettings, workspaceId: string): ToolWorkspaceSettings {
+  return settings[workspaceId] ??= { disabledSkills: [], disabledMcp: [] };
 }
 
 export function mutateToolSettings<T>(mutator: (settings: ToolSettings) => T | Promise<T>, directory = dataDir): Promise<T> {
