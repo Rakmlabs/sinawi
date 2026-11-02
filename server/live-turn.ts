@@ -131,20 +131,45 @@ export function statusDigest(session: Pick<Session, "status" | "agent" | "events
   return lines.join("\n");
 }
 
-export function statusPrompt(question: string, digest: string): string {
+/** The prompt for a message typed while a run is going: answer it, and say whether it carries work for the team. */
+export function liveReplyPrompt(message: string, digest: string, workers: LiveWorker[]): string {
   return [
-    "당신은 진행 중인 작업의 상태를 묻는 질문에만 답하는 에이전트입니다.",
-    "아래 로그에 있는 사실만 한국어로 짧게 답하세요.",
-    "파일을 수정하지 말고, 도구를 호출하지 말고, 작업을 지시하거나 위임하지 마세요.",
-    "<<DELEGATE>>를 출력하지 마세요.",
-    "로그에 없으면 모른다고 말하세요.",
+    "당신은 진행 중인 작업 옆에서 사용자의 메시지를 받는 안내 역할입니다. 작업은 총괄과 작업자가 하고, 당신은 직접 하지 않습니다.",
+    "파일을 수정하지 말고, 도구를 호출하지 말고, <<DELEGATE>>를 출력하지 마세요.",
+    "",
+    "1. 메시지에 한국어로 짧게 답하세요. 진행 상황을 묻는 말이면 아래 로그에 있는 사실만으로 답하고, 로그에 없으면 모른다고 하세요.",
+    "2. 메시지에 작업에 반영할 지시·요청·정정·추가 정보가 조금이라도 있으면 팀에 전달됩니다. 그때는 무엇을 누구에게 전달하는지 한 줄로 말하세요. 애매하면 전달하세요.",
+    "3. 마지막 줄에는 아래 중 하나만 그대로 쓰세요.",
+    '   <<FORWARD to="lead">>  총괄에게 전달',
+    ...workers.map((worker) => `   <<FORWARD to="${worker.id}">>  ${worker.label}에게만 전달`),
+    "   <<NO_FORWARD>>  묻기만 했고 전달할 것이 없음",
     "",
     "작업 로그:",
     digest || "아직 기록된 작업이 없습니다.",
     "",
-    "질문:",
-    question,
+    "사용자 메시지:",
+    message,
   ].join("\n");
+}
+
+export interface LiveReply {
+  answer: string;
+  /** Pass the message on: `targetWorkerId` for one worker, undefined for the lead. */
+  forward?: { targetWorkerId?: string };
+  /** False when the reply had no routing line, so the app could not tell what the user meant. */
+  decided: boolean;
+}
+
+const ROUTE_LINE = /\n?\s*<<\s*(?:FORWARD\s+to\s*=\s*"([^"]*)"|NO_FORWARD)\s*>>\s*$/u;
+
+export function parseLiveReply(text: string, workers: LiveWorker[]): LiveReply {
+  const trimmed = text.trim();
+  const match = ROUTE_LINE.exec(trimmed);
+  if (!match) return { answer: trimmed, decided: false };
+  const answer = trimmed.slice(0, match.index).trim();
+  if (match[1] === undefined) return { answer, decided: true };
+  const target = workers.find((worker) => worker.id === match[1]);
+  return { answer, forward: { targetWorkerId: target?.id }, decided: true };
 }
 
 export function instructionSuffix(items: PendingInstruction[]): string {

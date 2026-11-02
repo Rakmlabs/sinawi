@@ -16,7 +16,7 @@ import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
-import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, STATUS_AGENT_MODEL, statusDigest, statusPrompt, takePending, type LiveWorker } from "./live-turn.js";
+import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 
 const delegationPattern = /<<DELEGATE\s+to=["']([\w.-]{1,100})["']>>(.*?)<<\/DELEGATE>>/gis;
 const maxEvents = 2_000;
@@ -218,6 +218,10 @@ export class Orchestra {
 
   private allowedAgents(session: Pick<Session, "workspaceId">): AgentId[] {
     return allowedAgentsForWorkspace(session.workspaceId, this.allowedAgentResolver?.(session.workspaceId));
+  }
+
+  private agentAllowed(workspaceId: Session["workspaceId"], agent: AgentId): boolean {
+    try { this.assertPolicy(workspaceId, [agent]); return true; } catch { return false; }
   }
 
   private assertPolicy(workspaceId: Session["workspaceId"], agents: readonly AgentId[]): void {
@@ -597,43 +601,43 @@ export class Orchestra {
     }));
   }
 
-  private enqueueInstruction(session: Session, text: string, targetWorkerId?: string): void {
+  /** Queues a message for the team's next turn; `answer` is the reply already given to it, shown above the note. */
+  private enqueueInstruction(session: Session, text: string, targetWorkerId?: string, answer = ""): void {
     const item = { id: randomUUID(), text, targetWorkerId, createdAt: new Date().toISOString() };
     session.pendingInstructions = pushInstruction(session.pendingInstructions, item);
     const worker = this.liveWorkers(session).find((candidate) => candidate.id === targetWorkerId);
     const ack = worker
-      ? `${worker.label}의 다음 턴에 넣었습니다. 진행 중인 작업은 바꾸지 않고, 그 작업자의 다음 턴에 전달합니다.`
-      : "특정 작업자를 찾지 못해 총괄의 다음 턴에 넣었습니다. 진행 중인 작업은 바꾸지 않습니다.";
-    this.event(session, "grok", "message", ack, { metadata: { live: "directive", targetWorkerId } });
+      ? `${worker.label}의 다음 턴에 전달합니다. 진행 중인 작업은 그대로 둡니다.`
+      : "총괄의 다음 턴에 전달합니다. 진행 중인 작업은 그대로 둡니다.";
+    this.event(session, "grok", "message", answer ? `${answer}\n\n${ack}` : ack, { metadata: { live: "directive", targetWorkerId } });
   }
 
-  /** A message typed while a session is already running: answer, queue, or stop. Never starts a second task. */
+  /**
+   * A message typed while a session is already running. Like Claude Code, it never waits for the task:
+   * a fast model answers it from the log and says whether it carries work, which then reaches the
+   * lead or the named worker on its next turn. Never starts a second task.
+   */
   async liveTurn(id: string, prompt: string): Promise<Session> {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.status !== "running") return this.followup(id, prompt);
-    const classified = classifyLiveMessage(prompt, this.liveWorkers(session));
-    if (classified.intent === "stop") return this.stop(id);
-    // Like Claude Code and Codex, anything that is not plainly a status question reaches the agent:
-    // a dropped instruction costs far more than a question answered at the next turn.
-    if (classified.intent === "directive" || classified.intent === "ambiguous") {
-      this.event(session, "user", "message", prompt);
-      this.enqueueInstruction(session, prompt, classified.targetWorkerId);
-      return session;
-    }
-    // The status answer is a Grok CLI run, so it obeys the same workspace policy as every other run.
-    this.assertPolicy(session.workspaceId, ["grok"]);
-    const ambiguous = false;
+    const workers = this.liveWorkers(session);
+    if (classifyLiveMessage(prompt, workers).intent === "stop") return this.stop(id);
     const digest = statusDigest(session);
     this.event(session, "user", "message", prompt);
+    // The reply is a Grok CLI run, so it obeys the workspace policy; without Grok the message still reaches the lead.
+    if (!this.agentAllowed(session.workspaceId, "grok")) {
+      this.enqueueInstruction(session, prompt);
+      return session;
+    }
     const controller = new AbortController();
-    // Ref'd on purpose: the abort is what ends the status run if the CLI hangs; `finally` clears it.
+    // Ref'd on purpose: the abort is what ends the reply run if the CLI hangs; `finally` clears it.
     const timer = setTimeout(() => controller.abort(), 45_000);
-    let answer = "";
+    let text = "";
     try {
       const result = await this.runner({
         agent: "grok",
-        prompt: statusPrompt(prompt, digest),
+        prompt: liveReplyPrompt(prompt, digest, workers),
         cwd: session.cwd,
         model: STATUS_AGENT_MODEL,
         readOnly: true,
@@ -641,15 +645,21 @@ export class Orchestra {
         usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role: "status", dataDir: this.usageDataDir },
         onLine: () => undefined,
       });
-      answer = result.finalText.trim();
+      text = result.finalText;
     } catch {
-      answer = "";
+      text = "";
     } finally {
       clearTimeout(timer);
     }
+    const reply = parseLiveReply(text, workers);
+    let answer = reply.answer.length > 2000 ? `${reply.answer.slice(0, 1999)}…` : reply.answer;
+    // No usable routing line: pass it on. A dropped instruction costs far more than an extra note to the lead.
+    if (reply.forward || !reply.decided) {
+      this.enqueueInstruction(session, prompt, reply.forward?.targetWorkerId, answer || (text ? "" : "지금 바로 답하지 못했습니다."));
+      return session;
+    }
     if (!answer) answer = "로그에서 상태를 정리하지 못했습니다. 작업은 그대로 진행 중입니다.";
-    if (answer.length > 2000) answer = `${answer.slice(0, 1999)}…`;
-    this.event(session, "grok", "message", answer, { metadata: { live: "status", ambiguous, prompt } });
+    this.event(session, "grok", "message", answer, { metadata: { live: "status", ambiguous: false, prompt } });
     return session;
   }
 

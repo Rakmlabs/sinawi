@@ -18,7 +18,7 @@ test("a running session answers status from the log and delivers a directive on 
   const calls: RunCliOptions[] = [];
   const runner = async (options: RunCliOptions) => {
     calls.push(options);
-    if (options.readOnly) return { exitCode: 0, finalText: "B가 npm test를 실행 중입니다." };
+    if (options.usageContext?.role === "status") return { exitCode: 0, finalText: liveReply(options.prompt) };
     if (options.usageContext?.role === "worker") {
       options.onLine({ type: "command", text: "npm test" });
       if (!blocked) {
@@ -41,9 +41,9 @@ test("a running session answers status from the log and delivers a directive on 
   await waitFor(() => session.events.some((event) => event.type === "command" && event.text === "npm test"));
   const workerSignal = calls.find((call) => call.usageContext?.role === "worker")?.signal;
 
-  await orchestra.liveTurn(session.id, "뭐하고 있어?");
+  await orchestra.liveTurn(session.id, "작업아직 하고있는거야?");
   assert.equal(session.status, "running");
-  const statusCall = calls.find((call) => call.readOnly);
+  const statusCall = calls.find((call) => call.usageContext?.role === "status");
   assert.ok(statusCall);
   assert.equal(statusCall.agent, "grok");
   assert.equal(statusCall.model, "grok-4.7-build-fast");
@@ -56,20 +56,17 @@ test("a running session answers status from the log and delivers a directive on 
   assert.equal(statusEvent?.text, "B가 npm test를 실행 중입니다.");
   assert.equal(statusEvent?.metadata?.ambiguous, false);
 
-  const beforeDirective = calls.length;
+  assert.equal(session.pendingInstructions, undefined, "a question is answered, not queued");
+
   await orchestra.liveTurn(session.id, "B한테 A부터 보라고 해");
-  assert.equal(calls.length, beforeDirective);
   assert.equal(session.status, "running");
-  assert.match(session.events.find((event) => event.metadata?.live === "directive")?.text ?? "", /B의 다음 턴/);
+  assert.match(session.events.findLast((event) => event.metadata?.live === "directive")?.text ?? "", /B의 다음 턴/);
   assert.equal(session.pendingInstructions?.some((item) => item.targetWorkerId === "claude-2"), true);
 
-  const beforeUnclear = calls.length;
   for (const instruction of ["옆 문서를 먼저", "추가로 모든 함수에 JSDoc 주석도 달아줘."]) {
     await orchestra.liveTurn(session.id, instruction);
     assert.equal(session.pendingInstructions?.some((item) => item.text === instruction && !item.targetWorkerId), true, `${instruction} reaches the lead`);
   }
-  assert.equal(calls.length, beforeUnclear, "an unclear message is queued, not answered by a status run");
-  assert.equal(session.events.some((event) => event.metadata?.ambiguous), false);
 
   releaseWorker();
   await waitFor(() => session.status !== "running");
@@ -102,17 +99,27 @@ test("a status agent failure leaves the running task untouched", async () => {
   await waitFor(() => callsWaiting(session));
   await orchestra.liveTurn(session.id, "뭐하고 있어?");
   assert.equal(session.status, "running");
-  assert.match(session.events.find((event) => event.metadata?.live === "status")?.text ?? "", /그대로 진행/);
+  assert.match(session.events.find((event) => event.metadata?.live === "directive")?.text ?? "", /답하지 못했습니다\.\n\n총괄의 다음 턴에 전달합니다/);
+  assert.equal(session.pendingInstructions?.[0]?.text, "뭐하고 있어?", "the message is not lost");
   await orchestra.liveTurn(session.id, "중지");
   assert.equal(session.status, "stopped");
   releaseWorker();
 });
 
+/** Stands in for the fast model: answers questions, routes everything else. */
+function liveReply(prompt: string): string {
+  const message = prompt.split("사용자 메시지:\n")[1] ?? "";
+  if (/하고있|뭐하고/.test(message)) return "B가 npm test를 실행 중입니다.\n<<NO_FORWARD>>";
+  if (/^B한테/.test(message)) return "B에게 전달합니다.\n<<FORWARD to=\"claude-2\">>";
+  if (/JSDoc/.test(message)) return "총괄에게 전달합니다.\n<<FORWARD to=\"lead\">>";
+  return "알겠습니다.";
+}
+
 function callsWaiting(session: { events: Array<{ type: string; role?: string }> }): boolean {
   return session.events.some((event) => event.type === "delegation");
 }
 
-test("a live status question obeys the workspace agent policy like any other run", async () => {
+test("without Grok in the workspace, a live message skips the reply run and still reaches the lead", async () => {
   let releaseWorker = () => {};
   const workerGate = new Promise<void>((resolve) => { releaseWorker = () => resolve(); });
   const calls: RunCliOptions[] = [];
@@ -128,10 +135,9 @@ test("a live status question obeys the workspace agent policy like any other run
   const session = await orchestra.create({ prompt: "조사", agent: "codex", workers: ["claude"], cwd: process.cwd() });
   await waitFor(() => callsWaiting(session));
   allowed = ["codex", "claude"];
-  const eventsBefore = session.events.length;
-  await assert.rejects(orchestra.liveTurn(session.id, "뭐하고 있어?"), /Grok Build/);
-  assert.equal(calls.some((call) => call.readOnly), false, "Grok must not be spawned when the workspace forbids it");
-  assert.equal(session.events.length, eventsBefore);
+  await orchestra.liveTurn(session.id, "뭐하고 있어?");
+  assert.equal(calls.some((call) => call.usageContext?.role === "status"), false, "Grok must not be spawned when the workspace forbids it");
+  assert.equal(session.pendingInstructions?.[0]?.text, "뭐하고 있어?");
   assert.equal(session.status, "running");
   await orchestra.stop(session.id);
   releaseWorker();

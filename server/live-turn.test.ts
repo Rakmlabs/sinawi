@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyLiveMessage, instructionSuffix, pushInstruction, statusDigest, statusPrompt, takePending, STATUS_AGENT_MODEL } from "./live-turn.js";
+import { classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, statusDigest, takePending, STATUS_AGENT_MODEL } from "./live-turn.js";
 import type { Session, SessionEvent } from "./types.js";
 
 const workers = [
@@ -47,8 +47,9 @@ test("status digest keeps each worker's recent tools, errors and delegations", (
   assert.match(digest, /delegation: 테스트 실행/);
   assert.match(digest, /대기 중인 지시/);
   assert.doesNotMatch(digest, /이전 상태 답/);
-  const prompt = statusPrompt("뭐하고 있어?", digest);
+  const prompt = liveReplyPrompt("뭐하고 있어?", digest, [{ id: "claude-2", label: "B", agent: "claude" }]);
   assert.match(prompt, /파일을 수정하지 말고/);
+  assert.match(prompt, /<<FORWARD to="claude-2">>  B에게만 전달/);
   assert.match(prompt, /도구를 호출하지 말고/);
   assert.match(prompt, /npm test/);
   assert.equal(STATUS_AGENT_MODEL, "grok-4.7-build-fast");
@@ -69,4 +70,13 @@ test("pending instructions stay with the named worker until that worker's turn",
   assert.equal(takePending(untargeted, "worker", "claude-2").taken.length, 0);
   assert.equal(takePending(untargeted, "orchestrator").taken.length, 1);
   assert.equal(takePending(queued, "planner").taken.length, 0);
+});
+
+test("a live reply's last line says whether the message reaches the team, and whom", () => {
+  const workers = [{ id: "claude-1", label: "A", agent: "claude" as const }];
+  assert.deepEqual(parseLiveReply("총괄이 검증 중입니다.\n<<NO_FORWARD>>", workers), { answer: "총괄이 검증 중입니다.", decided: true });
+  assert.deepEqual(parseLiveReply("버튼 색 변경을 전달합니다.\n<<FORWARD to=\"lead\">>", workers), { answer: "버튼 색 변경을 전달합니다.", forward: { targetWorkerId: undefined }, decided: true });
+  assert.deepEqual(parseLiveReply("A에게 전달합니다.\n<<FORWARD to=\"claude-1\">>", workers).forward, { targetWorkerId: "claude-1" });
+  assert.deepEqual(parseLiveReply("전달\n<<FORWARD to=\"nobody\">>", workers).forward, { targetWorkerId: undefined }, "an unknown worker means the lead");
+  assert.deepEqual(parseLiveReply("그냥 답만", workers), { answer: "그냥 답만", decided: false });
 });
