@@ -9,6 +9,7 @@ import { names } from "./labels";
 import type { AttachmentsState } from "./useAttachments";
 import type { ComposerCompletion } from "./useComposerCompletion";
 import type { AgentId, PermissionMode, Session, SkillInfo as Skill } from "../../server/types";
+import { GlassSelect } from "../GlassSelect";
 import { t } from "../i18n";
 import { isWorkspacePolicyMessage } from "../../server/workspace-policy";
 import { Beat } from "../Beat";
@@ -285,11 +286,10 @@ export function Composer(props: ComposerProps) {
           <button type="button" aria-pressed={mode === "auto"} disabled={busy} title={t("comp.autoTitle")} onClick={() => setMode("auto")}>{t("comp.auto")}</button>
           <button type="button" aria-pressed={mode === "manual"} disabled={busy} title={t("comp.manualTitle")} onClick={() => setMode("manual")}>{t("comp.manual")}</button>
         </div>}
-        <div className="routing-mode permission-mode" role="group" aria-label={t("comp.permissionMode")} title={t("comp.permissionMode")}>
-          <ShieldCheck size={13} aria-hidden="true" className="permission-mode-icon" />
-          {permissionModes(props.fullAccessAllowed).map((item) => <button key={item.mode} type="button" aria-pressed={props.permissionMode === item.mode} disabled={busy || sessionRunning}
-            className={item.mode === "full" ? "danger" : undefined} title={item.title} onClick={() => props.setPermissionMode(item.mode)}>{item.label}</button>)}
-        </div>
+        <GlassSelect label={t("comp.permissionMode")} value={props.permissionMode} disabled={busy || sessionRunning}
+          className={`permission-picker${props.permissionMode === "full" ? " danger" : ""}`}
+          onChange={(value) => props.setPermissionMode(value as PermissionMode)}
+          options={permissionModes(props.fullAccessAllowed).map((item) => ({ value: item.mode, label: item.label, title: item.title, icon: <ShieldCheck size={13} aria-hidden="true" /> }))} />
         <span className="composer-bottom-spacer" />
         <input ref={fileInput} type="file" multiple hidden onChange={(event) => { attachFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
         <button type="button" className="icon-button" aria-label={t("comp.attachFile")} title={t("comp.attachTitle")} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>

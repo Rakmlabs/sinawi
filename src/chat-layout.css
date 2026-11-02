@@ -491,7 +491,7 @@ body,
   min-width: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   margin-left: -6px;
 }
@@ -534,9 +534,10 @@ body,
 }
 
 .composer-bottom .routing-mode button[aria-pressed="true"] { background: var(--bg-raised); box-shadow: var(--shadow-sm); color: var(--text); }
-.composer-bottom .permission-mode button.danger[aria-pressed="true"] { color: var(--danger-fg); }
-.composer-bottom .permission-mode { display: flex; align-items: center; }
-.composer-bottom .permission-mode-icon { margin: 0 2px 0 6px; color: var(--text-muted); flex: 0 0 auto; }
+.composer-bottom .permission-picker { flex: 0 1 auto; width: 118px; min-width: 76px; }
+.composer-bottom .permission-picker .glass-select-control { min-height: 30px; background: var(--bg-inset); border-color: transparent; color: var(--text-secondary); }
+.composer-bottom .permission-picker .glass-select-control input { padding: 4px 2px 4px 6px; font-size: calc(12px * var(--font-scale)); cursor: pointer; }
+.composer-bottom .permission-picker.danger .glass-select-control { color: var(--danger-fg); }
 .message .execute-plan { margin-top: 10px; }
 
 .composer-bottom .session-group-control {
@@ -834,6 +835,10 @@ body,
 }
 
 @media (max-width: 740px), (pointer: coarse) {
+  .composer-bottom { flex-wrap: wrap; row-gap: 6px; }
+  .composer-bottom .permission-picker { width: 96px; }
+  .composer-bottom .routing-mode button { padding: 0 8px; }
+
   .composer-bottom .directory-button,
   .composer-bottom .routing-mode,
   .composer-bottom .session-group-control,
