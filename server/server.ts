@@ -6,6 +6,7 @@ import { isComputerUseAllowed } from "./workspace-policy.js";
 import { computerContextForToken, computerDir, pruneComputerTokens } from "./computer-tokens.js";
 import { DevServerManager } from "./dev-servers.js";
 import { registerServeRoutes, watchServeQueue } from "./serve-tool.js";
+import { registerSimRoutes, watchSimQueue } from "./sim-tool.js";
 import { cliChildEnv } from "./supervision.js";
 import { fullPath } from "./cli-path.js";
 import { envVar } from "./runtime.js";
@@ -522,6 +523,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   process.once("exit", () => devServers.stopAll("SIGKILL"));
   registerServeRoutes(app, devServers);
   if (options.browserQueue) { const stop = watchServeQueue(devServers); httpServer.once("close", stop); }
+  registerSimRoutes(app);
+  if (options.browserQueue) { const stop = watchSimQueue(); httpServer.once("close", stop); }
   app.use("/api", async (_req, _res, next) => { await ready; next(); });
 
   terminal.registerRoutes(app);

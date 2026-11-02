@@ -5,6 +5,7 @@ import { envVar, runtimeOptions } from "./runtime.js";
 import { installBrowserTooling } from "./browser-bridge.js";
 import { installComputerTooling } from "./computer-bridge.js";
 import { installServeTooling } from "./serve-tool.js";
+import { installSimTooling } from "./sim-tool.js";
 import { killCliProcessGroups } from "./cli.js";
 
 const port = Number(envVar("PORT") ?? 3001);
@@ -14,6 +15,7 @@ const { httpServer, websocket, orchestra, terminal, flushSessions } = createServ
 void installBrowserTooling().catch((error) => console.error("ao-browser 설치 실패:", error.message));
 void installComputerTooling().catch((error) => console.error("ao-computer 설치 실패:", error.message));
 void installServeTooling().catch((error) => console.error("ao-serve 설치 실패:", error.message));
+void installSimTooling().catch((error) => console.error("ao-sim 설치 실패:", error.message));
 
 httpServer.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") console.error(`포트 ${port}이 이미 사용 중입니다.`);

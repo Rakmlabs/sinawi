@@ -8,7 +8,7 @@ import type { DevServerManager, DevServerView } from "./dev-servers.js";
 /** `ao-serve`: agents ask the app to run their dev servers (see dev-servers.ts). */
 export const SERVE_OPS = ["start", "list", "logs", "stop"] as const;
 type ServeOp = (typeof SERVE_OPS)[number];
-type ServeOut = { ok: boolean; error?: string; result?: unknown };
+export type ServeOut = { ok: boolean; error?: string; result?: unknown };
 
 const TOKEN_MESSAGE = "ao-serve는 Sinawi가 실행한 세션 안에서만 쓸 수 있습니다 (SINAWI_COMPUTER_TOKEN).";
 
@@ -53,6 +53,14 @@ export const serveQueueDir = () => join(computerDir(), "serve");
 
 /** File-queue fallback for sandboxes without loopback network (Codex workspace-write). */
 export function watchServeQueue(manager: DevServerManager, dir = serveQueueDir(), intervalMs = 150) {
+  return watchRequestQueue(dir, (raw) => handleServe(manager, String(raw.op), raw), "ao-serve", intervalMs);
+}
+
+/**
+ * Serves `<id>.req.json` → `<id>.res.json` for the ao-* CLIs whose sandbox has no loopback network:
+ * the CLI writes a request into `dir` and polls for the response file.
+ */
+export function watchRequestQueue(dir: string, handle: (raw: Record<string, unknown>) => Promise<ServeOut>, label: string, intervalMs = 150) {
   const busy = new Set<string>();
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
@@ -69,11 +77,11 @@ export function watchServeQueue(manager: DevServerManager, dir = serveQueueDir()
           try {
             const raw = JSON.parse(await readFile(join(dir, name), "utf8")) as Record<string, unknown>;
             await rm(join(dir, name), { force: true });
-            out = await handleServe(manager, String(raw.op), raw);
+            out = await handle(raw);
           } catch (error) { out = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
           await writeFile(join(dir, `${base}.res.tmp`), JSON.stringify(out));
           await rename(join(dir, `${base}.res.tmp`), join(dir, `${base}.res.json`));
-        })().catch((error) => console.error("ao-serve 응답 저장 실패:", error instanceof Error ? error.message : error)).finally(() => busy.delete(name));
+        })().catch((error) => console.error(`${label} 응답 저장 실패:`, error instanceof Error ? error.message : error)).finally(() => busy.delete(name));
       }
     } catch { /* ignore */ }
     if (!stopped) timer = setTimeout(tick, intervalMs);
