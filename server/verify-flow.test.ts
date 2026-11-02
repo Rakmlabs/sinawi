@@ -50,6 +50,19 @@ test("partial or blocked reports still go to the lead, with the original request
   assert.match(review.prompt, /원래 사용자 요청:\n기존꺼로 롤백해줘/);
 });
 
+test("a lead that gives up on a blocked worker ends the run as an error, not 완료", async () => {
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") return { exitCode: 0, finalText: "상태: 막힘\n개발 서버가 뜨지 않습니다." };
+    return { exitCode: 0, finalText: options.readOnly ? "다시 맡겨도 같은 곳에서 막힙니다." : delegate };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "UI 점검", agent: "claude", workers: ["claude"], cwd: process.cwd() });
+  await settle(session);
+  assert.equal(session.status, "error");
+  assert.ok(!session.events.some((event) => event.text === "세션이 완료되었습니다."));
+  assert.match(session.events.at(-1)?.text ?? "", /작업은 끝나지 않았습니다/);
+});
+
 test("a review the CLI cancels hands over the worker reports instead of ending silently", async () => {
   const runner = async (options: RunCliOptions) => {
     if (options.usageContext?.role === "worker") return { exitCode: 0, finalText: "상태: 막힘\npush가 거부됐습니다." };
