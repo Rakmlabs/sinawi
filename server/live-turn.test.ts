@@ -20,6 +20,8 @@ test("running messages classify as status, directive, stop, or ambiguous", () =>
   assert.deepEqual(classifyLiveMessage("B 확인해", workers).intent, "ambiguous");
   assert.equal(classifyLiveMessage("B 확인해", workers).targetWorkerId, "claude-2");
   assert.equal(classifyLiveMessage("상태 알려줘", workers).intent, "status");
+  for (const text of ["작업아직 하고있는거야?", "멈춘 거야?", "끝났어?", "왜 안 끝나", "다 됐어?"]) assert.equal(classifyLiveMessage(text, workers).intent, "status", text);
+  assert.notEqual(classifyLiveMessage("아직이면 버튼 색도 바꿔줘", workers).intent, "status", "a request with a progress word still reaches the agent");
   assert.equal(classifyLiveMessage("그거 한번 봐\n\n```orchestra-attachments\n확인해 줘\n```", workers).intent, "ambiguous");
   assert.equal(classifyLiveMessage("중지\n\n```orchestra-attachments\nstop\n```", workers).intent, "stop");
 });

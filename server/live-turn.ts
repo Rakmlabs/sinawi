@@ -76,6 +76,8 @@ function isBareWorkerQuestion(text: string, workers: LiveWorker[]): boolean {
   return workers.some((worker) => keysFor(worker, workers).some((key) => new RegExp(`^${escapeRegExp(key)}(?:\\s*(?:는|은|이))?\\s*[?？]?$`, "iu").test(text)));
 }
 
+const progressQuestion = /(?:하고\s*있|하는\s*중|아직|멈춘|멈췄|멈춰\s*있|끝났|끝난\s*거|다\s*됐|됐어|살아\s*있|안\s*끝나|왜\s*안|얼마나\s*남|언제\s*끝)/u;
+
 function isStatusQuestion(text: string, workers: LiveWorker[]): boolean {
   if (isBareWorkerQuestion(text, workers)) return true;
   return /(?:뭐\s*하|뭐\s*해|뭐야|뭐니|상태|진행|어디까지|어떻게\s*되|상황)/u.test(text);
@@ -87,8 +89,9 @@ export function classifyLiveMessage(text: string, workers: LiveWorker[] = []): L
   if (!raw) return { intent: "ambiguous" };
   if (stopPattern.test(raw)) return { intent: "stop" };
   const target = workerByAddress(raw, workers) ?? workerByMention(raw, workers);
-  const asks = isStatusQuestion(raw, workers);
   const orders = isDirective(raw);
+  // "아직 하고 있어?", "멈춘 거야?", "끝났어?": a progress question, unless it also gives an order.
+  const asks = isStatusQuestion(raw, workers) || (!orders && !/(?:줘|주세요|해라)/u.test(raw) && progressQuestion.test(raw));
   const targetWorkerId = target?.id;
   if (orders && !asks) return { intent: "directive", targetWorkerId };
   const hardOrder = /(?:하라고|시켜|부터\s*봐|보라고)/u.test(raw);
