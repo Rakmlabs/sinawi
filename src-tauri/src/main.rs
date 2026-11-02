@@ -338,3 +338,23 @@ fn main() {
     app.run(|_app_handle, _event| {});
 }
 
+
+#[cfg(test)]
+mod acl_tests {
+    /// The UI is a remote origin to Tauri, so a command missing from build.rs or the capabilities
+    /// fails at runtime with "not allowed by ACL" while dev mode (local origin) still works.
+    #[test]
+    fn every_registered_command_is_allowed() {
+        let main = include_str!("main.rs");
+        let start = main.find("generate_handler![").expect("handler list") + "generate_handler![".len();
+        let list = &main[start..start + main[start..].find(']').unwrap()];
+        let build = include_str!("../build.rs");
+        let capabilities = [include_str!("../capabilities/default.json"), include_str!("../capabilities/dev.json")];
+        for name in list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            let name = name.rsplit("::").next().unwrap();
+            assert!(build.contains(&format!("\"{name}\"")), "{name} missing from build.rs COMMANDS");
+            let permission = format!("\"allow-{}\"", name.replace('_', "-"));
+            for capability in capabilities { assert!(capability.contains(&permission), "{permission} missing from a capability"); }
+        }
+    }
+}
