@@ -12,7 +12,7 @@ import type { AutoSwitchRecommendation } from "./auto-routing.js";
 import { allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, fullAccessBlockedMessage, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
-import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
+import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, STATUS_AGENT_MODEL, statusDigest, statusPrompt, takePending, type LiveWorker } from "./live-turn.js";
 
@@ -347,7 +347,7 @@ export class Orchestra {
     const workerContext = workers.map((worker) => `${worker.id}: ${worker.sessionMode !== "new" && workerSessionId(session, worker.id!) ? "이전 작업의 맥락을 가진 세션을 이어서 사용합니다. 기존 설명을 반복하지 않고 후속 작업을 지시할 수 있습니다." : "새 세션으로 시작합니다. 필요한 맥락을 전달하세요."}`).join("\n");
     const exampleWorker = workers[0]?.id ?? "claude";
     const worktreeNotice = await this.worktreeNotice(session);
-    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 선택되지 않은 워커에게 위임하지 마세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}`;
+    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 선택되지 않은 워커에게 위임하지 마세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}`;
     const planningContext = plan ? `\n\n계획 전문 에이전트가 작성한 실행 계획:\n${plan}` : "";
     const handoffContext = session.handoffContext ? `\n\n이전 오케스트라의 대화 요약:\n${session.handoffContext}` : "";
     const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";

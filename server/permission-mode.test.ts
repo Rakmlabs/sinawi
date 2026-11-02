@@ -55,3 +55,17 @@ test("full access needs the workspace switch; sessions without a mode follow it"
   await settle(legacy);
   assert.equal(calls.at(-1)?.fullAccess, true, "a session without a mode keeps the old workspace behaviour");
 });
+
+test("auto never stops to ask the user; only plan mode collects questions", async () => {
+  const prompts: string[] = [];
+  const orchestra = orchestraWith(defaultWorkspacePolicy(), async (options) => { prompts.push(options.prompt); return { exitCode: 0, finalText: "답" }; });
+  for (const permissionMode of ["auto", "plan"] as const) {
+    const session = await orchestra.create({ prompt: "기존꺼로 돌려줘", agent: "codex", workers: ["claude"], cwd: process.cwd(), permissionMode });
+    await settle(session);
+  }
+  assert.match(prompts[0], /사용자에게 되묻지 않는다/);
+  assert.doesNotMatch(prompts[0], /확인을 받는다|어느 쪽인지 묻는다/);
+  assert.match(prompts[0], /스킬/);
+  assert.match(prompts[1], /모호한 점은 계획 끝에 질문으로/);
+  assert.doesNotMatch(prompts[1], /되묻지 않는다/);
+});
