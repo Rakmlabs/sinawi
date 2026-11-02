@@ -79,6 +79,23 @@ export async function userWorktrees(cwd: string, dataDir: string): Promise<{ pat
   });
 }
 
+/**
+ * Git facts for the review run, run by the app: the Grok reviewer has no shell, and without these it
+ * read .git files one by one. Local status, recent commits and the remote default branch.
+ */
+export async function repoSnapshot(cwd: string): Promise<string> {
+  if (!await gitRepo(cwd)) return "";
+  const [status, log, remoteHead] = await Promise.all([
+    tryGit(cwd, ["status", "--short", "--branch"]),
+    tryGit(cwd, ["log", "--oneline", "-5"]),
+    tryGit(cwd, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
+  ]);
+  const remote = remoteHead?.trim();
+  const remoteLog = remote ? await tryGit(cwd, ["log", "--oneline", "-5", remote]) : undefined;
+  const block = (title: string, body?: string) => body?.trim() ? `${title}\n\`\`\`\n${body.trim().split("\n").slice(0, 30).join("\n")}\n\`\`\`` : "";
+  return ["## git 상태 (앱이 지금 실행한 결과, 원격은 마지막 fetch·push 기준)", block("`git status --short --branch`", status), block("`git log --oneline -5`", log), remote ? block(`\`git log --oneline -5 ${remote}\``, remoteLog) : ""].filter(Boolean).join("\n");
+}
+
 async function hasUncommitted(path: string): Promise<boolean> {
   return Boolean((await tryGit(path, ["status", "--porcelain", "--untracked-files=normal"]))?.trim());
 }

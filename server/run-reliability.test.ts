@@ -34,7 +34,7 @@ test("read-only review runs keep read tools; plain read-only runs stay tool-free
   const plainClaude = buildInvocation({ agent: "claude", prompt: "route", cwd: "/tmp/p", readOnly: true });
   assert.equal(plainClaude.args[plainClaude.args.indexOf("--tools") + 1], "");
   const plainGrok = buildInvocation({ agent: "grok", prompt: "route", cwd: "/tmp/p", readOnly: true });
-  assert.deepEqual(plainGrok.args.slice(-5), ["--tools", "", "--deny", "*", "--disable-web-search"]);
+  assert.deepEqual(plainGrok.args.slice(-7), ["--tools", "", "--disallowed-tools", "search_tool,use_tool", "--deny", "*", "--disable-web-search"]);
 });
 
 test("the orchestrator's verification run asks for read tools, workers do not run read-only", async () => {

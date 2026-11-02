@@ -74,6 +74,8 @@ const developmentBashRules = DEVELOPMENT_SHELL_PROGRAMS.map((command) => `Bash($
 /** Read-only verification profile (see RunCliOptions.readTools). Plan mode still refuses edits. */
 export const CLAUDE_READ_TOOLS = ["Read", "Grep", "Glob", "Bash"] as const;
 export const GROK_READ_TOOLS = "read_file,list_dir,grep";
+/** Grok's gateway to MCP servers (find a tool, then call it). */
+export const GROK_MCP_TOOLS = "search_tool,use_tool";
 /**
  * Pure read commands for the review profile. Nothing here runs project code (no test runners:
  * workers run tests, the reviewer reads their evidence) and nothing writes: the deny rules below
@@ -129,8 +131,9 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
   if (model) args.push("--model", model);
   // Grok rejects extra directories ("additionalDirectories is not supported"); its read tools take
   // absolute paths, so the worktree paths in the review note are enough.
-  if (readOnly && readTools) args.push("--tools", GROK_READ_TOOLS, "--permission-mode", "plan", "--disable-web-search");
-  else if (readOnly) args.push("--tools", "", "--deny", "*", "--disable-web-search");
+  // MCP tools stay on unless removed: the reviewer reached for a shell through them, which cancels a headless run.
+  if (readOnly && readTools) args.push("--tools", GROK_READ_TOOLS, "--disallowed-tools", GROK_MCP_TOOLS, "--permission-mode", "plan", "--disable-web-search");
+  else if (readOnly) args.push("--tools", "", "--disallowed-tools", GROK_MCP_TOOLS, "--deny", "*", "--disable-web-search");
   else if (full) args.push("--permission-mode", "bypassPermissions", "--always-approve");
   else {
     // Headless Grok cancels the whole run when a command isn't pre-allowed (e.g. `cd x && ffprobe`);

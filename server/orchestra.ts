@@ -13,7 +13,7 @@ import { allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, loc
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
-import { ensureWorkerWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
+import { ensureWorkerWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, STATUS_AGENT_MODEL, statusDigest, statusPrompt, takePending, type LiveWorker } from "./live-turn.js";
 
 const delegationPattern = /<<DELEGATE\s+to=["']([\w.-]{1,100})["']>>(.*?)<<\/DELEGATE>>/gis;
@@ -74,6 +74,11 @@ function titleFrom(prompt: string) {
   const compact = prompt.replace(/\s+/g, " ").trim();
   return compact.length > 48 ? `${compact.slice(0, 47)}…` : compact || "새 세션";
 }
+
+/** A worker's result block as built in execute(): "[label 결과]\n" + the report. */
+const REPORT_HEADER = /^\[[^\]\n]*결과\]\n/u;
+/** The report opens with "상태: 완료" (not "부분 완료" or "막힘"), optionally in bold. */
+const CLEAN_REPORT = /^\[[^\]\n]*결과\]\n\s*(?:\*\*)?상태(?:\*\*)?\s*:\s*(?:\*\*)?완료/u;
 
 export class Orchestra {
   private sessions = new Map<string, Session>();
@@ -422,17 +427,31 @@ export class Orchestra {
       // The user said no to computer use: end the run instead of letting the lead look for workarounds.
       const halt = this.computerHalt?.(session.id, runStartedAt);
       if (halt) throw new Error(halt === "denied" ? "사용자가 컴퓨터 조작을 거부해 작업을 멈췄습니다." : "사용자가 컴퓨터 조작을 중지해 작업을 멈췄습니다.");
+      // Like Claude Code and Codex, a worker report that says "상태: 완료" is the answer: no second,
+      // context-poor review run (it took as long as the work itself and was often cancelled).
+      if (workerResults.length && workerResults.every((text) => CLEAN_REPORT.test(text))) {
+        this.event(session, session.agent, "message", workerResults.map((text) => workerResults.length === 1 ? text.replace(REPORT_HEADER, "") : text).join("\n\n"), { role: "orchestrator", metadata: { phase: "worker-report", round } });
+        return this.finish(session);
+      }
       const roundsLeft = maxReplanRounds - round;
-      const originalContext = session.cliSessionId ? "" : `\n\n원래 사용자 요청:\n${userPrompt}\n\n당신의 첫 응답:\n${first.finalText}`;
+      // The review is a fresh CLI session: without this it never sees what the user asked for.
+      const originalContext = `\n\n원래 사용자 요청:\n${userPrompt}\n\n당신의 첫 응답:\n${first.finalText}`;
       this.event(session, session.agent, "status", round === 0 ? "총괄이 워커 결과를 검증하고 있습니다." : `총괄이 재계획 ${round}회차 결과를 검증하고 있습니다.`, { role: "orchestrator", metadata: { phase: "verify", round } });
       const roundFailed = workerResults.some((text) => /^\[[^\]]*결과 — (앱이 정체를 감지해 중단함|중단됨)/u.test(text));
       const strict = roundFailed && roundsLeft > 0 && session.agent === "grok";
       const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()]).catch(() => "");
-      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${worktreeNote ? `\n\n${worktreeNote}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
+      const gitFacts = await repoSnapshot(session.cwd).catch(() => "");
+      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
       const reviewStart = session.events.length;
       let review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
       if (controller.signal.aborted) return this.finishStopped(session, controller);
       if (review.exitCode !== 0) throw new Error(`${agentNames[session.agent]} 후속 실행이 종료 코드 ${review.exitCode}로 끝났습니다.`);
+      // Exit code 0 but the CLI stopped early: hand over the workers' reports instead of a silent "완료".
+      if (session.events.slice(reviewStart).some((event) => event.type === "error" && event.role === "orchestrator" && /중단되었습니다 \(/u.test(event.text))) {
+        this.event(session, session.agent, "warning", "총괄 검증이 중간에 끊겼습니다. 아래는 검증하지 못한 워커 보고입니다.", { role: "orchestrator", metadata: { phase: "verify-cut", round } });
+        this.event(session, session.agent, "message", workerResults.join("\n\n"), { role: "orchestrator", metadata: { phase: "worker-report", round } });
+        return this.finish(session);
+      }
       let next = roundsLeft > 0 ? resolveRequests(review.finalText) : [];
       if (roundFailed && !next.length) {
         const selfWork = session.events.slice(reviewStart).filter((event) => event.role === "orchestrator" && (event.type === "edit" || event.type === "command" || event.type === "tool") && /^(명령|파일 (수정|쓰기|생성)|편집|쓰기)\s*:/u.test(event.text));

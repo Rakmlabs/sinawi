@@ -117,6 +117,7 @@ export const WORKER_RULES = `## 작업자 운영 규칙 (Sinawi)
 - 라이브러리, 명령, 스크립트가 있다고 가정하지 않는다. package.json, Cargo.toml, requirements, 저장소 스크립트에서 확인한다.
 - 다른 작업자나 사용자가 만든 변경은 되돌리지 않는다. 내가 만든 변경도 오류를 고치려는 경우가 아니면 되돌리지 않는다.
 - 수정하는 파일을 포함하는 가장 가까운 AGENTS.md, CLAUDE.md, GEMINI.md를 따른다. 더 깊은 폴더가 우선하고, 이 브리프와 사용자 지시가 그 파일보다 우선한다.
+- CI·배포 결과는 \`gh run watch\`로 run 전체를 기다리지 않는다. \`gh run view <id> --json status,conclusion,jobs\`로 확인하고, 필요한 job(build·deploy 등) 결과가 나오면 advisory 같은 남은 job을 기다리지 말고 보고한다.
 - 끝났다고 보고하기 전에 브리프의 검증을 직접 실행하고 증거(명령과 출력 요지, 경로)를 남긴다. 검증하지 못했으면 '부분 완료'라고 쓴다.
 - 지시받지 않은 범위로 넓히지 않는다. 승인이 필요한 결정은 하지 말고 보고한다. 최종 보고 끝에 질문이나 추가 제안을 붙이지 않는다.
 - 최종 보고 형식:
@@ -132,7 +133,7 @@ ${COMPUTER_CORE}`;
  * Programs pre-approved for headless Claude (`--allowedTools`) and Grok (`--allow`).
  * A Grok command outside this list cancels the whole run, because nobody can approve a prompt.
  */
-export const DEVELOPMENT_SHELL_PROGRAMS = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq"] as const;
+export const DEVELOPMENT_SHELL_PROGRAMS = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer"] as const;
 
 /** Harness-specific corrections appended after the shared rules. */
 export function cliNotes(agent: AgentId, role: "orchestrator" | "worker"): string {
@@ -369,7 +370,7 @@ export function reviewPrompt(results: string[], originalContext: string, roundsL
 - 이번 워커 변경만 보세요. 기존에 있던 버그는 빼세요.
 - 심각도: [P0] 깨짐, [P1] 이번 변경의 회귀, [P2] 빠진 테스트, [P3] 이번 변경의 다른 결함. 파일과 이유를 한 단락으로 쓰세요. 없으면 "발견 없음".
 - 각 보고를 원래 요청과 위임 때 정한 완료 기준에 하나씩 대조하세요. '완료'라고만 하고 증거(명령 출력, 테스트 결과, 경로)가 없으면 미확인으로 취급하세요. UI 증명은 ao-browser snapshot 또는 screenshot 경로입니다. 외부 브라우저와 Playwright로 연 결과는 완료 증거로 받지 않습니다.
-- 보고의 증거를 그대로 믿지 마세요. 파일 읽기와 git diff/status/log/show로 다시 확인하세요. 테스트·빌드·스크립트는 직접 실행하지 마세요(이 검토 권한으로는 실행되지 않습니다). 워커 보고에 남은 테스트 명령과 출력을 읽고, 증거가 없거나 의심스러우면 다시 실행을 <<DELEGATE>>로 워커에게 맡기세요.
+- 보고의 증거를 그대로 믿지 마세요. 아래 git 상태(앱이 직접 실행한 결과)와 파일 읽기로 확인하세요. .git 폴더 내부 파일은 읽지 마세요. 테스트·빌드·스크립트는 직접 실행하지 마세요(이 검토 권한으로는 실행되지 않습니다). 워커 보고에 남은 테스트 명령과 출력을 읽고, 증거가 없거나 의심스러우면 다시 실행을 <<DELEGATE>>로 워커에게 맡기세요.
 - 보고할 문제만 적으세요: 테스트·타입 실패, 입력과 상관없이 틀리는 로직, 브리프 제약 위반, 요청 범위를 벗어난 변경. 스타일 취향, 추측, 원래부터 있던 문제는 빼세요.
 - 필요하면 읽기 전용으로 직접 확인하세요(파일 읽기, 워커가 남긴 테스트 출력 읽기). 확인하지 못한 것을 완료라고 쓰지 마세요.${replan}
 - 최종 답은 결과, 검증 증거, 남은 문제 순으로 짧게 쓰세요. 경로와 명령은 백틱으로 감싸세요.${originalContext}\n\n${results.join("\n\n")}`;
