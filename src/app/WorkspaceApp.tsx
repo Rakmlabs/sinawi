@@ -21,6 +21,7 @@ import { TerminalPanel } from "../TerminalPanel";
 import { NotificationsCenter } from "../NotificationsCenter";
 import { toggleTerminal, terminalOwnsKeyboardEvent, TERMINAL_AUTH_REFRESH_EVENT, TERMINAL_NOTICE_EVENT, type TerminalNotice } from "../terminal-events";
 import { BrowserDesktop, type DesktopRequest } from "../BrowserDesktop";
+import { SIM_DEVICE_STORE, SIM_OPEN_EVENT } from "../sim-panel";
 import type { DesktopMode } from "../desktop-windows";
 import { holdCommand } from "../browser-agent";
 import { browserRegistry } from "../browser-registry";
@@ -158,6 +159,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const viewerApi = useMemo(() => ({ open: openViewer }), [openViewer]);
   useEffect(() => { setViewer(null); }, [selected]);
   const [desktopRequest, setDesktopRequest] = useState<DesktopRequest>({ n: 0 });
+  const [simRequest, setSimRequest] = useState<DesktopRequest>({ n: 0 });
   const [desktopMode, setDesktopMode] = useState<DesktopMode>("none");
   const focusMode = desktopMode !== "none";
   // Sidebar: a docked column on wide windows (persisted), an overlay on narrow ones or over the browser.
@@ -340,6 +342,12 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const onServerMessage = (message: ServerMessage) => {
     if (message.type === "notifications") window.dispatchEvent(new Event("orchestra:notifications"));
     if (message.type === "browser-command") window.dispatchEvent(new CustomEvent("orchestra:browser-command", { detail: message }));
+    // An agent launched an app on a simulator: show that device in the simulator window.
+    if (message.type === "sim-open" && typeof message.udid === "string") {
+      try { localStorage.setItem(SIM_DEVICE_STORE, message.udid); } catch { /* private mode */ }
+      window.dispatchEvent(new CustomEvent(SIM_OPEN_EVENT, { detail: { udid: message.udid } }));
+      setSimRequest((old) => ({ n: old.n + 1 }));
+    }
     if (message.type.startsWith("computer-")) handleComputerMessage(message);
     if (message.type === "sessions") setSessions(message.sessions);
     if (message.type === "groups") setBoot((old) => ({ ...old, groups: message.groups }));
@@ -674,6 +682,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
           workspace={<WorkspaceSwitcher onManage={openWorkspaceSettings} />}
           extra={desktopMode !== "none" && desktopMode !== "max" && tab === "workspace" ? <button type="button" className="header-icon-button" aria-label={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} title={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} aria-pressed={chatCollapsed} onClick={() => setChatCollapsed((value) => !value)}>{chatCollapsed ? <PanelRightOpen size={18} aria-hidden="true" /> : <PanelRightClose size={18} aria-hidden="true" />}</button> : undefined}
           onBrowser={() => showBrowser(false)}
+          onSimulator={() => setSimRequest((old) => ({ n: old.n + 1, toggle: true }))}
           activity={tab === "workspace" ? { open: activityOpen, controls: "activity-panel", onToggle: () => setActivityOpen((value) => !value) } : undefined}
           onTerminal={() => toggleTerminal()} notifications={<NotificationsCenter workspaceId={workspaceId} cwd={shownCwd} connected={connected} onSession={selectConversation} onRefreshAuth={() => { void refreshModels(); }} />} />
         <TerminalPanel storageKey={workspaceId} cwd={shownCwd} homeCwd={boot.homeCwd} onHeightChange={setTerminalHeight} />
@@ -732,7 +741,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         >
           {lastAnnouncement}
         </div>
-        <BrowserDesktop onAttach={addAttachments} request={desktopRequest} onModeChange={setDesktopMode} />
+        <BrowserDesktop onAttach={addAttachments} request={desktopRequest} simRequest={simRequest} onModeChange={setDesktopMode} />
         {chatCollapsed && desktopMode !== "max" && <aside className="chat-rail" aria-label={t("ws.collapsedChat")}>
           <button type="button" onClick={() => setChatCollapsed(false)} aria-label={t("ws.expandChat")} title={t("ws.expandChat")}><PanelRightOpen size={18} /><MessageSquare size={18} /><span>{t("ws.chat")}</span></button>
         </aside>}

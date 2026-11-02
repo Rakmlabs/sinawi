@@ -7,6 +7,7 @@ import { computerContextForToken, computerDir, pruneComputerTokens } from "./com
 import { DevServerManager } from "./dev-servers.js";
 import { registerServeRoutes, watchServeQueue } from "./serve-tool.js";
 import { registerSimRoutes, watchSimQueue } from "./sim-tool.js";
+import { registerSimViewRoutes, SimScreen } from "./sim-view.js";
 import { cliChildEnv } from "./supervision.js";
 import { fullPath } from "./cli-path.js";
 import { envVar } from "./runtime.js";
@@ -523,8 +524,12 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   process.once("exit", () => devServers.stopAll("SIGKILL"));
   registerServeRoutes(app, devServers);
   if (options.browserQueue) { const stop = watchServeQueue(devServers); httpServer.once("close", stop); }
-  registerSimRoutes(app);
-  if (options.browserQueue) { const stop = watchSimQueue(); httpServer.once("close", stop); }
+  const simOptions = { onLaunch: (udid: string) => { const message = JSON.stringify({ type: "sim-open", udid }); for (const client of openClients()) client.send(message); } };
+  registerSimRoutes(app, simOptions);
+  const simScreen = new SimScreen();
+  httpServer.once("close", () => simScreen.stopAll());
+  registerSimViewRoutes(app, simScreen);
+  if (options.browserQueue) { const stop = watchSimQueue(simOptions); httpServer.once("close", stop); }
   app.use("/api", async (_req, _res, next) => { await ready; next(); });
 
   terminal.registerRoutes(app);

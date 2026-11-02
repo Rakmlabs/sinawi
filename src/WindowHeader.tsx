@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode, type Ref } from "react";
-import { Activity, Globe, PanelLeft, SquareTerminal } from "lucide-react";
+import { Activity, Globe, PanelLeft, Smartphone, SquareTerminal } from "lucide-react";
 import { installAppReload } from "./reload";
 import { t } from "./i18n";
 import { SinawiMark } from "./SinawiMark";
@@ -23,6 +23,7 @@ type WindowHeaderProps = {
   workspace?: ReactNode;
   onTerminal?: () => void;
   onBrowser?: () => void;
+  onSimulator?: () => void;
   notifications?: ReactNode;
   /** Activity panel toggle for the open conversation. */
   activity?: { open: boolean; controls: string; onToggle: () => void };
@@ -37,7 +38,7 @@ type WindowHeaderProps = {
  * Every non-interactive element carries data-tauri-drag-region because the drag listener only
  * reacts to direct hits.
  */
-export function WindowHeader({ title, project, runningSince, sidebar, workspace, onTerminal, onBrowser, notifications, activity, extra }: WindowHeaderProps) {
+export function WindowHeader({ title, project, runningSince, sidebar, workspace, onTerminal, onBrowser, onSimulator, notifications, activity, extra }: WindowHeaderProps) {
   useEffect(() => installAppReload(window), []);
   const desktop = isTauri();
   if (!desktop && !sidebar && !onTerminal && !notifications) return null;
@@ -65,6 +66,7 @@ export function WindowHeader({ title, project, runningSince, sidebar, workspace,
         {extra}
         {onTerminal && <button className="header-icon-button" type="button" aria-label={t("header.terminal")} title={t("header.terminalTitle")} onClick={onTerminal}><SquareTerminal size={18} aria-hidden="true" /></button>}
         {onBrowser && <button className="header-icon-button" type="button" aria-label={t("ws.browser")} title={t("ws.browserTitle")} onClick={onBrowser}><Globe size={18} aria-hidden="true" /></button>}
+        {onSimulator && <button className="header-icon-button" type="button" aria-label={t("ws.simulatorTitle")} title={t("ws.simulatorTitle")} onClick={onSimulator}><Smartphone size={18} aria-hidden="true" /></button>}
         <ComputerIndicator />
         {notifications}
         {activity && <button className="header-icon-button" type="button" aria-label={t("activity.label")} title={t("activity.title")} aria-expanded={activity.open} aria-controls={activity.controls} onClick={activity.onToggle}><Activity size={18} aria-hidden="true" /></button>}

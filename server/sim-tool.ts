@@ -31,7 +31,7 @@ export const defaultExec: Exec = (file, args, timeoutMs) => new Promise((resolve
 
 type Device = { udid: string; name: string; runtime: string };
 
-async function bootedDevices(exec: Exec): Promise<Device[]> {
+export async function bootedDevices(exec: Exec): Promise<Device[]> {
   const out = await exec("xcrun", ["simctl", "list", "devices", "booted", "-j"], 20_000);
   if (out.code !== 0) throw new Error(`simctl을 실행하지 못했습니다: ${(out.stderr || out.stdout).trim().slice(0, 300)}`);
   const parsed = JSON.parse(out.stdout) as { devices: Record<string, Array<{ udid: string; name: string; state: string }>> };
@@ -73,7 +73,7 @@ async function axe(exec: Exec, args: string[], udid: string, timeoutMs = 30_000)
   return { ok: true, result: out.stdout.trim() || `${args[0]} 완료` };
 }
 
-export async function handleSim(op: string, body: Record<string, unknown>, options: { exec?: Exec; shotDir?: string; now?: () => number } = {}): Promise<ServeOut> {
+export async function handleSim(op: string, body: Record<string, unknown>, options: { exec?: Exec; shotDir?: string; now?: () => number; onLaunch?: (udid: string) => void } = {}): Promise<ServeOut> {
   if (!(SIM_OPS as readonly string[]).includes(op)) return { ok: false, error: `알 수 없는 명령: ${op}` };
   if (!resolveComputerToken(body.token)) return { ok: false, error: TOKEN_MESSAGE };
   const exec = options.exec ?? defaultExec;
@@ -96,7 +96,10 @@ export async function handleSim(op: string, body: Record<string, unknown>, optio
         const bundle = typeof body.bundle === "string" ? body.bundle.trim() : "";
         if (!bundle) return { ok: false, error: "번들 id가 필요합니다. 예: ao-sim launch com.example.app --metro 8081" };
         const url = metroUrl(body.metro);
-        return simctl(["launch", "--terminate-running-process", device.udid, bundle, ...(url ? ["--initialUrl", url] : [])]);
+        const launched = await simctl(["launch", "--terminate-running-process", device.udid, bundle, ...(url ? ["--initialUrl", url] : [])]);
+        // The app opens its simulator panel so the user watches what the agent does.
+        if (launched.ok) options.onLaunch?.(device.udid);
+        return launched;
       }
       case "terminate": return simctl(["terminate", device.udid, String(body.bundle ?? "")]);
       case "openurl": return simctl(["openurl", device.udid, String(body.url ?? "")]);
@@ -188,8 +191,8 @@ export function registerSimRoutes(app: Express, options: Parameters<typeof handl
 
 export const simQueueDir = () => join(computerDir(), "sim");
 
-export function watchSimQueue(dir = simQueueDir()) {
-  return watchRequestQueue(dir, (raw) => handleSim(String(raw.op), raw), "ao-sim");
+export function watchSimQueue(options: Parameters<typeof handleSim>[2] = {}, dir = simQueueDir()) {
+  return watchRequestQueue(dir, (raw) => handleSim(String(raw.op), raw, options), "ao-sim");
 }
 
 /** Parses the ao-sim command line into an op and its request body. */

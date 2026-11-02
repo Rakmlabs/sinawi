@@ -1,4 +1,4 @@
-export type DesktopWindow = { id: string; x: number; y: number; w: number; h: number; z: number; minimized?: boolean; maximized?: boolean; snap?: "left" | "right" };
+export type DesktopWindow = { id: string; x: number; y: number; w: number; h: number; z: number; minimized?: boolean; maximized?: boolean; snap?: "left" | "right"; kind?: "simulator" };
 export const DESKTOP_STORE = "orchestra.browser.desktop";
 export const MIN_W = 420, MIN_H = 300;
 export type Edge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -14,6 +14,12 @@ export function newWindow(list: DesktopWindow[], area: { width: number; height: 
   const offset = (list.length % 6) * 28;
   const w = Math.max(MIN_W, Math.min(960, area.width - 80)), h = Math.max(MIN_H, Math.min(680, area.height - 80));
   return { id, x: 40 + offset, y: 24 + offset, w, h, z: topZ(list) + 1 };
+}
+
+/** The single simulator window: phone-shaped, at the right edge of the workspace. */
+export function simulatorWindow(list: DesktopWindow[], area: { width: number; height: number }, id: string): DesktopWindow {
+  const h = Math.max(MIN_H, Math.min(900, area.height - 48)), w = MIN_W;
+  return { id, kind: "simulator", x: Math.max(0, area.width - w - 24), y: 24, w, h, z: topZ(list) + 1 };
 }
 
 export const topZ = (list: DesktopWindow[]) => list.reduce((max, w) => Math.max(max, w.z), 0);
