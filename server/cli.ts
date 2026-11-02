@@ -123,7 +123,8 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
 
   const args = ["-p", prompt, "--output-format", "streaming-json", "--cwd", cwd];
   if (model) args.push("--model", model);
-  for (const dir of extraDirs) args.push("--add-dir", dir);
+  // Grok rejects extra directories ("additionalDirectories is not supported"); its read tools take
+  // absolute paths, so the worktree paths in the review note are enough.
   if (readOnly && readTools) args.push("--tools", GROK_READ_TOOLS, "--permission-mode", "plan", "--disable-web-search");
   else if (readOnly) args.push("--tools", "", "--deny", "*", "--disable-web-search");
   else {

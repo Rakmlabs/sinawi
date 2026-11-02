@@ -144,5 +144,5 @@ test("writable Claude runs get the hook and partial messages; read-only runs nev
   assert.ok(!review.args.includes("--settings"));
   assert.deepEqual(review.args.flatMap((arg, index) => review.args[index - 1] === "--add-dir" ? [arg] : []), ["/wt/a", "/wt/b"]);
   const grok = buildInvocation({ agent: "grok", prompt: "review", cwd: "/work/repo", readOnly: true, readTools: true, extraDirs: ["/wt/a"] });
-  assert.equal(grok.args[grok.args.indexOf("--add-dir") + 1], "/wt/a");
+  assert.ok(!grok.args.includes("--add-dir"), "Grok rejects additionalDirectories; it reads absolute paths instead");
 });
