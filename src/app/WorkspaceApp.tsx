@@ -25,6 +25,7 @@ import { SIM_DEVICE_STORE, SIM_OPEN_EVENT } from "../sim-panel";
 import type { DesktopMode } from "../desktop-windows";
 import { holdCommand } from "../browser-agent";
 import { browserRegistry } from "../browser-registry";
+import { APP_ERROR_EVENT, holdUrl, OPEN_URL_EVENT } from "../link-open";
 import { chatShortcut, globalBrowserShortcut, browserOwnsFocus } from "../browser-shortcuts";
 import { isMacPlatform, SIDEBAR_OVERLAY_QUERY, sidebarLayout, sidebarShortcut } from "../sidebar-rail";
 import { classifyLiveMessage } from "../../server/live-turn";
@@ -229,6 +230,19 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     return () => { window.removeEventListener("orchestra:browser-command", onCommand); window.removeEventListener("keydown", onKey, { capture: true }); };
   }, [showBrowser]);
   const [error, setError] = useState("");
+  // A chat link opened "in the app": park it if no browser window exists yet, and bring one up.
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const url = (event as CustomEvent<{ url?: string }>).detail?.url;
+      if (!url) return;
+      if (browserRegistry.count() === 0) holdUrl(url);
+      showBrowser(false);
+    };
+    const onError = (event: Event) => { const text = (event as CustomEvent<string>).detail; if (text) setError(text); };
+    window.addEventListener(OPEN_URL_EVENT, onOpen);
+    window.addEventListener(APP_ERROR_EVENT, onError);
+    return () => { window.removeEventListener(OPEN_URL_EVENT, onOpen); window.removeEventListener(APP_ERROR_EVENT, onError); };
+  }, [showBrowser]);
   const [modal, setModal] = useState<string | undefined>();
   // Settings window (⌘,): open category and an optional setting to highlight.
   const [settingsView, setSettingsView] = useState<{ section: SettingsCategory; focus?: string } | undefined>(() => {

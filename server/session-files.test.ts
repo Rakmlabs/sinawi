@@ -18,3 +18,18 @@ test("session images resolve inside the work folder only", async () => {
   await assert.rejects(resolveSessionImage(cwd, "notes.txt"), /이미지/);
   assert.ok(await resolveSessionImage(cwd, join(base, "secret.png"), [base]));
 });
+
+test("download copies into the downloads folder without overwriting", async () => {
+  const { copyToDownloads } = await import("./session-files.js");
+  const { mkdtemp, writeFile, readFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "dl-"));
+  const file = join(dir, "shot.png");
+  await writeFile(file, "x");
+  const first = await copyToDownloads(file, join(dir, "Downloads"));
+  const second = await copyToDownloads(file, join(dir, "Downloads"));
+  assert.equal(first, join(dir, "Downloads", "shot.png"));
+  assert.equal(second, join(dir, "Downloads", "shot (1).png"));
+  assert.equal(await readFile(second, "utf8"), "x");
+});

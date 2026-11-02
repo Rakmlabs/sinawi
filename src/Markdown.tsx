@@ -3,6 +3,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./CopyButton";
 import { FileChip, ImageGrid, LinkCard } from "./media-ui";
+import { WebLink } from "./WebLink";
 import { clusterGallery, imageMedia, isUnfurlLink, localMediaRef, parseGalleryPayload } from "./viewer-model";
 import { t, useLang } from "./i18n";
 
@@ -37,9 +38,8 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
   const local = href ? localMediaRef(href, label) : undefined;
   if (local) return <FileChip item={local} />;
   if (!href) return <>{children}</>;
-  const external = /^(?:https?:)?\/\//i.test(href);
   return <>
-    <a href={href} rel="noreferrer" target={external ? "_blank" : undefined}>{children}</a>
+    <WebLink href={href}>{children}</WebLink>
     {isUnfurlLink(href, label) && <LinkCard href={href} />}
   </>;
 }

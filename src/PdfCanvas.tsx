@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "./i18n";
+import { linkTarget } from "./link-open";
+import { WebLink } from "./WebLink";
 
 type Pdfjs = typeof import("pdfjs-dist");
 
@@ -62,7 +64,7 @@ export function PdfCanvas({ url, page, scale, onPages, onError }: {
   }, [url, page, scale, failed]);
   if (failed) return <div className="viewer-pdf-fallback">
     <p role="alert">{pdfRenderError()}</p>
-    <a href={url} target="_blank" rel="noopener noreferrer">{t("pdf.openExternal")}</a>
+    {linkTarget(url) === "web" && <WebLink href={url}>{t("pdf.openExternal")}</WebLink>}
     <iframe className="viewer-pdf-frame" title="PDF" src={url} />
   </div>;
   return <canvas ref={canvasRef} className="viewer-pdf-canvas" />;

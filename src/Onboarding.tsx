@@ -7,6 +7,7 @@ import { openTerminal } from "./terminal-events";
 import { permissionView, tauriInvoke, type PermState, loginStatus, saveProgress, SHORTCUTS, STEPS, toolsStatus, type AuthStatus, type OnboardingProgress, type StepStatus } from "./onboarding-state";
 import "./onboarding.css";
 import { t, tx } from "./i18n";
+import { WebLink } from "./WebLink";
 import { useWorkspaces } from "./workspace-context";
 import { workspaceName } from "./workspaces";
 import { SinawiMark } from "./SinawiMark";
@@ -127,7 +128,7 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
         <p className="ob-lead">{tx("ob.tools.lead")}</p>
         <div className="ob-list">{tools ? tools.map((tool) => <div key={tool.id} className={`ob-row ${tool.installed ? "ok" : tool.agent ? "optional" : "warn"}`}>
           <div className="ob-row-head"><strong>{tool.name}</strong>{tool.agent && <small>{t("ob.agent")}</small>}<span className="ob-spacer" />{tool.installed ? <Badge status="ok">{tool.version ? `v${tool.version}` : t("ob.installed")}</Badge> : <Badge status="warn">{tool.agent ? t("ob.missingOptional") : t("ob.installRequired")}</Badge>}</div>
-          {!tool.installed && <><Command command={tool.install} label={tool.name} /><a className="ob-link" href={tool.docs} target="_blank" rel="noreferrer">{t("ob.installDocs")} <ExternalLink size={12} /></a></>}
+          {!tool.installed && <><Command command={tool.install} label={tool.name} /><WebLink className="ob-link" href={tool.docs}>{t("ob.installDocs")} <ExternalLink size={12} /></WebLink></>}
         </div>) : <p className="ob-muted">{t("ob.checking")}</p>}</div>
         <p className="ob-muted">{tx("ob.tools.note")}</p>
       </>;

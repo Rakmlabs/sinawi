@@ -5,6 +5,7 @@ import { ComputerBridge, registerComputerRoutes, watchComputerQueue, type Comput
 import { isComputerUseAllowed } from "./workspace-policy.js";
 import { computerContextForToken, computerDir, pruneComputerTokens } from "./computer-tokens.js";
 import { DevServerManager, devServerEnv } from "./dev-servers.js";
+import { registerOpenExternalRoute } from "./open-external.js";
 import { registerServeRoutes, watchServeQueue } from "./serve-tool.js";
 import { registerSimRoutes, watchSimQueue } from "./sim-tool.js";
 import { registerSimViewRoutes, SimScreen } from "./sim-view.js";
@@ -823,6 +824,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     }
   });
 
+  registerOpenExternalRoute(app);
   app.post("/api/sessions", async (req, res) => {
     try {
       const input = startInput(req.body, workspace, currentWorkspace());

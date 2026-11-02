@@ -207,14 +207,17 @@ export function Composer(props: ComposerProps) {
         }}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return;
-          if (fileCompletion && handlesCompletionKey(e.key, e.shiftKey)) {
+          // Enter with nothing to complete (`/xyz`, `@nomatch`) closes the list and sends as usual.
+          const unmatchedEnter = e.key === "Enter" && !e.shiftKey && ((fileCompletion && !fileSuggestions.length) || (slash && !slashItems.length));
+          if (unmatchedEnter) { setFileCompletion(undefined); setSlash(undefined); }
+          if (!unmatchedEnter && fileCompletion && handlesCompletionKey(e.key, e.shiftKey)) {
             e.preventDefault();
             if (e.key === "Escape") setFileCompletion(undefined);
             else if ((e.key === "Enter" || e.key === "Tab") && fileSuggestions[fileIndex]) attachFile(fileSuggestions[fileIndex]);
             else if (e.key === "ArrowDown" || e.key === "ArrowUp") setFileIndex((fileIndex + (e.key === "ArrowDown" ? 1 : -1) + fileSuggestions.length) % Math.max(1, fileSuggestions.length));
             return;
           }
-          if (slash && handlesCompletionKey(e.key, e.shiftKey)) {
+          if (!unmatchedEnter && slash && handlesCompletionKey(e.key, e.shiftKey)) {
             e.preventDefault();
             if (e.key === "Escape") setSlash(undefined);
             else if (e.key === "Enter" || e.key === "Tab") { if (slashItems[highlightedSkill]) chooseSlashItem(slashItems[highlightedSkill]); }

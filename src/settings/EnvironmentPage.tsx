@@ -8,6 +8,7 @@ import { CopyButton } from "../CopyButton";
 import { openTerminal } from "../terminal-events";
 import { loadProgress, ONBOARDING_OPEN_EVENT, permissionView, saveProgress, tauriInvoke, type AuthStatus, type PermState } from "../onboarding-state";
 import { t } from "../i18n";
+import { WebLink } from "../WebLink";
 import { ComputerUseWorkspaceRows } from "../ComputerUse";
 import { useWorkspaces } from "../workspace-context";
 import { SettingRow, SettingsPage, SettingsSection, StatusBadge } from "./controls";
@@ -160,6 +161,6 @@ export function EnvironmentPage({ onClose }: { onClose: () => void }) {
 
 function ToolRow({ tool }: { tool: SetupTool }) {
   return <SettingRow id={`tool-${tool.id}`} label={tool.name}
-    description={tool.installed ? (tool.agent ? t("ob.agent") : undefined) : <span className="settings-command"><code>{tool.install}</code><CopyButton text={tool.install} ariaLabel={t("ob.copyCommand", { label: tool.name })} /><a className="settings-link" href={tool.docs} target="_blank" rel="noreferrer">{t("ob.installDocs")} <ExternalLink size={11} aria-hidden="true" /></a></span>}
+    description={tool.installed ? (tool.agent ? t("ob.agent") : undefined) : <span className="settings-command"><code>{tool.install}</code><CopyButton text={tool.install} ariaLabel={t("ob.copyCommand", { label: tool.name })} /><WebLink className="settings-link" href={tool.docs}>{t("ob.installDocs")} <ExternalLink size={11} aria-hidden="true" /></WebLink></span>}
     badges={tool.installed ? <StatusBadge tone="ok">{tool.version ? `v${tool.version}` : t("ob.installed")}</StatusBadge> : <StatusBadge tone={tool.agent ? "muted" : "warn"}>{tool.agent ? t("ob.missingOptional") : t("ob.installRequired")}</StatusBadge>} />;
 }

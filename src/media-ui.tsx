@@ -4,6 +4,7 @@ import { MarkdownSessionContext, localImageSrc } from "./markdown-images";
 import { formatBytes, galleryCells, isLongText, kindLabel, mediaUrl, parseAttachmentMessage, type MediaRef } from "./viewer-model";
 import type { MediaKind } from "../server/media-kinds";
 import { t } from "./i18n";
+import { WebLink } from "./WebLink";
 
 export type ViewerApi = { open: (items: MediaRef[], index: number) => void };
 
@@ -92,10 +93,10 @@ export function LinkCard({ href }: { href: string }) {
     return () => { cancel = true; };
   }, [href]);
   if (!preview) return null;
-  return <a className="link-card" href={href} target="_blank" rel="noreferrer">
+  return <WebLink className="link-card" href={href}>
     {preview.image && <img src={preview.image} alt="" width={88} height={88} />}
     <span className="link-card-copy"><b>{preview.title}</b><small>{preview.site}</small>{preview.description && <span>{preview.description}</span>}</span>
-  </a>;
+  </WebLink>;
 }
 
 export function UserMessageBody({ text }: { text: string }) {

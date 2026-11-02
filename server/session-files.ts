@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync, constants as fsConstants } from "node:fs";
-import { mkdir, open, realpath, rename, stat } from "node:fs/promises";
+import { copyFile, mkdir, open, realpath, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -212,6 +212,8 @@ export type SessionFileDeps = {
   converter?: () => string | undefined;
   run?: CommandRunner;
   launch?: (command: string, args: string[]) => void;
+  /** Where "download" copies files (default ~/Downloads). */
+  downloadsDir?: () => string;
 };
 
 function defaultLaunch(command: string, args: string[]) {
@@ -252,10 +254,30 @@ async function handleGet(req: Request, res: Response, cwd: string, extraRoots: s
   sendResolved(res, resolved, req.query.download === "1");
 }
 
+/** Copies `file` into `dir` without overwriting: "a.png", then "a (1).png", "a (2).png"… */
+export async function copyToDownloads(file: string, dir: string): Promise<string> {
+  await mkdir(dir, { recursive: true });
+  const ext = extname(file), stem = basename(file, ext);
+  for (let n = 0; n < 1000; n++) {
+    const target = join(dir, n ? `${stem} (${n})${ext}` : `${stem}${ext}`);
+    try { await copyFile(file, target, fsConstants.COPYFILE_EXCL); return target; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
+  throw httpError("같은 이름의 파일이 너무 많습니다.", 409);
+}
+
 function handleOpen(req: Request, res: Response, cwd: string, extraRoots: string[], deps: SessionFileDeps) {
   const action = req.body?.action;
-  if (action !== "reveal" && action !== "open" && action !== "quicklook") throw httpError("열기 동작이 올바르지 않습니다.", 400);
-  return resolveSessionFile(cwd, queryPath(req.body?.path), extraRoots).then((resolved) => {
+  if (action !== "reveal" && action !== "open" && action !== "quicklook" && action !== "download") throw httpError("열기 동작이 올바르지 않습니다.", 400);
+  return resolveSessionFile(cwd, queryPath(req.body?.path), extraRoots).then(async (resolved) => {
+    // The app's webview has no download handler, so "download" copies into ~/Downloads and shows it.
+    if (action === "download") {
+      const saved = await copyToDownloads(resolved.file, deps.downloadsDir?.() ?? join(homedir(), "Downloads"));
+      const spec = fileActionCommand("reveal", saved);
+      (deps.launch ?? defaultLaunch)(spec.command, spec.args);
+      res.json({ ok: true, path: saved });
+      return;
+    }
     const spec = fileActionCommand(action, resolved.file);
     (deps.launch ?? defaultLaunch)(spec.command, spec.args);
     res.json({ ok: true });

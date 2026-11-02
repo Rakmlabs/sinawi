@@ -6,6 +6,7 @@ import { pdfRenderError, PdfCanvas } from "./PdfCanvas";
 import { writeClipboard } from "./CopyButton";
 import { clampZoom, fileActionUrl, formatBytes, kindLabel, mediaUrl, parseCsv, stepIndex, swipeDirection, trapFocusIndex, type MediaRef } from "./viewer-model";
 import { t } from "./i18n";
+import { WebLink } from "./WebLink";
 
 const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
@@ -129,12 +130,13 @@ export function FileViewer({ items, index, onIndex, onClose }: {
   const pdfSrc = current.kind === "pdf" ? src : office.url;
   const showPager = current.kind === "pdf" || ((current.kind === "office" || current.kind === "hwp") && office.phase === "ready");
 
-  const act = async (action: "reveal" | "open" | "quicklook") => {
+  const act = async (action: "reveal" | "open" | "quicklook" | "download") => {
     setNotice("");
     try {
       const res = await fetch(fileActionUrl(sessionId), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: current.path, action }) });
-      const data = await res.json().catch(() => ({})) as { error?: string };
+      const data = await res.json().catch(() => ({})) as { error?: string; path?: string };
       if (!res.ok) setNotice(data.error || t("viewer.openFailed"));
+      else if (action === "download" && data.path) setNotice(t("viewer.downloaded", { path: data.path }));
     } catch { setNotice(t("viewer.openFailed")); }
   };
   const copyPath = async () => {
@@ -173,7 +175,8 @@ export function FileViewer({ items, index, onIndex, onClose }: {
             <button type="button" onClick={() => void act("quicklook")}>Quick Look</button>
             <button type="button" onClick={() => void copyPath()}><Copy size={15} />{t("viewer.copyPath")}</button>
           </>}
-          <a className="viewer-download" href={local ? mediaUrl(sessionId, current.path, { download: true }) : src} download={current.name}><Download size={15} />{t("viewer.download")}</a>
+          {local ? <button type="button" className="viewer-download" onClick={() => void act("download")}><Download size={15} />{t("viewer.download")}</button>
+            : <WebLink className="viewer-download" href={src}><Download size={15} />{t("viewer.download")}</WebLink>}
           <button type="button" className="viewer-close" aria-label={t("viewer.close")} onClick={onClose}><X size={18} /></button>
         </div>
       </header>

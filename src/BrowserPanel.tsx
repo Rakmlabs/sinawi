@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, Bot, ChevronDown, Download, Globe, Monitor, Mous
 import { pushRecent, RECENT_STORE, type RecentSite } from "./browser-surface";
 import { emulationOf, emulationPayload, fitDevice, isViewportError, parseViewportArg, readViewport, serializeViewport, toggleViewport, VIEWPORT_STORE, viewportLabel, type ViewportChoice } from "./browser-viewport";
 import { browserRegistry } from "./browser-registry";
+import { OPEN_URL_EVENT, takeHeldUrl } from "./link-open";
 import { OWN_APP_ERROR, agentCommandError, claimCommand, idleStatus, commandTargetsOwnApp, holdCommand, replayCommand, takeHeldCommand, withTargetUrls, type AgentCommand } from "./browser-agent";
 import { browserOwnsFocus, browserShortcut, chatShortcut, globalBrowserShortcut, windowShortcut, type BrowserAction } from "./browser-shortcuts";
 import { attachmentLabel, displayUrl, type ComposerAttachment, type ElementCapture } from "./preview-attachments";
@@ -616,6 +617,23 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     };
     window.addEventListener("orchestra:browser-command", handle);
     return () => window.removeEventListener("orchestra:browser-command", handle);
+  }, []);
+  // A chat link the user chose to open here: reuse an empty tab, otherwise add one.
+  const openUrl = useCallback((url: string) => {
+    const tab = tabsRef.current.find((item) => item.id === activeRef.current);
+    if (tab && !tab.url) void navigate(tab.id, url).catch(() => undefined);
+    else addTab(url);
+  }, [navigate, addTab]);
+  const openUrlRef = useRef(openUrl);
+  openUrlRef.current = openUrl;
+  useLayoutEffect(() => { const url = takeHeldUrl(); if (url) openUrlRef.current(url); }, []);
+  useEffect(() => {
+    const handle = (event: Event) => {
+      const url = (event as CustomEvent<{ url?: string }>).detail?.url;
+      if (url && browserRegistry.isActive(instanceRef.current)) openUrlRef.current(url);
+    };
+    window.addEventListener(OPEN_URL_EVENT, handle);
+    return () => window.removeEventListener(OPEN_URL_EVENT, handle);
   }, []);
 
   // Messages from the injected page script: postMessage from proxied iframes, or drained from native tabs.
