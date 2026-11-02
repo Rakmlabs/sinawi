@@ -543,8 +543,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const available = new Set(await getAvailableAgents());
       const names = ["Codex", "Claude", "Grok Build"];
       const agents = (["codex", "claude", "grok"] as AgentId[]).map((id, index) => ({ id, name: names[index], available: available.has(id), detail: available.has(id) ? "설치됨" : "CLI를 찾을 수 없음" }));
-      let defaultCwd = resolve(homedir(), "opencodeproject");
-      try { if (!(await stat(defaultCwd)).isDirectory()) defaultCwd = process.cwd(); } catch { defaultCwd = process.cwd(); }
+      const defaultCwd = homedir();
       const groups = await loadGroups(options.dataDir);
       const disabled = workspaceId ? workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId).disabledSkills : [];
       res.json({ agents, skills: await enabledPublicSkills(undefined, false, disabled), bots: await loadBots(options.dataDir), groups: workspaceId ? groups.filter((group) => group.workspaceId === workspaceId) : groups, defaultCwd, homeCwd: homedir() });
@@ -930,7 +929,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
 
   app.get("/api/directories", async (req, res) => {
     try {
-      const raw = typeof req.query.path === "string" ? req.query.path : resolve(homedir(), "opencodeproject");
+      const raw = typeof req.query.path === "string" ? req.query.path : homedir();
       const path = resolve(raw.startsWith("~/") ? resolve(homedir(), raw.slice(2)) : raw);
       if (!(await stat(path)).isDirectory()) throw new Error("폴더를 찾을 수 없습니다.");
       const entries = await readdir(path, { withFileTypes: true });
