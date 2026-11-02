@@ -29,7 +29,7 @@ function includesKeyword(prompt: string, keywords: string[]): boolean {
 }
 
 export function mediaGenerationRequired(prompt: string): boolean {
-  return includesKeyword(prompt, mediaGenerationKeywords);
+  return includesKeyword(withoutVerificationShots(prompt), mediaGenerationKeywords);
 }
 
 export function marketingShortsRequired(prompt: string): boolean {
@@ -45,8 +45,15 @@ export function isMediaRule(id: string): boolean {
   return ["media-generation", "marketing-shorts", "video", "image", "image-text", "image-visual"].includes(id);
 }
 
+/**
+ * "스크린샷으로 확인해줘" asks to look at the screen (browser/computer use), not to make an image;
+ * those phrases are removed before media keywords are matched.
+ */
+const verificationShots = /(?:스크린샷|screenshot|캡처|캡쳐)\s*(?:으로|을|를|로|해서|찍어서)?\s*(?:확인|검증|체크|찍|캡처|캡쳐|보여|봐|남겨|비교)/giu;
+function withoutVerificationShots(prompt: string): string { return prompt.replace(verificationShots, " "); }
+
 export function mediaRouteRequired(input: string, rules: readonly { id: string; keywords: string[] }[]): boolean {
-  const prompt = stripPreviewAttachments(input);
+  const prompt = withoutVerificationShots(stripPreviewAttachments(input));
   if (/(?:docker\s+image|video\s+player|photo\s+storage\s+metadata|css\s+clip-path)/iu.test(prompt)) return false;
   return mediaGenerationRequired(prompt) || rules.some((rule) => isMediaRule(rule.id) && rule.keywords.some((keyword) => {
     const regex = keyword.trim().match(/^\/(.+)\/([dgimsuvy]*)$/u);
