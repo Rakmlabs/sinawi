@@ -60,12 +60,13 @@ test("a running session answers status from the log and delivers a directive on 
 
   await orchestra.liveTurn(session.id, "B한테 A부터 보라고 해");
   assert.equal(session.status, "running");
-  assert.match(session.events.findLast((event) => event.metadata?.live === "directive")?.text ?? "", /B의 다음 턴/);
-  assert.equal(session.pendingInstructions?.some((item) => item.targetWorkerId === "claude-2"), true);
+  assert.match(session.events.filter((event) => event.metadata?.live === "directive").at(-1)?.text ?? "", /B의 다음 턴/);
+  const pending = () => orchestra.get(session.id)?.pendingInstructions;
+  assert.equal(pending()?.some((item) => item.targetWorkerId === "claude-2"), true);
 
   for (const instruction of ["옆 문서를 먼저", "추가로 모든 함수에 JSDoc 주석도 달아줘."]) {
     await orchestra.liveTurn(session.id, instruction);
-    assert.equal(session.pendingInstructions?.some((item) => item.text === instruction && !item.targetWorkerId), true, `${instruction} reaches the lead`);
+    assert.equal(pending()?.some((item) => item.text === instruction && !item.targetWorkerId), true, `${instruction} reaches the lead`);
   }
 
   releaseWorker();
