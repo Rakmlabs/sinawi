@@ -167,10 +167,6 @@
 .sidebar-edit { display: flex; gap: 3px; margin: 5px 0; }
 .sidebar-edit input { min-width: 0; width: 100%; padding: 8px; }
 .rail .sidebar-edit button { width: 28px; flex-shrink: 0; min-height: 34px; padding: 4px; justify-content: center; }
-.sidebar-confirm { margin: 5px 2px; padding: 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-overlay); }
-.sidebar-confirm p { overflow-wrap: anywhere; }
-.sidebar-confirm > div { display: flex; gap: 6px; margin-top: 6px; }
-.rail .sidebar-confirm button { width: auto; min-height: 30px; padding: 5px 10px; font-size: calc(12px * var(--font-scale)); background: var(--bg-active); }
 
 /* Worker sessions nested under a chat. */
 .sidebar-workers { list-style: none; margin: 2px 0 6px 18px; padding: 0 0 0 8px; border-left: 1px solid var(--border); }
@@ -200,7 +196,22 @@
   .rail > .sidebar-new, .sidebar-search, .rail .sidebar-settings { height: 44px; }
   .sidebar-new kbd, .sidebar-search kbd { display: none; }
   .rail .sidebar-section-heading button { opacity: 1; }
-  .rail .sidebar-folder, .rail .sidebar-chat-open, .rail .sidebar-worker, .rail .sidebar-action-menu button, .rail .sidebar-edit button, .rail .sidebar-confirm button { min-height: 44px; }
+  .rail .sidebar-folder, .rail .sidebar-chat-open, .rail .sidebar-worker, .rail .sidebar-action-menu button, .rail .sidebar-edit button { min-height: 44px; }
   .rail .sidebar-row-action, .rail .sidebar-chat-toggle, .rail .sidebar-section-heading button { flex-basis: 44px; width: 44px; height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { .folder-chevron, .sidebar-new kbd, .sidebar-search kbd, .rail .sidebar-section-heading button { transition: none; } }
+
+.delete-dialog-backdrop { position: fixed; inset: 0; z-index: 140; display: grid; place-items: center; padding: 24px 16px; background: var(--backdrop); }
+.delete-dialog { display: grid; gap: 10px; width: min(420px, 100%); padding: 20px; background: var(--bg-overlay); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); animation: delete-dialog-in 140ms ease-out; }
+.delete-dialog h4 { margin: 0; font-size: calc(15px * var(--font-scale)); font-weight: 600; overflow-wrap: anywhere; }
+.delete-dialog-body p { margin: 0; color: var(--text-muted); font-size: calc(13px * var(--font-scale)); line-height: 1.55; }
+.delete-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.delete-dialog-actions button { min-height: 32px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised); color: var(--text); font-size: calc(13px * var(--font-scale)); white-space: nowrap; cursor: pointer; }
+.delete-dialog-actions button:hover:not(:disabled) { background: var(--bg-active); }
+.delete-dialog-actions .danger { color: var(--on-status); background: var(--danger); border-color: transparent; }
+.delete-dialog-actions .danger:hover:not(:disabled) { background: var(--danger-fg); }
+.delete-dialog-actions .danger-outline { color: var(--danger-fg); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.delete-dialog-actions .danger-outline:hover:not(:disabled) { background: var(--danger-tint); }
+.delete-dialog-actions button:disabled { opacity: .55; cursor: default; }
+@keyframes delete-dialog-in { from { opacity: 0; transform: translateY(4px) scale(.98); } }
+@media (prefers-reduced-motion: reduce) { .delete-dialog { animation: none; } }

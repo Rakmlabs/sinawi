@@ -11,6 +11,7 @@ import { useWorkspaces } from "./workspace-context";
 import { reloadApp } from "./reload";
 import { isMacPlatform } from "./sidebar-rail";
 import { Beat } from "./Beat";
+import { DeleteDialog } from "./DeleteDialog";
 import { t, translatedMap } from "./i18n";
 
 const agentNames: Record<Session["agent"], string> = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
@@ -162,15 +163,26 @@ export function Sidebar(props: SidebarProps) {
     <button aria-label={t("side.saveName")} disabled={busy || !current.value.trim()}><Check size={14} /></button>
     <button type="button" aria-label={t("side.cancelRename")} onClick={() => setEditor(undefined)}><X size={14} /></button>
   </form>;
-  const confirmDelete = (kind: "group" | "session", id: string) => {
-    if (deleting?.kind !== kind || deleting.id !== id) return false;
+  const deleteDialog = () => {
+    if (deletingWorker) {
+      const { sessionId, workerId, name, running } = deletingWorker;
+      return <DeleteDialog title={t("side.deleteWorkerConfirm", { name })} body={<p>{running ? t("side.runningStopsFirst") : ""}{t("side.deleteWorkerBody")}</p>} busy={busy}
+        onCancel={() => setDeletingWorker(undefined)}
+        actions={[{ label: t("side.delete"), primary: true, onClick: async () => { if (await props.onDeleteWorker!(sessionId, workerId)) setDeletingWorker(undefined); } }]} />;
+    }
+    if (!deleting) return null;
+    const { kind, id, name } = deleting;
+    if (kind === "group") return <DeleteDialog title={t("side.deleteProjectTitle", { name })} body={<p>{t("side.deleteProjectConfirm")}</p>} busy={busy}
+      onCancel={() => setDeleting(undefined)}
+      actions={[{ label: t("side.delete"), primary: true, onClick: async () => { if (await props.onDeleteGroup(id)) setDeleting(undefined); } }]} />;
     // Worker worktrees are kept by default; the extra button removes only those without uncommitted changes.
-    const worktrees = kind === "session" ? sessions.find((item) => item.id === id)?.worktrees?.length ?? 0 : 0;
-    return <div className="sidebar-confirm" role="alert">
-      <p>{kind === "group" ? t("side.deleteProjectConfirm") : t("side.deleteChatConfirm", { name: deleting.name })}</p>
-      {worktrees > 0 && <p>{t("wt.deleteSessionNote", { count: worktrees })}</p>}
-      <div><button disabled={busy} onClick={async () => { if (await (kind === "group" ? props.onDeleteGroup(id) : props.onDeleteSession(id))) setDeleting(undefined); }}>{worktrees > 0 ? t("wt.deleteKeep") : t("side.delete")}</button>{worktrees > 0 && <button disabled={busy} onClick={async () => { if (await props.onDeleteSession(id, true)) setDeleting(undefined); }}>{t("wt.deleteClean")}</button>}<button onClick={() => setDeleting(undefined)}>{t("side.cancel")}</button></div>
-    </div>;
+    const worktrees = sessions.find((item) => item.id === id)?.worktrees?.length ?? 0;
+    return <DeleteDialog title={t("side.deleteChatConfirm", { name })} body={worktrees > 0 ? <p>{t("wt.deleteSessionNote", { count: worktrees })}</p> : undefined} busy={busy}
+      onCancel={() => setDeleting(undefined)}
+      actions={[
+        ...(worktrees > 0 ? [{ label: t("wt.deleteClean"), onClick: async () => { if (await props.onDeleteSession(id, true)) setDeleting(undefined); } }] : []),
+        { label: worktrees > 0 ? t("wt.deleteKeep") : t("side.delete"), primary: true, onClick: async () => { if (await props.onDeleteSession(id)) setDeleting(undefined); } },
+      ]} />;
   };
   const sessionRow = (session: Session) => {
     const workers = delegationWorkers(session, Date.now());
@@ -187,7 +199,6 @@ export function Sidebar(props: SidebarProps) {
       <button className={`sidebar-chat-toggle${open ? " open" : ""}`} aria-label={t(open ? "side.collapseWorkers" : "side.expandWorkers", { title: session.title })} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={14} className={`folder-chevron ${open ? "open" : ""}`} /></button>
       <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: session.title })} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
     </div>}
-    {confirmDelete("session", session.id)}
     <ul className="sidebar-workers" id={`workers-${session.id}`} aria-label={t("side.workerSessions", { title: session.title })} hidden={!open}>
       {workers.map((worker) => {
         const latest = worker.tasks.at(-1)!;
@@ -196,15 +207,11 @@ export function Sidebar(props: SidebarProps) {
         const model = config?.model || event.model || t("usage.cliDefaultModel");
         const workerActive = selected === session.id && props.selectedWorker === worker.id && tab === "workspace";
         const name = worker.label;
-        const confirming = deletingWorker?.sessionId === session.id && deletingWorker.workerId === worker.id;
         return <li key={worker.id} className="sidebar-worker-item" onContextMenu={(event) => { if (!props.onDeleteWorker) return; event.preventDefault(); openMenu("worker", session.id, event, false, worker.id); }}><button id={`sidebar-worker-${session.id}-${worker.id}`} className={`sidebar-worker ${workerActive ? "active" : ""}`} aria-current={workerActive ? "page" : undefined} title={t("side.workerTitle", { name, model, n: worker.tasks.length, text: event.text })} onClick={() => props.onSelectWorker?.(session.id, worker.id)}>
           <AgentMark agent={worker.agent} size="small" /><span className="sidebar-chat-copy"><span className="sidebar-session-title">{name}</span><small title={model}>{model} · {t("side.workerTasks", { n: worker.tasks.length })}</small></span>{worker.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${worker.status}`} role="img" aria-label={statusLabels[worker.status]} />}
         </button>
         {props.onDeleteWorker && <button className="sidebar-worker-delete" aria-label={t("side.deleteWorkerNamed", { name })} title={t("side.deleteWorker")} disabled={busy} onClick={() => setDeletingWorker({ sessionId: session.id, workerId: worker.id, name, running: worker.status === "running" })}><Trash2 size={14} /></button>}
-        {confirming && <div className="sidebar-confirm worker-confirm" role="alert">
-          <p>{t("side.deleteWorkerConfirm", { name })}<br /><small>{worker.status === "running" ? t("side.runningStopsFirst") : ""}{t("side.deleteWorkerBody")}</small></p>
-          <div><button disabled={busy} onClick={async () => { if (await props.onDeleteWorker!(session.id, worker.id)) setDeletingWorker(undefined); }}>{t("side.delete")}</button><button onClick={() => setDeletingWorker(undefined)}>{t("side.cancel")}</button></div>
-        </div>}</li>;
+</li>;
       })}
       {!workers.length && <li className="sidebar-empty">{session.status === "running" ? t("side.orchestratorHandling") : t("side.noWorkers")}</li>}
     </ul>
@@ -246,7 +253,6 @@ export function Sidebar(props: SidebarProps) {
               <button className="sidebar-row-action" aria-label={t("side.newChatIn", { name: group.name })} title={t("side.newChatIn", { name: group.name })} disabled={busy} onClick={() => { onNew(group.id); expand(group.id); }}><Plus size={15} /></button>
               <button className="sidebar-row-action" aria-label={t("side.projectMenu", { name: group.name })} aria-haspopup="menu" aria-expanded={menu === group.id} onClick={(event) => menu === group.id ? setMenu(undefined) : openMenu("group", group.id, event, true)}><MoreHorizontal size={15} /></button>
             </div>}
-            {confirmDelete("group", group.id)}
             <div id={`project-${group.id}`} className="sidebar-project-chats" hidden={!open}>{dropTarget === group.id && drag && <div className="drop-slot" aria-hidden="true">{t("side.dropHere", { title: drag.title })}</div>}{chats.length ? chats.map(sessionRow) : <p className="sidebar-empty">{t("side.dropOrStart1")}<button onClick={() => onNew(group.id)}>{t("side.dropOrStart2")}</button></p>}</div>
           </div>;
         })}
@@ -264,6 +270,7 @@ export function Sidebar(props: SidebarProps) {
     </div>
     {footerMenu && <ContextMenu x={footerMenu.x} y={footerMenu.y} placement="above" className="sidebar-footer-menu" label={t("side.tools")} items={footerItems} onClose={() => setFooterMenu(undefined)} />}
     {menuState && <ContextMenu x={menuState.x} y={menuState.y} label={t("side.chatMenu")} onClose={() => setMenuState(undefined)} items={menuItems(menuState)} />}
+    {deleteDialog()}
     {drag && createPortal(<div className="sidebar-drag-ghost" style={{ left: drag.x + 14, top: drag.y + 10 }} aria-hidden="true"><AgentMark agent={drag.agent} size="small" /><span>{drag.title}</span></div>, document.body)}
   </aside>;
 

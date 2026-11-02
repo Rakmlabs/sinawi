@@ -75,8 +75,6 @@ time,
 .sidebar-action-menu label,
 .sidebar-action-menu select,
 .sidebar-edit input,
-.sidebar-confirm p,
-.sidebar-confirm button,
 .sidebar-empty {
   font-size: calc(14px * var(--font-scale));
   line-height: 1.55;
