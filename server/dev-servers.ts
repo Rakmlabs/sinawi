@@ -153,3 +153,10 @@ async function killGroup(pid: number): Promise<void> {
   }
   try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ }
 }
+
+/** Dev servers watch files and hot-reload; CI makes Expo/Metro (and others) stop watching. */
+export function devServerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  delete next.CI;
+  return next;
+}

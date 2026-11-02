@@ -4,7 +4,7 @@ import { BrowserBridge, registerBrowserRoutes, watchQueue } from "./browser-brid
 import { ComputerBridge, registerComputerRoutes, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
 import { isComputerUseAllowed } from "./workspace-policy.js";
 import { computerContextForToken, computerDir, pruneComputerTokens } from "./computer-tokens.js";
-import { DevServerManager } from "./dev-servers.js";
+import { DevServerManager, devServerEnv } from "./dev-servers.js";
 import { registerServeRoutes, watchServeQueue } from "./serve-tool.js";
 import { registerSimRoutes, watchSimQueue } from "./sim-tool.js";
 import { registerSimViewRoutes, SimScreen } from "./sim-view.js";
@@ -516,7 +516,10 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   if (options.browserQueue) { const stop = watchComputerQueue(computerBridge); httpServer.once("close", stop); }
   const devServers = new DevServerManager({
     logDir: join(computerDir(), "serve-logs"),
-    env: () => cliChildEnv(process.env, { PATH: fullPath(), CI: "1" }),
+    // No CI=1 here (unlike the agent CLIs): Expo/Metro and others turn off file watching in CI,
+    // so a fixed file never reached the app until the server was restarted. stdin is closed, so
+    // nothing waits on a prompt anyway.
+    env: () => devServerEnv(cliChildEnv(process.env, { PATH: fullPath() })),
     onEvent: (sessionId, text) => orchestra.note(sessionId, text),
   });
   orchestra.sessionRemoved = (id) => devServers.stopSession(id);

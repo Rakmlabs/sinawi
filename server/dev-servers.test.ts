@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import express from "express";
 import { clearComputerTokens, issueComputerToken } from "./computer-tokens.js";
-import { DevServerManager, portOpen } from "./dev-servers.js";
+import { DevServerManager, devServerEnv, portOpen } from "./dev-servers.js";
 import { parseServeArgv, registerServeRoutes, SERVE_CLI_SOURCE } from "./serve-tool.js";
 
 async function freePort(): Promise<number> {
@@ -128,4 +128,10 @@ test("the generated ao-serve script starts and lists a server through the app wi
     clearComputerTokens();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("dev servers do not inherit CI, so Metro keeps watching files", () => {
+  const env = devServerEnv({ CI: "1", PATH: "/usr/bin" });
+  assert.equal(env.CI, undefined);
+  assert.equal(env.PATH, "/usr/bin");
 });

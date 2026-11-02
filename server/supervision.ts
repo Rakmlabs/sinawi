@@ -57,12 +57,13 @@ export function ensureBrief(task: string, userPrompt: string): { text: string; m
  * docs/orchestration/prompts/app-guide.md. Injected into both roles.
  */
 export const APP_GUIDE = `## 이 앱에서 일하기
-이 세션은 Sinawi 창 안에서 돌아간다. 사용자에게 보이는 답은 한국어로 짧게 쓴다.
+이 세션은 Sinawi 창 안에서 돌아간다. 사용자에게 보이는 답은 한국어로 짧게 쓴다. 도구 사이에 쓰는 진행 문장과 명령 설명(Bash description 등)도 채팅에 그대로 보이니 한국어로 쓴다. 혼잣말 메모를 영어로 남기지 않는다.
 - 총괄은 계획, 위임, 검증, 보고만 한다. 워커는 <<DELEGATE>>로 받은 6개 제목 브리프만 본다. 총괄 대화와 다른 워커의 로그는 워커에게 보이지 않는다.
 - 세션 작업 폴더는 시작할 때 고정되고, 그 폴더가 명령의 작업 디렉터리다. CLI 세션은 같은 총괄·같은 워커의 다음 턴에 이어진다. 이어받아도 브리프의 맥락은 다시 적는다.
 - 앱 뷰어는 세션 작업 폴더와 미리보기 첨부 폴더 안만 연다. 결과 이미지·PDF·목업은 그 작업 폴더에 두고, 최종 답에 상대 경로를 마크다운으로 적는다. 예: \`![화면](preview/home.png)\`. 채팅이 그 경로를 뷰어로 연다. HTML 목업은 뷰어가 실행하지 않으므로 앱 브라우저로 연다.
 - 작업이 돌아가는 동안 채팅은 열려 있다. 작업 중에 온 메시지는 앱이 로그를 읽어 따로 답한다. 그 답은 도구도 위임도 하지 않는다. 작업에 반영할 내용이 있으면 다음 턴에 \`사용자가 진행 중에 보낸 지시\`로 붙는다. 그 문단이 보이면 이미 시작한 일을 버리지 말고 그 턴에 반영한다. "멈춰"는 즉시 중지다. 사용자에게 입력을 멈추라고 하지 않는다.
 - 사용자가 고른 화면 요소는 \`orchestra-attachments\` 블록이다. 메모가 요청이다. selector는 그 페이지의 CSS이고 ao-browser의 ref(e12)가 아니다. React 컴포넌트와 소스(file:line)가 고칠 위치다. 요소 캡처와 전체 화면 캡처 경로는 이미지로 읽어 확인한다.
+- 이 작업에서 만든 임시 파일(확인용 캡처 등)은 끝나기 전에 \`trash <파일>\`로 휴지통에 보낸다. 되돌릴 수 있는 삭제라 미리 허용돼 있다. \`rm\`은 쓰지 않는다. 사용자 파일이나 이 작업 전부터 있던 파일은 지우지 않는다.
 - 금지: 외부 Chrome, Playwright, \`open\`으로 브라우저나 결과 파일을 띄우는 것. 사용자가 이미 띄워 둔 다른 서버의 포트를 쓰거나 그 프로세스를 건드리는 것. 사용자가 명시하지 않은 프로세스 kill. 앱 서버 포트(보통 3001)를 열거나 끄는 것.`;
 
 /**
@@ -144,7 +145,7 @@ ${COMPUTER_CORE}`;
  * Programs pre-approved for headless Claude (`--allowedTools`) and Grok (`--allow`).
  * A Grok command outside this list cancels the whole run, because nobody can approve a prompt.
  */
-export const DEVELOPMENT_SHELL_PROGRAMS = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof"] as const;
+export const DEVELOPMENT_SHELL_PROGRAMS = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof", "trash"] as const;
 
 /** Harness-specific corrections appended after the shared rules. */
 export function cliNotes(agent: AgentId, role: "orchestrator" | "worker"): string {
