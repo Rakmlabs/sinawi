@@ -220,9 +220,13 @@ const failurePattern = /요소를 찾을 수 없|찾을 수 없습니다|not fou
 /** Collapses a failure line to a signature so variants (different selector/pid/path) count as the same error. */
 export function failureSignature(text: string): string | undefined {
   const cleaned = stripToolNoise(text);
-  const line = cleaned.split("\n").map((part) => part.trim()).find((part) => failurePattern.test(part));
-  if (!line) return;
-  let head = line.replace(/^(?:결과|도구 결과|명령)\s*:\s*/u, "");
+  const lines = cleaned.split("\n").map((part) => part.trim()).filter(Boolean);
+  const index = lines.findIndex((part) => failurePattern.test(part));
+  if (index < 0) return;
+  let head = lines[index].replace(/^(?:결과|도구 결과|명령)\s*:\s*/u, "");
+  // A bare "Exit code 1" says nothing about what failed; the next line does (a rejected push and
+  // a gh watch both exit 1 but are different failures).
+  if (/^(?:exit code|종료 코드)\s*\d+$/iu.test(head) && lines[index + 1]) head = `${head} ${lines[index + 1]}`;
   // "요소를 찾을 수 없습니다: #a" and ": #b" are the same failure: drop the detail after the message.
   const hit = failurePattern.exec(head);
   const cut = hit ? head.indexOf(":", hit.index + hit[0].length) : -1;
@@ -273,6 +277,7 @@ export class StallDetector {
   readonly failLimit: number;
   private familyRun = { family: "", count: 0 };
   private failuresSinceSuccess = 0;
+  private lastFamily = "";
 
   constructor(options: StallOptions = {}) {
     this.repeatLimit = options.repeatLimit ?? 3;
@@ -296,11 +301,15 @@ export class StallDetector {
     if (!["tool", "command", "error", "warning"].includes(line.type)) return;
     const commandMatch = /^명령:\s*(.+)$/su.exec(line.text.trim());
     const command = commandMatch ? commandMatch[1].replace(/\s+/gu, " ").trim() : undefined;
-    const signature = command ? undefined : failureSignature(line.text);
+    // Failures count as "the same" only within one tool family: a rejected git push and a failing
+    // gh run watch are different problems even when their output looks alike.
+    const failure = command ? undefined : failureSignature(line.text);
+    const signature = failure && this.lastFamily ? `${this.lastFamily}: ${failure}` : failure;
     this.recent.push({ signature, command, text: clip(stripToolNoise(line.text).replace(/\s+/gu, " "), 200) });
     if (this.recent.length > this.window) this.recent.shift();
     if (command) {
       const family = commandFamily(command);
+      this.lastFamily = family;
       this.familyRun = family === this.familyRun.family ? { family, count: this.familyRun.count + 1 } : { family, count: 1 };
     } else if (signature) {
       this.failuresSinceSuccess++;

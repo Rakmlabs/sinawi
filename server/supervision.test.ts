@@ -265,3 +265,26 @@ test("browser bridge launches the app when no window is connected", async () => 
   assert.equal((await p).ok, true);
   assert.match((await new BrowserBridge(() => 0).request("status")).error ?? "", /열려 있지 않습니다/);
 });
+
+test("different commands that each exit 1 are not one repeated error (rejected push, gh auth, gh watch)", () => {
+  const detector = new StallDetector();
+  const steps: Array<[string, string]> = [
+    ["tool", "명령: git push origin HEAD:main"],
+    ["tool", "도구 결과: Exit code 1\n! [remote rejected] HEAD -> main (refusing to allow an OAuth App to create or update workflow)"],
+    ["tool", "명령: gh auth status"],
+    ["tool", "도구 결과: Exit code 1\ngithub.com ✓ Logged in to github.com account me (keyring)"],
+    ["tool", "명령: git -c credential.helper= push origin HEAD:refs/heads/main"],
+    ["tool", "도구 결과: To https://github.com/o/r.git bcffd82..015a710 HEAD -> main"],
+    ["tool", "명령: gh run watch 41371716553 --exit-status"],
+    ["tool", "도구 결과: Exit code 1\nRefreshing run status every 20 seconds. Press Ctrl+C to quit."],
+  ];
+  for (const [type, text] of steps) assert.equal(detector.observe({ type, text }), undefined, text);
+  // The same command failing the same way three times still stops the worker.
+  const loop = new StallDetector();
+  let fired;
+  for (let i = 0; i < 3; i++) {
+    loop.observe({ type: "tool", text: `명령: npm test -- --grep case${i}` });
+    fired = loop.observe({ type: "tool", text: "도구 결과: Exit code 1\nTypeError: x is not a function" });
+  }
+  assert.equal(fired?.kind, "repeated-error");
+});
