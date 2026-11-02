@@ -81,8 +81,10 @@ function titleFrom(prompt: string) {
 const REPORT_HEADER = /^\[[^\]\n]*결과\]\n/u;
 /** The report opens with "상태: 완료" (not "부분 완료" or "막힘"), optionally in bold. */
 const CLEAN_REPORT = /^\[[^\]\n]*결과\]\n\s*(?:\*\*)?상태(?:\*\*)?\s*:\s*(?:\*\*)?완료/u;
-/** A worker that ended "상태: 막힘", or one the app cut off (stall, abort). */
-const BLOCKED_REPORT = /^\[[^\]\n]*결과(?: — (?:앱이 정체를 감지해 중단함|중단됨)[^\]\n]*\]|\]\n\s*(?:\*\*)?상태(?:\*\*)?\s*:\s*(?:\*\*)?막힘)/u;
+/** A worker that ended "상태: 막힘". */
+const BLOCKED_REPORT = /^\[[^\]\n]*결과\]\n\s*(?:\*\*)?상태(?:\*\*)?\s*:\s*(?:\*\*)?막힘/u;
+/** A worker the app cut off (stall, abort). */
+const CUT_REPORT = /^\[[^\]\n]*결과 — (?:앱이 정체를 감지해 중단함|중단됨)/u;
 
 const PLAN_MODE_NOTICE = `## 계획 모드
 사용자가 계획 모드를 골랐습니다. 이번 턴에는 파일 수정, 커밋, push, 배포, 워커 위임(<<DELEGATE>>)을 하지 않습니다. 모든 도구가 읽기 전용입니다.
@@ -463,7 +465,7 @@ export class Orchestra {
       // The review is a fresh CLI session: without this it never sees what the user asked for.
       const originalContext = `\n\n원래 사용자 요청:\n${userPrompt}\n\n당신의 첫 응답:\n${first.finalText}`;
       this.event(session, session.agent, "status", round === 0 ? "총괄이 워커 결과를 검증하고 있습니다." : `총괄이 재계획 ${round}회차 결과를 검증하고 있습니다.`, { role: "orchestrator", metadata: { phase: "verify", round } });
-      const roundFailed = workerResults.some((text) => /^\[[^\]]*결과 — (앱이 정체를 감지해 중단함|중단됨)/u.test(text));
+      const roundFailed = workerResults.some((text) => CUT_REPORT.test(text));
       const strict = roundFailed && roundsLeft > 0 && session.agent === "grok";
       const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()]).catch(() => "");
       const gitFacts = await repoSnapshot(session.cwd).catch(() => "");
@@ -491,6 +493,7 @@ export class Orchestra {
         }
       }
       // The lead gave up on a blocked worker: that is not a finished task, whatever the lead wrote.
+      // A worker the app cut off is the lead's to judge: it often finished before the cut, and the review checks git.
       if (!next.length) return this.finish(session, workerResults.some((text) => BLOCKED_REPORT.test(text)));
       this.event(session, session.agent, "status", `총괄이 다시 계획해 ${next.length}건을 재위임합니다 (남은 기회 ${roundsLeft - 1}회).`, { role: "orchestrator", metadata: { phase: "replan", round: round + 1 } });
       requests = next;

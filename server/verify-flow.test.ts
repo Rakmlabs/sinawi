@@ -94,3 +94,17 @@ test("the review gets git facts from the app, and Grok's read-only runs lose MCP
     assert.equal(args[args.indexOf("--disallowed-tools") + 1], "search_tool,use_tool");
   }
 });
+
+test("a worker the app cut off is the lead's call: a lead that verifies the work ends the run as done", async () => {
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      options.onLine({ type: "error", text: "Claude Code가 중단되었습니다 (cancelled)." });
+      return { exitCode: 0, finalText: "버튼 색을 바꾸고 테스트를 통과시켰습니다." };
+    }
+    return { exitCode: 0, finalText: options.readOnly ? "결과: 변경이 git에 있고 테스트 출력도 남아 있습니다. 발견 없음." : delegate };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "UI 점검", agent: "claude", workers: ["claude"], cwd: process.cwd() });
+  await settle(session);
+  assert.equal(session.status, "done");
+});
