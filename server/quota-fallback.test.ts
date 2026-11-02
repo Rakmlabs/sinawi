@@ -32,6 +32,10 @@ test("quota threshold uses the limiting window and exposes its reset", () => {
   assert.equal(exhaustionFromQuota({ agent: "codex", windows: [{ key: "five", label: "5시간", remainingPercent: 3.01 }] }, 3).exhausted, false);
   assert.equal(exhaustionFromQuota({ agent: "codex", windows: [{ key: "old", label: "old", remainingPercent: 0, resetsAt: 900 }] }, 3, 1_000).exhausted, false);
   assert.equal(exhaustionFromQuota({ agent: "codex", updatedAt: "2020-01-01T00:00:00Z", windows: [{ key: "stale", label: "stale", remainingPercent: 0 }] }, 3, 2_000_000_000).exhausted, false);
+  // An old reading of an exhausted window still holds until that window resets.
+  const oldExhausted = { agent: "codex" as const, updatedAt: "2026-10-30T08:41:21Z", windows: [{ key: "primary", label: "주간", remainingPercent: 0, resetsAt: 1_793_774_127 }] };
+  assert.equal(exhaustionFromQuota(oldExhausted, 3, Date.parse("2026-11-02T04:00:00Z") / 1_000).exhausted, true);
+  assert.equal(exhaustionFromQuota(oldExhausted, 3, 1_793_774_128).exhausted, false, "the reset ends it");
 });
 
 test("selects the authenticated allowed fallback with most remaining quota and only the allowed agents", () => {
@@ -56,6 +60,9 @@ test("fallback order breaks remaining-quota ties and model tier is preserved", (
   assert.deepEqual(equivalentFallbackModel("claude", "codex", "opus", undefined), { model: undefined, reasoningEffort: "high" });
   assert.deepEqual(equivalentFallbackModel("codex", "grok", undefined, "high"), { model: "grok-4.7", reasoningEffort: undefined });
   assert.deepEqual(equivalentFallbackModel("claude", "grok", "haiku", undefined), { model: "grok-4.7-build-fast", reasoningEffort: undefined });
+  for (const to of ["claude", "codex", "grok"] as const) {
+    assert.deepEqual(equivalentFallbackModel("codex", to, undefined, undefined), { model: undefined, reasoningEffort: undefined }, `CLI default stays CLI default on ${to}`);
+  }
 });
 
 test("a number 429 inside a JSON event (Claude init timings) is not a quota failure", () => {

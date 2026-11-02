@@ -41,8 +41,10 @@ export function isQuotaExhaustion(value: unknown): boolean {
 
 export function exhaustionFromQuota(quota: ProviderQuota | undefined, threshold = 3, now = Date.now() / 1_000): QuotaExhaustion {
   if (!quota?.windows.length) return { exhausted: false };
-  if (quota.updatedAt && Date.parse(quota.updatedAt) < now * 1_000 - 24 * 60 * 60 * 1_000) return { exhausted: false };
-  const active = quota.windows.filter((window) => window.resetsAt === undefined || window.resetsAt > now);
+  // Within a window usage only grows, so an old reading still bounds what is left until that window
+  // resets; only a window with no known reset goes stale (after a day nothing says it still applies).
+  const stale = Boolean(quota.updatedAt && Date.parse(quota.updatedAt) < now * 1_000 - 24 * 60 * 60 * 1_000);
+  const active = quota.windows.filter((window) => window.resetsAt === undefined ? !stale : window.resetsAt > now);
   if (!active.length) return { exhausted: false };
   const limiting = [...active].sort((left, right) => left.remainingPercent - right.remainingPercent)[0]!;
   return {
@@ -87,6 +89,9 @@ export function equivalentFallbackModel(
   reasoningEffort?: string,
 ): { model?: string; reasoningEffort?: string } {
   const highTier = reasoningEffort === "high" || reasoningEffort === "xhigh" || /opus|pro|max|gpt-5|o1|o3/iu.test(model ?? "");
+  // No model picked means the CLI's own default, which is each provider's main model: keep that
+  // rather than reading "unspecified" as a small tier (it sent coding work to Haiku).
+  if (!model && !highTier) return { model: undefined, reasoningEffort: undefined };
   if (to === "claude") return { model: highTier ? "sonnet" : "haiku", reasoningEffort: undefined };
   if (to === "codex") return { model: undefined, reasoningEffort: highTier || from === "claude" && /opus/iu.test(model ?? "") ? "high" : "medium" };
   return { model: highTier ? "grok-4.7" : "grok-4.7-build-fast", reasoningEffort: undefined };

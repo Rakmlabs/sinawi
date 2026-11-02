@@ -955,10 +955,10 @@ test("retries a quota-failed worker once on fallback with task and partial log",
   const takeover = session.events.find((event) => event.delegationId && event.text === "작업을 이어받고 있습니다.");
   assert.equal(takeover?.agent, "claude");
   assert.equal(takeover?.taskStatus, "running");
-  assert.equal(takeover?.model, "haiku");
+  assert.equal(takeover?.model, undefined, "a worker on the CLI default keeps the CLI default after fallback");
   const completion = [...session.events].reverse().find((event) => event.delegationId && event.taskStatus === "done");
   assert.equal(completion?.agent, "claude");
-  assert.equal(completion?.model, "haiku");
+  assert.equal(completion?.model, undefined);
 });
 
 test("worker quota fallback preserves an unrelated fallback-provider worker session", async () => {
