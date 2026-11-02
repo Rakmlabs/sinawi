@@ -29,7 +29,7 @@ Everything runs on your Mac. Sinawi never asks for or stores API keys; it uses e
 ## Requirements
 
 - macOS
-- [Node.js](https://nodejs.org) **22.12 or newer**, on your login shell's `PATH`
+- [Node.js](https://nodejs.org) **24.22.1 or newer recommended** (on 22.x, 22.23.4 or newer: the 2026-10-20 security release), on your login shell's `PATH`. Use an arm64 Node on Apple Silicon
 - At least one of these CLIs, installed and logged in:
   - [Codex CLI](https://github.com/openai/codex)
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup)

@@ -29,7 +29,7 @@ CLI마다 잘하는 일이 다릅니다. 한 에이전트가 다른 에이전트
 ## 필요한 것
 
 - macOS
-- [Node.js](https://nodejs.org) **22.12 이상** (로그인 셸의 `PATH`에 있어야 함)
+- [Node.js](https://nodejs.org) **24.22.1 이상 권장** (22.x는 22.23.4 이상, 2026-10-20 보안 패치 포함). 로그인 셸의 `PATH`에 있어야 함. Apple Silicon에서는 arm64 Node를 쓴다
 - 다음 CLI 중 하나 이상, 설치하고 로그인한 상태로:
   - [Codex CLI](https://github.com/openai/codex)
   - [Claude Code](https://docs.anthropic.com/ko/docs/claude-code/setup)
