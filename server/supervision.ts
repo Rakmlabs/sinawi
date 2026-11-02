@@ -36,20 +36,33 @@ export const DEFAULT_REPORT_FORMAT = [
   "남은 문제: 막힌 지점, 추측한 부분, 사용자 결정이 필요한 것",
 ].join("\n");
 
+/**
+ * The worker only sees the brief, so whatever the lead's summary drops or gets wrong (an asked-for
+ * reference search, a skill, the current logo) is lost. The user's own words ride along, unedited.
+ */
+export function userWordsSection(task: string, userPrompt: string): string {
+  const words = userPrompt.trim();
+  if (!words || task.includes(words.slice(0, 200))) return "";
+  return `## 사용자 원문 (앱이 붙임)
+위 브리프는 총괄이 이 요청을 정리한 것이다. 원문에 있는 요구(조사할 것, 쓸 스킬, 기준으로 삼을 것)가 브리프에서 빠졌으면 그것도 한다. 브리프에 적힌 사실(파일 위치, 디자인·브랜드·기획의 정본, 값)이 저장소에서 확인한 것과 다르면 저장소를 따르고 보고에 차이를 적는다. 원문이 범위를 넓히는 것처럼 보이면 브리프의 범위를 지키고 남은 요구를 보고에 적는다.
+${words.length > 3_000 ? `${words.slice(0, 2_999)}…` : words}`;
+}
+
 /** Auto-fills missing brief sections so every worker gets goal/context/criteria/constraints/verification/report. */
 export function ensureBrief(task: string, userPrompt: string): { text: string; missing: BriefSection[] } {
   const missing = missingBriefSections(task);
-  if (!missing.length) return { text: task, missing };
+  const words = userWordsSection(task, userPrompt);
+  if (!missing.length) return { text: words ? `${task.trim()}\n\n${words}` : task, missing };
   const defaults: Record<BriefSection, string> = {
     목표: "위 지시를 그대로 수행한다.",
-    맥락: `사용자 원래 요청(참고용):\n${clip(userPrompt.trim(), 1_500)}`,
+    맥락: words ? "아래 사용자 원문이 이 작업의 맥락이다." : `사용자 원래 요청(참고용):\n${clip(userPrompt.trim(), 1_500)}`,
     "완료 기준": "요청한 결과물이 실제로 존재하고, 아래 검증 방법으로 확인되었을 때만 완료다. 확인 못 했으면 '부분 완료'로 보고한다.",
     제약: "맡은 범위 밖 파일은 수정하지 않는다. 다른 작업자의 변경을 되돌리지 않는다. 수정하는 파일에 적용되는 가장 가까운 AGENTS.md, CLAUDE.md, GEMINI.md를 따른다. 커밋·push·배포·삭제·외부 전송 등 되돌리기 어려운 작업은 지시에 있을 때만 한다. 브리프 범위 안의 결정은 스스로 내리고 보고에 적는다.",
     검증: "끝났다고 하기 전에 브리프의 검증을 직접 실행한다(관련 테스트·타입체크, 파일 존재·내용 확인, UI는 ao-browser snapshot/screenshot). 확인한 명령과 결과를 증거로 남긴다. 실행하지 못했으면 완료가 아니다.",
     "보고 형식": DEFAULT_REPORT_FORMAT,
   };
   const filled = missing.map((section) => `## ${section} (자동 보완)\n${defaults[section]}`).join("\n\n");
-  return { text: `${task.trim()}\n\n${filled}`, missing };
+  return { text: `${task.trim()}\n\n${filled}${words ? `\n\n${words}` : ""}`, missing };
 }
 
 /**
@@ -92,7 +105,9 @@ export const COMPUTER_CORE = `## 컴퓨터 조작 (ao-computer)
 export const ORCHESTRATOR_RULES = `## 위임 규칙 (Sinawi 운영 규칙)
 당신의 일은 계획, 위임, 검증, 보고입니다. 워커에게 맡긴 일은 워커가 하는 동안 직접 하지 않습니다. 읽기 전용 확인만 허용됩니다. 사용자가 물으면 답한 뒤 조정을 계속합니다.
 - 위임 본문에는 반드시 다음 6개 제목을 쓴다: ## 목표 / ## 맥락 / ## 완료 기준 / ## 제약 / ## 검증 / ## 보고 형식. 빠진 칸은 앱이 기본값으로 채우지만, 구체적일수록 결과가 좋다.
-- 맥락에는 워커가 다시 찾지 않아도 되는 사실(경로, 이미 확인된 값, 이전 시도와 실패 이유)을 적는다. 워커는 이 대화를 보지 못한다. 다른 워커가 같은 저장소에서 만지는 파일이 있으면 적고, 그 변경을 되돌리지 말라고 적는다.
+- 맥락에는 워커가 다시 찾지 않아도 되는 사실(경로, 이미 확인된 값, 이전 시도와 실패 이유)을 적는다. 워커는 이 대화를 보지 못한다. 다른 워커가 같은 저장소에서 만지는 파일이 있으면 적고, 그 변경을 되돌리지 말라고 적는다. 앱이 사용자 원문을 브리프 끝에 붙이므로 사용자 말을 바꿔 쓰지 말고, 원문의 요구(조사, 스킬, 기준)는 빠짐없이 완료 기준에 옮긴다.
+- 디자인 시스템, 브랜드 자산(로고), 기획서, 가격표 같은 정본은 결론을 요약해 지시하지 않고 경로를 적어 워커가 직접 읽게 한다. 같은 주제의 파일이 여럿이면 가장 최근 것(\`git log -1 -- <경로>\` 날짜, 미커밋 변경, 높은 버전)을 정본으로 적고 근거를 단다. 사용자가 정하지 않은 취향 결정(배경 이미지, 레이아웃, 색, 서체)은 지시로 박지 않고 워커가 정본과 레퍼런스를 보고 정하게 한다.
+- 스킬은 이름만 적는다. 그 스킬의 절차를 줄이거나 일부만 쓰라고 하지 않는다. 사용자가 부른 스킬(예: /deep-interview)은 사용자가 멈추라고 하기 전까지 그 스킬의 절차대로 진행한다.
 - 완료 기준은 확인 가능한 문장으로 쓴다(예: "npm test 통과", "?hero=c에서 video src가 /preview/c/loop.mp4").
 - 단계는 2개 이상일 때만 계획한다. 한 단계짜리 계획은 만들지 않는다. 서로 독립적인 단계만 병렬로 나누고, 같은 파일을 두 워커에게 동시에 맡기지 않는다.
 - 코드베이스가 낯설면 구현 전에 읽기 전용 탐색을 위임해 핵심 파일 5~10개와 한 줄 이유를 받는다. 그 파일은 총괄이 읽고 계획에 반영한다.
@@ -131,7 +146,8 @@ export const WORKER_RULES = `## 작업자 운영 규칙 (Sinawi)
 - CI·배포 결과는 \`gh run watch\`로 run 전체를 기다리지 않는다. \`gh run view <id> --json status,conclusion,jobs\`로 확인하고, 필요한 job(build·deploy 등) 결과가 나오면 advisory 같은 남은 job을 기다리지 말고 보고한다.
 - 끝났다고 보고하기 전에 브리프의 검증을 직접 실행하고 증거(명령과 출력 요지, 경로)를 남긴다. 검증하지 못했으면 '부분 완료'라고 쓴다.
 - 지시받지 않은 범위로 넓히지 않는다. 범위 안의 결정은 스스로 내리고 보고에 적는다. 최종 보고 끝에 질문이나 추가 제안을 붙이지 않는다.
-- 작업에 맞는 스킬이 있으면 찾아서 쓴다(Claude Code는 Skill 도구, Codex는 skills). 브리프에 스킬 이름이 있으면 먼저 그 스킬을 연다.
+- 작업에 맞는 스킬이 있으면 찾아서 쓴다(Claude Code는 Skill 도구, Codex는 skills). 브리프에 스킬 이름이 있으면 먼저 그 스킬을 연다. 스킬이 요구하는 준비 단계(맥락 파일 작성, 레퍼런스 수집 등)는 건너뛰지 않는다. 못 하면 왜 못 했는지 보고에 적는다.
+- 브리프의 사실(파일 위치, 디자인·브랜드·기획의 정본, 값)은 총괄의 요약이다. 시작할 때 해당 경로를 직접 열어 확인하고, 같은 주제의 더 최근 파일(\`git log -3 -- <경로>\`, \`git status\`)이 있으면 그것을 따른 뒤 보고에 차이를 적는다.
 - 최종 보고 형식:
 ${DEFAULT_REPORT_FORMAT}
 

@@ -165,11 +165,17 @@ test("a mixed team gets each CLI's notes on its own prompt", async () => {
 test("briefs missing sections are auto-filled; complete briefs untouched", () => {
   const full = "## 목표\na\n## 맥락\nb\n## 완료 기준\nc\n## 제약\nd\n## 검증\ne\n## 보고 형식\nf";
   assert.deepEqual(missingBriefSections(full), []);
-  assert.equal(ensureBrief(full, "u").text, full);
+  assert.equal(ensureBrief(full, "").text, full);
+  const withWords = ensureBrief(full, "레퍼런스 찾아보고 스킬 잘 써서 해줘").text;
+  assert.ok(withWords.startsWith(full.trim()));
+  assert.match(withWords, /## 사용자 원문 \(앱이 붙임\)\n[\s\S]*레퍼런스 찾아보고 스킬 잘 써서 해줘$/);
+  assert.match(withWords, /저장소를 따르고/);
+  assert.equal(ensureBrief(`${full}\n레퍼런스 찾아보고`, "레퍼런스 찾아보고").text, `${full}\n레퍼런스 찾아보고`, "already quoted: not repeated");
   const filled = ensureBrief("버튼 색을 바꿔라", "원래 요청 X");
   assert.equal(filled.missing.length, 6);
   assert.match(filled.text, /## 완료 기준 \(자동 보완\)/);
-  assert.match(filled.text, /원래 요청 X/);
+  assert.equal(filled.text.match(/원래 요청 X/g)?.length, 1, "the user's words appear once");
+  assert.match(filled.text, /## 사용자 원문/);
   assert.match(filled.text, /AGENTS\.md, CLAUDE\.md, GEMINI\.md/);
 });
 
