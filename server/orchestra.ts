@@ -13,7 +13,7 @@ import { allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, loc
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
-import { ensureWorkerWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
+import { ensureWorkerWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, STATUS_AGENT_MODEL, statusDigest, statusPrompt, takePending, type LiveWorker } from "./live-turn.js";
 
 const delegationPattern = /<<DELEGATE\s+to=["']([\w.-]{1,100})["']>>(.*?)<<\/DELEGATE>>/gis;
@@ -475,7 +475,9 @@ export class Orchestra {
   private async worktreeNotice(session: Session): Promise<string> {
     if (!this.worktreeDataDir || !await gitRepo(session.cwd).catch(() => undefined)) return "";
     const dirty = await mainTreeDirty(session.cwd).catch(() => false);
-    return `\n\n## 워커 작업 위치 (git worktree)
+    const checkouts = await userWorktrees(session.cwd, this.worktreeDataDir).catch(() => []);
+    const siblings = checkouts.length > 1 ? `\n\n## 이 저장소의 사용자 작업 폴더 (git worktree)\n같은 저장소를 사용자가 여러 폴더로 나눠 쓰고 있습니다. 세션 폴더는 \`${session.cwd}\`입니다.\n${checkouts.map((item) => `- \`${item.path}\` — ${item.branch ? `브랜치 \`${item.branch}\`` : "detached"} @ ${item.head}`).join("\n")}\n사용자가 "기존꺼", "다른 폴더/워크트리", 브랜치 이름을 말하면 이 목록에서 찾아 확인하고 쓰세요. 배포·롤백 대상이 어느 폴더·브랜치인지 원격 브랜치와 비교해 정합니다.` : "";
+    return `${siblings}\n\n## 워커 작업 위치 (git worktree)
 이 세션 폴더는 git 저장소입니다. 파일을 고치는 워커는 각자 전용 git worktree와 브랜치(\`sinawi/${session.id.slice(0, 8)}/<워커 ID>\`)에서 일하고, 메인 폴더는 바뀌지 않습니다. 같은 라운드의 워커들은 서로의 변경을 보지 못하므로, 서로 의존하는 일은 한 워커에게 맡기거나 다음 라운드로 나누세요. 같은 워커는 다음 라운드에도 자기 worktree를 이어 씁니다. 워커 결과와 함께 각 worktree의 경로·브랜치·바뀐 파일을 알려 드립니다. 검토는 그 경로에서 하세요. 앱은 자동 병합하지 않습니다. 최종 답에 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요.${dirty ? "\n메인 폴더에 커밋되지 않은 변경이 있습니다. worktree는 마지막 커밋(HEAD) 기준이라 그 변경이 들어 있지 않습니다. 워커 브리프의 맥락에 이 사실을 적으세요." : ""}`;
   }
 

@@ -67,6 +67,18 @@ async function registeredWorktrees(repoRoot: string): Promise<Set<string>> {
   return new Set(resolved);
 }
 
+/** The repository's own worktrees (the user's checkouts), leaving out the ones Sinawi made under `dataDir`. */
+export async function userWorktrees(cwd: string, dataDir: string): Promise<{ path: string; branch?: string; head: string }[]> {
+  const list = (await tryGit(cwd, ["worktree", "list", "--porcelain"])) ?? "";
+  const ours = join(dataDir, "worktrees") + "/";
+  return list.split("\n\n").flatMap((block) => {
+    const fields = new Map(block.split("\n").map((line) => [line.split(" ", 1)[0], line.slice(line.indexOf(" ") + 1)] as const));
+    const path = fields.get("worktree");
+    if (!path || (path + "/").startsWith(ours) || fields.has("bare")) return [];
+    return [{ path, branch: fields.get("branch")?.replace(/^refs\/heads\//u, ""), head: (fields.get("HEAD") ?? "").slice(0, 7) }];
+  });
+}
+
 async function hasUncommitted(path: string): Promise<boolean> {
   return Boolean((await tryGit(path, ["status", "--porcelain", "--untracked-files=normal"]))?.trim());
 }

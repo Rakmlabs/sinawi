@@ -7,7 +7,7 @@ import test from "node:test";
 import type { RunCliOptions } from "./cli.js";
 import { Orchestra } from "./orchestra.js";
 import type { Session } from "./types.js";
-import { cleanupSessionWorktrees, ensureWorkerWorktree, pruneEmptyWorktrees, removeWorktree, worktreeReviewNote, worktreeStatus, WorktreeDirtyError } from "./worktrees.js";
+import { cleanupSessionWorktrees, ensureWorkerWorktree, pruneEmptyWorktrees, removeWorktree, userWorktrees, worktreeReviewNote, worktreeStatus, WorktreeDirtyError } from "./worktrees.js";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
 
@@ -292,4 +292,24 @@ test("a branch with commits survives automatic cleanup even when the worker move
   assert.equal((await worktreeStatus(info)).commits, 1);
   await assert.rejects(removeWorktree(info, { onlyIfEmpty: true }));
   assert.equal(git(repo, "rev-list", "--count", `${info.base}..${info.branch}`), "1");
+});
+
+test("the user's own worktrees are listed for the lead; Sinawi's are not", async (t) => {
+  const { base, repo, dataDir } = await tempRepo(t);
+  const sibling = join(base, "repo-reposition");
+  git(repo, "worktree", "add", "-q", "-b", "feat/reposition", sibling);
+  await ensureWorkerWorktree({ dataDir, sessionId: "abcdef12-3456", workerId: "claude", cwd: sibling });
+  const list = await userWorktrees(sibling, dataDir);
+  assert.deepEqual(list.map((item) => [item.path, item.branch]), [[repo, "main"], [sibling, "feat/reposition"]]);
+  assert.match(list[0].head, /^[0-9a-f]{7}$/);
+
+  const prompts: string[] = [];
+  const runner = async (options: RunCliOptions) => { prompts.push(options.prompt); return { exitCode: 0, finalText: "ok" }; };
+  const orchestra = new Orchestra(() => undefined, runner);
+  orchestra.worktreeDataDir = dataDir;
+  const session = await orchestra.create({ prompt: "기존꺼로 배포해줘", agent: "codex", workers: ["claude"], cwd: sibling });
+  await settle(session);
+  assert.match(prompts[0], /이 저장소의 사용자 작업 폴더/);
+  assert.ok(prompts[0].includes(`\`${repo}\` — 브랜치 \`main\``));
+  assert.doesNotMatch(prompts[0].split("## 워커 작업 위치")[0], /sinawi\/abcdef12/);
 });
