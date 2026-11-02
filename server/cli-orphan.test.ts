@@ -26,3 +26,26 @@ process.exit(0);
   assert.equal(result.finalText, "done with server");
   assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started}ms`);
 });
+
+// `claude -p` prints its result but keeps running while a background shell it started is alive.
+test("runCli ends a CLI that lingers after its end-of-turn line, as a normal exit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-linger-"));
+  const executable = join(directory, "mock-claude.mjs");
+  await writeFile(executable, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "linger" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "result", subtype: "success", result: "상태: 완료", session_id: "linger" }) + "\\n");
+setInterval(() => {}, 1000);
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  const previous = process.env.SINAWI_CLAUDE_BIN;
+  process.env.SINAWI_CLAUDE_BIN = executable;
+  try {
+    const started = Date.now();
+    const result = await runCli({ agent: "claude", prompt: "serve", cwd: directory, onLine: () => undefined, exitGraceMs: 200, turnEndGraceMs: 300 });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.finalText, "상태: 완료");
+    assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started}ms`);
+  } finally {
+    if (previous === undefined) delete process.env.SINAWI_CLAUDE_BIN; else process.env.SINAWI_CLAUDE_BIN = previous;
+  }
+});

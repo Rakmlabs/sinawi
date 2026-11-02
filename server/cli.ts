@@ -41,6 +41,8 @@ export interface RunCliOptions {
   signal?: AbortSignal;
   /** How long to wait for stdout to drain after the CLI exits before giving up on it (tests shorten it). */
   exitGraceMs?: number;
+  /** How long a CLI may linger after its end-of-turn line before it is told to exit. */
+  turnEndGraceMs?: number;
   /** Folders outside `cwd` the run may read (e.g. worker worktrees a reviewer checks). */
   extraDirs?: string[];
   /** `--settings` JSON for Claude (the Bash pre-approval hook); set by prepareCliInvocation. */
@@ -92,6 +94,19 @@ export const grokHeadlessRules = [
   "Each run_terminal_command must be ONE simple command that starts with one of those programs: no `cd`, no `&&`/`;`/`||` chains, no `VAR=value` assignments, no `$(...)`, no for/while loops, no `bash -c`.",
   "Use absolute paths or paths relative to the working directory instead of cd. Split multi-step work into several separate tool calls; write longer logic to a .py file and run it with python3.",
 ].join(" ");
+
+/**
+ * The CLI's own end-of-turn line (Claude `result`, Grok `end`). `claude -p` keeps running after it
+ * while a background shell it started (dev server, http.server) is alive, so a finished worker
+ * looked stuck until the stall detector killed it five minutes later.
+ */
+export function isTurnEnd(agent: AgentId, raw: string): boolean {
+  if (agent === "codex" || !raw.startsWith("{")) return false;
+  try {
+    const type = (JSON.parse(raw) as { type?: unknown }).type;
+    return agent === "claude" ? type === "result" : type === "end";
+  } catch { return false; }
+}
 
 export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine" | "exitGraceMs" | "onActivity">): CliInvocation {
   const { agent, prompt, cwd, model, reasoningEffort, readOnly, readTools, resumeSessionId, blockedMcp } = options;
@@ -147,7 +162,7 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
   return { command: cliName("grok"), args, cwd };
 }
 
-type InvocationOptions = Omit<RunCliOptions, "signal" | "onLine" | "exitGraceMs" | "onActivity">;
+type InvocationOptions = Omit<RunCliOptions, "signal" | "onLine" | "exitGraceMs" | "turnEndGraceMs" | "onActivity">;
 type GrokGuard = (cwd: string, names: readonly string[]) => Promise<void>;
 type ClaudeFlagProbe = (command: string) => Promise<ReadonlySet<string> | undefined>;
 
@@ -537,8 +552,15 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       options.onLine({ type: "message", text, finalText: text });
     };
     const output = createInterface({ input: child.stdout });
+    let turnEndTimer: NodeJS.Timeout | undefined;
+    let endedAfterTurn = false;
     output.on("line", (raw) => {
       options.onActivity?.();
+      if (!turnEndTimer && isTurnEnd(options.agent, raw)) {
+        // Only the CLI itself is signalled: background children it started keep running (orphanGroups).
+        turnEndTimer = setTimeout(() => { endedAfterTurn = true; try { child.kill("SIGTERM"); } catch { /* already gone */ } }, options.turnEndGraceMs ?? 10_000);
+        turnEndTimer.unref();
+      }
       const reported = parseCliUsage(options.agent, raw);
       if (reported) usage = { ...usage, ...reported };
       const quota = parseProviderQuota(options.agent, raw);
@@ -649,8 +671,11 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       }, options.exitGraceMs ?? 3_000);
       exitDrainTimer.unref();
     });
-    child.once("close", (code) => {
+    child.once("close", (closeCode) => {
       if (exitDrainTimer) clearTimeout(exitDrainTimer);
+      if (turnEndTimer) clearTimeout(turnEndTimer);
+      // The turn was already over when we told the lingering CLI to exit: that is a normal end.
+      const code = endedAfterTurn && !aborted ? 0 : closeCode;
       if (computerEnv.SINAWI_COMPUTER_TOKEN) revokeComputerToken(computerEnv.SINAWI_COMPUTER_TOKEN);
       if (finished) return;
       finished = true;
