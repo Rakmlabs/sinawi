@@ -177,6 +177,258 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the computer_exec command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-computer-exec",
+          "markdownDescription": "Enables the computer_exec command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the computer_revoke command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-computer-revoke",
+          "markdownDescription": "Enables the computer_revoke command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the computer_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-computer-stop",
+          "markdownDescription": "Enables the computer_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-call",
+          "markdownDescription": "Enables the native_browser_call command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-close",
+          "markdownDescription": "Enables the native_browser_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_devtools command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-devtools",
+          "markdownDescription": "Enables the native_browser_devtools command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_dialog command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-dialog",
+          "markdownDescription": "Enables the native_browser_dialog command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_downloads command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-downloads",
+          "markdownDescription": "Enables the native_browser_downloads command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_emulate command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-emulate",
+          "markdownDescription": "Enables the native_browser_emulate command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_events command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-events",
+          "markdownDescription": "Enables the native_browser_events command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-history",
+          "markdownDescription": "Enables the native_browser_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_input command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-input",
+          "markdownDescription": "Enables the native_browser_input command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_layout command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-layout",
+          "markdownDescription": "Enables the native_browser_layout command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-open",
+          "markdownDescription": "Enables the native_browser_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_poll command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-poll",
+          "markdownDescription": "Enables the native_browser_poll command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_screenshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-screenshot",
+          "markdownDescription": "Enables the native_browser_screenshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the native_browser_supported command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-native-browser-supported",
+          "markdownDescription": "Enables the native_browser_supported command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_devtools command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-devtools",
+          "markdownDescription": "Enables the open_devtools command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the permission_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-permission-status",
+          "markdownDescription": "Enables the permission_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-request-permission",
+          "markdownDescription": "Enables the request_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the server_version_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-server-version-status",
+          "markdownDescription": "Enables the server_version_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the computer_exec command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-computer-exec",
+          "markdownDescription": "Denies the computer_exec command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the computer_revoke command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-computer-revoke",
+          "markdownDescription": "Denies the computer_revoke command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the computer_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-computer-stop",
+          "markdownDescription": "Denies the computer_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-call",
+          "markdownDescription": "Denies the native_browser_call command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-close",
+          "markdownDescription": "Denies the native_browser_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_devtools command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-devtools",
+          "markdownDescription": "Denies the native_browser_devtools command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_dialog command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-dialog",
+          "markdownDescription": "Denies the native_browser_dialog command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_downloads command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-downloads",
+          "markdownDescription": "Denies the native_browser_downloads command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_emulate command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-emulate",
+          "markdownDescription": "Denies the native_browser_emulate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_events command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-events",
+          "markdownDescription": "Denies the native_browser_events command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-history",
+          "markdownDescription": "Denies the native_browser_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_input command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-input",
+          "markdownDescription": "Denies the native_browser_input command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_layout command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-layout",
+          "markdownDescription": "Denies the native_browser_layout command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-open",
+          "markdownDescription": "Denies the native_browser_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_poll command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-poll",
+          "markdownDescription": "Denies the native_browser_poll command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_screenshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-screenshot",
+          "markdownDescription": "Denies the native_browser_screenshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the native_browser_supported command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-native-browser-supported",
+          "markdownDescription": "Denies the native_browser_supported command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_devtools command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-devtools",
+          "markdownDescription": "Denies the open_devtools command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the permission_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-permission-status",
+          "markdownDescription": "Denies the permission_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-request-permission",
+          "markdownDescription": "Denies the request_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the server_version_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-server-version-status",
+          "markdownDescription": "Denies the server_version_status command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",
