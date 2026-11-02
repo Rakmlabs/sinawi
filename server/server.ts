@@ -39,7 +39,7 @@ import { enabledPublicSkills, publicSkills } from "./skills.js";
 import { RoutingService, type ModelCommandRunner, type PlannerRunner } from "./routing.js";
 import { workspaceIdPattern, createCoalescedSaver, loadBots, loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, workspaceToolSettings, mutateBots, mutateGroups, mutateToolSettings, mutateWorkspaceState, saveSessions } from "./store.js";
 import { discoverMcpTools, updateMcpTool, type ToolCommandRunner } from "./tools.js";
-import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, Session, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
+import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, Session, SessionDraft, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
 import { randomUUID } from "node:crypto";
 import { registerSessionFileRoutes } from "./session-files.js";
 import { registerLinkPreviewRoute } from "./link-preview.js";
@@ -525,6 +525,29 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     onEvent: (sessionId, text) => orchestra.note(sessionId, text),
   });
   orchestra.sessionRemoved = (id) => devServers.stopSession(id);
+  // Live drafts: at most one push per 50 ms per writer; the end of a draft ("") goes out at once and
+  // drops a pending push, so a stale fragment never lands after the finished message.
+  const draftTimers = new Map<string, { timer?: NodeJS.Timeout; latest?: SessionDraft }>();
+  const sendDraft = (draft: SessionDraft) => { const message = JSON.stringify({ type: "draft", ...draft }); for (const client of openClients()) client.send(message); };
+  orchestra.sessionDraft = (draft) => {
+    const key = `${draft.sessionId}:${draft.workerId ?? ""}`;
+    const state = draftTimers.get(key) ?? {};
+    if (!draft.text) {
+      if (state.timer) clearTimeout(state.timer);
+      draftTimers.delete(key);
+      sendDraft(draft);
+      return;
+    }
+    state.latest = draft;
+    if (!state.timer) {
+      sendDraft(draft);
+      state.timer = setTimeout(() => {
+        state.timer = undefined;
+        if (state.latest && state.latest !== draft) sendDraft(state.latest);
+      }, 50);
+    }
+    draftTimers.set(key, state);
+  };
   httpServer.once("close", () => devServers.stopAll());
   process.once("exit", () => devServers.stopAll("SIGKILL"));
   registerServeRoutes(app, devServers);

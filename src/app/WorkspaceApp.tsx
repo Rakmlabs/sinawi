@@ -38,7 +38,7 @@ import { ViewerContext } from "../media-ui";
 import { FileViewer } from "../FileViewer";
 import type { MediaRef } from "../viewer-model";
 import { ToolsPanel, toolsShortcut } from "../ToolsPanel";
-import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SkillInfo as Skill, Bot as Preset } from "../../server/types";
+import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SessionDraft, SkillInfo as Skill, Bot as Preset } from "../../server/types";
 import { scopedApi, workspaceApi, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
@@ -363,7 +363,18 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     void workspaceApi("/notifications", { workspaceId, type: "error", title: t("ws.requestError"), body: error, key: `request:${error.slice(0, 100)}` }).catch(() => undefined);
     setError("");
   }, [error, workspaceId]);
+  // Messages agents are still writing, keyed by session and writer (see server SessionDraft).
+  const [drafts, setDrafts] = useState<Record<string, SessionDraft>>({});
   const onServerMessage = (message: ServerMessage) => {
+    if (message.type === "draft" && typeof message.sessionId === "string") {
+      const draft = message as unknown as SessionDraft;
+      const key = `${draft.sessionId}:${draft.workerId ?? ""}`;
+      setDrafts((old) => {
+        if (!draft.text) { if (!(key in old)) return old; const next = { ...old }; delete next[key]; return next; }
+        return { ...old, [key]: draft };
+      });
+      return;
+    }
     if (message.type === "notifications") window.dispatchEvent(new Event("orchestra:notifications"));
     if (message.type === "permissions") window.dispatchEvent(new CustomEvent(PERMISSIONS_EVENT, { detail: message.requests }));
     if (message.type === "browser-command") window.dispatchEvent(new CustomEvent("orchestra:browser-command", { detail: message }));
@@ -383,7 +394,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     if (message.type === "session") setSessions((old) => upsertPushedSession(old, message.session as Session, Boolean(message.incremental)));
   };
   useEffect(() => { void load(); }, []);
-  const connected = useAppSocket(onServerMessage, () => { void load(); });
+  const connected = useAppSocket(onServerMessage, () => { setDrafts({}); void load(); });
   const canSendBase = Boolean(
     new Set([...skills, ...messageSkills]).size <= 20 &&
     (sessionRunning || !busy) &&
@@ -798,7 +809,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                   {active && active.status !== "running" && <QuotaReturnBanner active={active} threshold={quotaThreshold} allowedAgents={allowedAgents} busy={busy}
                     onReturn={(eventId) => void sessionAction(`/sessions/${active.id}/quota/return`, { eventId })} />}
                   <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} onScroll={onChatScroll}>
-                    {selectedWorker ? <><WorkerThread key={`${active?.id}-${selectedWorker.id}`} worker={selectedWorker} /><div ref={bottom} /></> : !active ? (
+                    {selectedWorker ? <><WorkerThread key={`${active?.id}-${selectedWorker.id}`} worker={selectedWorker} draft={active?.status === "running" ? drafts[`${active.id}:${selectedWorker.id}`]?.text : undefined} /><div ref={bottom} /></> : !active ? (
                       pendingRecommendation ? <div className="messages routing-message">
                         <div className="message user-message"><div className="message-author"><strong>{t("names.user")}</strong></div><div className="message-text">{prompt}</div></div>
                         <RecommendationCard value={pendingRecommendation} settings={routingSettings} skills={boot.skills} editing={editingRecommendation} busy={busy} runDisabled={!canSend || Boolean(unavailableWarning)} availableAgents={teamAgents} onEdit={() => setEditingRecommendation((old) => !old)} onChange={(value) => setRecommendation({ key: routingKey, value })} onRun={() => void send(true)} />
@@ -813,6 +824,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     ) : (
                       <MessageList active={active} events={conversationEvents} tasksById={tasksById} latestHandoffId={latestHandoffId} latestAssistantId={latestAssistant?.id}
                         choiceOptions={choiceOptions} streamingMessageId={streamingMessageId} busy={busy} bottomRef={bottom}
+                        draft={active.status === "running" ? drafts[`${active.id}:`] : undefined}
                         onUndoHandoff={(eventId) => void sessionAction(`/sessions/${active.id}/handoff/undo`, { eventId })}
                         onOpenWorker={(workerId) => { selectWorker(active.id, workerId); if (!sidebarState.current.overlay) setSidebarOpen(true); }}
                         onPromote={promoteLiveMessage}

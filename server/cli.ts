@@ -72,6 +72,8 @@ export interface RunCliOptions {
    */
   onActivity?: () => void;
   onLine: (line: NormalizedLine) => void;
+  /** The text of the message being written so far ("" once it is complete or replaced by other output). */
+  onDraft?: (text: string) => void;
 }
 
 function cliName(agent: AgentId): string {
@@ -373,8 +375,13 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
 
   const sessionId = data.session_id ?? data.thread_id ?? data.sessionId ?? data.params?.sessionId
     ?? (/session|thread/.test(String(data.type ?? "")) ? data.id : undefined);
-  // `--include-partial-messages` deltas: liveness only. The whole message still arrives afterwards.
-  if (agent === "claude" && data.type === "stream_event") return [];
+  // `--include-partial-messages` text deltas are a live preview (draft); the whole message still arrives
+  // afterwards and is what gets stored. Sub-agent (Task tool) deltas carry a parent_tool_use_id: skipped.
+  if (agent === "claude" && data.type === "stream_event") {
+    const event = data.event;
+    const text = event?.type === "content_block_delta" && event.delta?.type === "text_delta" && !data.parent_tool_use_id ? event.delta.text : undefined;
+    return typeof text === "string" && text ? [{ type: "message", text, draft: true }] : [];
+  }
   if (agent === "grok" || agent === "claude") {
     const deniedCommand = permissionDenial(data);
     if (deniedCommand) return [{ type: "warning", text: `권한 거부: ${deniedCommand}`, sessionId }];
@@ -571,8 +578,16 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     let sessionId: string | undefined;
     let stderr = "";
     let deltaBuffer = "";
+    let draftText = "";
+    let drafting = false;
+    const draft = (text: string) => {
+      if (!text && !drafting) return;
+      drafting = Boolean(text);
+      options.onDraft?.(text);
+    };
     let lastErrorText = "";
     const flushDelta = () => {
+      draft("");
       if (!deltaBuffer.trim()) { deltaBuffer = ""; return; }
       const text = deltaBuffer;
       deltaBuffer = "";
@@ -604,10 +619,13 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
           if (normalized.text === lastErrorText) continue;
           lastErrorText = normalized.text;
         }
+        if (normalized.draft) { draftText += normalized.text; draft(draftText); continue; }
         if (normalized.finalText) finalText = normalized.appendFinal ? finalText + normalized.finalText : normalized.finalText;
         if (normalized.sessionId) sessionId = normalized.sessionId;
-        if (normalized.delta) { deltaBuffer += normalized.text; continue; }
+        if (normalized.delta) { deltaBuffer += normalized.text; draft(deltaBuffer); continue; }
         if (normalized.type !== "message") flushDelta();
+        draftText = "";
+        draft("");
         options.onLine(normalized);
       }
     });

@@ -6,7 +6,7 @@ import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
 import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
 import { enabledPublicSkills, resolveSkillPrompt } from "./skills.js";
-import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, PermissionMode, Session, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
+import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
@@ -259,6 +259,8 @@ export class Orchestra {
 
   /** Set by the server: app-owned resources of a session (dev servers) end with it. */
   sessionRemoved?: (id: string) => void;
+  /** Set by the server: live text of a message an agent is still writing. */
+  sessionDraft?: (draft: SessionDraft) => void;
 
   /** A status line from an app tool (ao-serve) in a session's chat. */
   note(sessionId: string, text: string): void {
@@ -795,6 +797,10 @@ export class Orchestra {
       ...(worktreeRoot ? { readOnlyDirs: [worktreeRoot] } : {}),
       usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role, dataDir: this.usageDataDir },
       onActivity: () => this.heartbeat(session, signal, guard && !guard.stall ? guard.detector : undefined),
+      onDraft: (text) => {
+        if (this.controllers.get(session.id)?.signal !== signal && text) return;
+        this.sessionDraft?.({ sessionId: session.id, agent, role, workerId, text });
+      },
       onLine: (line) => {
         if (this.controllers.get(session.id)?.signal !== signal) return;
         if (line.type !== "message" && isPureNoise(line.text)) return;

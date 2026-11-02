@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Shuffle, Square, WandSparkles, X } from "lucide-react";
 import { ComposerPopover } from "../ComposerPopover";
-import { composerAction, composerLocked, stopClickAllowed, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
+import { composerAction, composerLocked, continueListOnNewline, indentListLine, stopClickAllowed, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
 import type { SlashItem } from "./useComposerCompletion";
 import { kindFromName } from "../../server/media-kinds";
 import { formatBytes, kindLabel, type MediaRef } from "../viewer-model";
@@ -260,6 +260,19 @@ export function Composer(props: ComposerProps) {
               requestAnimationFrame(() => composerInput.current?.setSelectionRange(step.value.length, step.value.length));
               return;
             }
+          }
+          // Markdown list continuation; completion popups already returned above, so Tab only lands here when none is open.
+          const listEdit = e.key === "Enter" && e.shiftKey
+            ? continueListOnNewline(prompt, e.currentTarget.selectionStart, e.currentTarget.selectionEnd)
+            : e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey
+              ? indentListLine(prompt, e.currentTarget.selectionStart, e.shiftKey)
+              : undefined;
+          if (listEdit) {
+            e.preventDefault();
+            setPrompt(listEdit.value);
+            historyDraft.current = listEdit.value;
+            requestAnimationFrame(() => composerInput.current?.setSelectionRange(listEdit.caret, listEdit.caret));
+            return;
           }
           if (
             e.key === "Enter" &&

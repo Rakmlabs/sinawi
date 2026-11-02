@@ -153,3 +153,11 @@
   .worker-output summary { min-height: 44px; }
 }
 @media (max-width: 740px) { .team-trigger-meta { display: none; } .team-trigger { max-width: 220px; } }
+/* A long brief: title as the summary line, the whole Markdown brief when opened. */
+.delegation-brief > summary { display: flex; align-items: baseline; gap: 10px; list-style: none; cursor: pointer; }
+.delegation-brief > summary::-webkit-details-marker { display: none; }
+.delegation-brief > summary h3 { flex: 1 1 auto; min-width: 0; }
+.delegation-brief-toggle { flex: 0 0 auto; color: var(--text-muted); font-size: calc(12px * var(--font-scale)); text-decoration: underline; }
+.delegation-brief[open] .delegation-brief-toggle { display: none; }
+.delegation-brief-body { max-height: 360px; overflow: auto; margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg-surface); font-size: calc(13px * var(--font-scale)); }
+.wt-draft { margin-top: 12px; }

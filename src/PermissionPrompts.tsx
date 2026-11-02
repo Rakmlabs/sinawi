@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { ShieldQuestion } from "lucide-react";
 import { APP_ERROR_EVENT } from "./link-open";
 import { t } from "./i18n";
-import "./permission-prompts.css";
 
 export type PermissionRequest = { id: string; sessionId: string; workspaceId: string; agent: string; toolName: string; detail: string; createdAt: string };
 /** The server's `permissions` WebSocket message, re-sent as a window event. */

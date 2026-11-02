@@ -242,11 +242,23 @@ export interface ConversationInput {
   workspaceId?: WorkspaceId;
 }
 
+/** A message an agent is still writing, streamed to the app as it grows (never stored; see NormalizedLine.draft). */
+export interface SessionDraft {
+  sessionId: string;
+  agent: AgentId;
+  role?: SessionEvent["role"];
+  workerId?: string;
+  /** Text so far; "" ends the draft (the whole message is now an event, or the run moved on). */
+  text: string;
+}
+
 export interface NormalizedLine {
   type: EventType;
   text: string;
   finalText?: string;
   appendFinal?: boolean;
   delta?: boolean;
+  /** A fragment of a message still being written: shown live in the app, never stored (the whole message follows). */
+  draft?: boolean;
   sessionId?: string;
 }

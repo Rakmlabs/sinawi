@@ -20,7 +20,7 @@ test("worker main view renders all of one worker's tasks in order with separator
   assert.match(html, /Claude · 2개 작업/);
   assert.match(html, /선택한 작업/);
   assert.match(html, /npm test/);
-  assert.match(html, /명령 실행/);
+  assert.match(html, /<strong class="wt-name">명령<\/strong><code class="wt-arg">npm test<\/code>/);
   assert.match(html, /다른 작업/);
   assert.doesNotMatch(html, /다른 워커 작업|총괄 응답/);
   assert.ok(html.indexOf("선택한 작업") < html.indexOf("다른 작업"));
@@ -39,12 +39,12 @@ test("worker command rows merge, hide output by default, and render file badges 
     { ...base, id: "message", type: "message", text: "## 작업 결과\n\n**완료**했습니다. `npm test`" },
   ] }, Date.parse(base.time));
   const html = renderToStaticMarkup(createElement(WorkerThread, { worker: { id: "codex", label: "Codex", agent: "codex", tasks: [task], status: task.status, elapsed: task.elapsed, activity: task.activity } }));
-  assert.equal((html.match(/event event-command/g) ?? []).length, 1);
-  assert.match(html, /<pre class="worker-command"><code>npm test<\/code><\/pre>/);
-  assert.match(html, /성공 · 종료 코드 0/);
-  assert.match(html, /<details class="worker-output"><summary>출력 보기<\/summary>/);
+  // Start and completion of one command are a single compact row; the output is its one-line summary.
+  assert.equal((html.match(/class="wt-call wt-command"/g) ?? []).length, 1);
+  assert.match(html, /<code class="wt-arg">npm test<\/code>/);
+  assert.match(html, /wt-dot completed/);
+  assert.match(html, /<span class="wt-result-line">모든 테스트 통과<\/span>/);
   assert.doesNotMatch(html, /<details[^>]*\bopen/);
-  assert.match(html, /모든 테스트 통과/);
   assert.match(html, /추가<\/span><code>src\/new.ts/);
   assert.match(html, /수정<\/span><code>src\/main.tsx/);
   assert.match(html, /<h2>작업 결과<\/h2>/);
@@ -61,8 +61,8 @@ test("command chips distinguish running and failed exits and preserve plain lega
     { ...base, id: "legacy", type: "command", text: "echo legacy" },
   ] }, Date.parse(base.time));
   const html = renderToStaticMarkup(createElement(WorkerThread, { worker: { id: "codex", label: "Codex", agent: "codex", tasks: [task], status: task.status, elapsed: task.elapsed, activity: task.activity } }));
-  assert.match(html, /worker-item-status in_progress">진행중/);
-  assert.match(html, /worker-item-status failed">실패 · 종료 코드 1/);
-  assert.match(html, /출력이 없습니다/);
-  assert.match(html, /<code>echo legacy<\/code>/);
+  assert.match(html, /wt-dot in_progress" role="img" aria-label="진행중"><\/span><strong class="wt-name">명령<\/strong><code class="wt-arg">sleep 1/);
+  assert.match(html, /wt-dot failed" role="img" aria-label="실패"><\/span><strong class="wt-name">명령<\/strong><code class="wt-arg">false/);
+  assert.match(html, /출력이 없습니다\. · 종료 코드 1/);
+  assert.match(html, /<code class="wt-arg">echo legacy<\/code>/);
 });

@@ -23,6 +23,8 @@ import "./computer-use.css";
 import "./tools.css";
 import "./sidebar-menu.css";
 import "./beat.css";
+import "./worker-thread.css";
+import "./permission-prompts.css";
 import "./appearance.css";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { QuotaProvider } from "./QuotaContext";
