@@ -1,4 +1,21 @@
-export type AgentCommand = { type: "browser-command"; id: string; action: string; args: Record<string, unknown>; workspaceId?: string };
+export type AgentCommand = { type: "browser-command"; id: string; action: string; args: Record<string, unknown>; workspaceId?: string; owner?: string };
+
+/**
+ * The tab an agent command runs in. Each owner (a session's lead or one of its workers) keeps its
+ * own tab, so two sessions using the browser at once never drive the same page. A newcomer takes
+ * the tab on screen if nobody owns it (the page the user opened for it), else an empty unowned
+ * tab, else a new one. Commands without an owner use the tab on screen, as before.
+ */
+export function agentTabFor<T extends { id: string; url: string; owner?: string }>(tabs: readonly T[], activeId: string, owner: string | undefined, current?: string): { id: string; claim?: boolean } | { create: true } | undefined {
+  const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+  if (!owner) return active ? { id: active.id } : undefined;
+  if (current && tabs.some((tab) => tab.id === current)) return { id: current };
+  const mine = tabs.find((tab) => tab.owner === owner);
+  if (mine) return { id: mine.id };
+  if (active && !active.owner) return { id: active.id, claim: true };
+  const free = tabs.find((tab) => !tab.owner && !tab.url);
+  return free ? { id: free.id, claim: true } : { create: true };
+}
 
 let browserWorkspace: string | undefined;
 /** The workspace on screen: its browser windows are the only ones mounted. */

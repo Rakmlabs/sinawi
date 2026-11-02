@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { agentCommandError, claimCommand, commandForThisWorkspace, idleStatus, commandTargetsOwnApp, holdCommand, setBrowserWorkspace, isOwnAppUrl, replayCommand, takeHeldCommand, withTargetUrls } from "./browser-agent";
+import { agentCommandError, claimCommand, commandForThisWorkspace, idleStatus, commandTargetsOwnApp, holdCommand, setBrowserWorkspace, isOwnAppUrl, replayCommand, takeHeldCommand, withTargetUrls, agentTabFor } from "./browser-agent";
 
 test("agent commands need a proxied localhost tab", () => {
   assert.match(agentCommandError(undefined)!, /goto/);
@@ -63,4 +63,25 @@ test("an agent's browser command runs only in its own workspace", () => {
   assert.equal(commandForThisWorkspace({ workspaceId: "company" }), true);
   assert.equal(commandForThisWorkspace({ workspaceId: "personal" }), false);
   assert.equal(commandForThisWorkspace({}), true, "a command without a workspace (older CLI) still runs");
+});
+
+test("each agent keeps its own browser tab; a second session gets a new one", () => {
+  const tabs = [{ id: "t1", url: "http://localhost:5173" }];
+  // First session takes the page the user opened.
+  assert.deepEqual(agentTabFor(tabs, "t1", "s1:orchestrator"), { id: "t1", claim: true });
+  const owned = [{ id: "t1", url: "http://localhost:5173", owner: "s1:orchestrator" }];
+  assert.deepEqual(agentTabFor(owned, "t1", "s1:orchestrator"), { id: "t1" });
+  // Another session, or a worker of the same session, does not drive it.
+  assert.deepEqual(agentTabFor(owned, "t1", "s2:orchestrator"), { create: true });
+  assert.deepEqual(agentTabFor(owned, "t1", "s1:w2"), { create: true });
+  // An empty unowned tab is reused before a new one is opened.
+  const withBlank = [...owned, { id: "t2", url: "" }];
+  assert.deepEqual(agentTabFor(withBlank, "t1", "s2:orchestrator"), { id: "t2", claim: true });
+  // The owner's own tab wins even when the user is looking at another one.
+  const two = [...owned, { id: "t3", url: "http://localhost:3000", owner: "s2:orchestrator" }];
+  assert.deepEqual(agentTabFor(two, "t1", "s2:orchestrator"), { id: "t3" });
+  assert.deepEqual(agentTabFor(two, "t1", "s2:orchestrator", "t3"), { id: "t3" });
+  // A closed current tab falls back to the rules above; no owner keeps the old behaviour.
+  assert.deepEqual(agentTabFor(two, "t1", "s1:orchestrator", "gone"), { id: "t1" });
+  assert.deepEqual(agentTabFor(two, "t3", undefined), { id: "t3" });
 });

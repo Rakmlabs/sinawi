@@ -11,8 +11,11 @@ export const BROWSER_ACTIONS = ["goto", "snapshot", "click", "type", "fill", "pr
 export type BrowserAction = (typeof BROWSER_ACTIONS)[number];
 export const isBrowserAction = (value: string): value is BrowserAction => (BROWSER_ACTIONS as readonly string[]).includes(value);
 
-/** `workspaceId`: the workspace of the agent run that sent it; the app runs it only in that workspace's browser. */
-export type BrowserCommand = { type: "browser-command"; id: string; action: BrowserAction; args: Record<string, unknown>; workspaceId?: string };
+/**
+ * `workspaceId`: the workspace of the agent run that sent it; the app runs it only in that workspace's browser.
+ * `owner`: the session/worker that sent it; the app gives each owner its own tab.
+ */
+export type BrowserCommand = { type: "browser-command"; id: string; action: BrowserAction; args: Record<string, unknown>; workspaceId?: string; owner?: string };
 export type BrowserResult = { ok: boolean; result?: unknown; error?: string };
 
 export const QUEUE_DIR = join(tmpdir(), "sinawi-browser");
@@ -50,11 +53,11 @@ export class BrowserBridge {
     return 0;
   }
 
-  request(action: BrowserAction, args: Record<string, unknown> = {}, timeoutMs = defaultTimeout(action, args), workspaceId?: string): Promise<BrowserResult> {
+  request(action: BrowserAction, args: Record<string, unknown> = {}, timeoutMs = defaultTimeout(action, args), workspaceId?: string, owner?: string): Promise<BrowserResult> {
     if ((action === "goto" || (action === "tab" && String(args.op ?? "") === "new")) && isOwnAppUrl(String(args.url ?? ""))) return Promise.resolve({ ok: false, error: "Sinawi 자체 주소는 열 수 없습니다. 개발 서버나 다른 사이트 주소를 여세요." });
     const id = randomUUID();
     return new Promise((resolve) => {
-      const command: BrowserCommand = { type: "browser-command", id, action, args, ...(workspaceId ? { workspaceId } : {}) };
+      const command: BrowserCommand = { type: "browser-command", id, action, args, ...(workspaceId ? { workspaceId } : {}), ...(owner ? { owner } : {}) };
       const finish = (result: BrowserResult) => {
         const entry = this.pending.get(id);
         if (!entry) return;
@@ -132,7 +135,8 @@ export function registerBrowserRoutes(app: Express, bridge: BrowserBridge) {
     const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
     let args: Record<string, unknown>;
     try { args = await prepareBrowserArgs(action, body); } catch (error) { res.status(422).json({ ok: false, error: error instanceof Error ? error.message : String(error) }); return; }
-    const result = await materialize(await bridge.request(action, args, undefined, resolveComputerToken(req.get("x-sinawi-token"))?.workspaceId));
+    const run = resolveComputerToken(req.get("x-sinawi-token"));
+    const result = await materialize(await bridge.request(action, args, undefined, run?.workspaceId, run?.owner));
     res.status(result.ok ? 200 : 422).json(result);
   });
 }
@@ -156,7 +160,8 @@ export function watchQueue(bridge: BrowserBridge, dir = QUEUE_DIR, intervalMs = 
             await rm(join(dir, name), { force: true });
             const action = String(raw.action);
             const args = isBrowserAction(action) ? await prepareBrowserArgs(action, raw.args ?? {}) : {};
-            out = isBrowserAction(action) ? await materialize(await bridge.request(action, args, undefined, resolveComputerToken(raw.token)?.workspaceId), dir) : { ok: false, error: `알 수 없는 브라우저 명령: ${action}` };
+            const run = resolveComputerToken(raw.token);
+            out = isBrowserAction(action) ? await materialize(await bridge.request(action, args, undefined, run?.workspaceId, run?.owner), dir) : { ok: false, error: `알 수 없는 브라우저 명령: ${action}` };
           } catch (error) { out = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
           await writeFile(join(dir, `${base}.res.tmp`), JSON.stringify(out));
           const { rename } = await import("node:fs/promises");
@@ -337,6 +342,7 @@ description: Sinawi 앱 안 브라우저 탭(사용자가 보고 있는 화면)�
 - \`hover e4\`, \`select e5 "서울"\`, \`upload e6 /절대/경로.png\`, \`dialog accept\` 또는 \`dialog dismiss\` (confirm/prompt를 띄우기 전에)
 - \`network\`, \`console\` (콘솔 뒤에 네트워크 오류가 있으면 같이 나온다), \`tab new\`, \`tab select 2\`, \`tab close 2\`
 - 페이지의 alert/confirm/prompt는 앱 화면에 대화상자 막대로 뜨고, 그동안 페이지는 멈춘다. 명령 결과에 "대화상자가 열려 있습니다"가 나오면 \`dialog accept [문구]\` 또는 \`dialog dismiss\`로 답한다. 미리 \`dialog accept\`를 해 두면 다음 대화상자에 자동으로 답한다.
+- 세션(과 워커)마다 자기 탭이 따로 있다. 다른 세션이 쓰는 탭이 화면에 있으면 새 탭에서 시작하고, \`tabs\`의 active는 내 탭이다. 다른 세션의 탭을 \`tab select\`로 가져오지 않는다.
 - 링크·버튼이 새 창(target=_blank, window.open)을 열면 새 탭으로 열린다(OAuth 팝업의 window.opener 유지). \`tabs\`로 확인하고 \`tab select\`로 옮긴다.
 - 파일 다운로드는 ~/Downloads에 저장된다. \`downloads\`로 이름·진행률·경로를 본다. \`downloads cancel d3\`로 취소.
 - snapshot에는 같은 출처 iframe 안의 요소도 ref로 나오고 그대로 click/fill 된다. 교차 출처 iframe은 url만 나온다.

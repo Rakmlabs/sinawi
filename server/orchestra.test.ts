@@ -680,7 +680,8 @@ test("planner output is supplied to the orchestrator and each run records its ap
   assert.equal(calls[3].resumeSessionId, undefined);
   assert.match(calls[3].prompt, /\[P0\]/);
   assert.match(calls[3].prompt, /## 진행/);
-  assert.deepEqual(calls.map((call) => call.usageContext), [
+  assert.ok(calls[2].usageContext?.workerId, "a worker run says which worker it is");
+  assert.deepEqual(calls.map(({ usageContext }) => { const { workerId: _w, ...rest } = usageContext ?? {} as NonNullable<typeof usageContext>; return rest; }), [
     { workspaceId: "personal", sessionId: session.id, role: "planner", dataDir: "/tmp/orchestra-usage" },
     { workspaceId: "personal", sessionId: session.id, role: "orchestrator", dataDir: "/tmp/orchestra-usage" },
     { workspaceId: "personal", sessionId: session.id, role: "worker", dataDir: "/tmp/orchestra-usage" },

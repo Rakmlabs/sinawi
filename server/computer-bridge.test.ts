@@ -343,6 +343,9 @@ test("each CLI run gets its own token; helper runs get none", () => {
   assert.equal(a.SINAWI_SESSION_ID, "s1");
   assert.ok(a.SINAWI_COMPUTER_TOKEN && b.SINAWI_COMPUTER_TOKEN && a.SINAWI_COMPUTER_TOKEN !== b.SINAWI_COMPUTER_TOKEN);
   assert.equal(resolveComputerToken(a.SINAWI_COMPUTER_TOKEN)?.agent, "codex");
+  assert.equal(resolveComputerToken(b.SINAWI_COMPUTER_TOKEN)?.owner, "s1:orchestrator");
+  const w = computerRunEnv("codex", { sessionId: "s1", workspaceId: "w", role: "worker", workerId: "w7" }, { TMPDIR: "/x" });
+  assert.equal(resolveComputerToken(w.SINAWI_COMPUTER_TOKEN)?.owner, "s1:w7", "each worker owns its own browser tab");
   assert.ok(a.SINAWI_COMPUTER_DIR);
   assert.equal(computerRunEnv("claude", { sessionId: "r", workspaceId: "w", role: "router" }, { TMPDIR: "/x" }).SINAWI_COMPUTER_TOKEN, undefined);
   assert.deepEqual(computerRunEnv("claude", undefined), {});

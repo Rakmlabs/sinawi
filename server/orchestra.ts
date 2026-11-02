@@ -795,7 +795,7 @@ export class Orchestra {
       ...(permissionMode === "full" ? { fullAccess: true } : {}),
       extraDirs,
       ...(worktreeRoot ? { readOnlyDirs: [worktreeRoot] } : {}),
-      usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role, dataDir: this.usageDataDir },
+      usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role, dataDir: this.usageDataDir, ...(role === "worker" && workerId ? { workerId } : {}) },
       onActivity: () => this.heartbeat(session, signal, guard && !guard.stall ? guard.detector : undefined),
       onDraft: (text) => {
         if (this.controllers.get(session.id)?.signal !== signal && text) return;

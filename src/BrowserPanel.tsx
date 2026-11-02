@@ -5,7 +5,7 @@ import { pushRecent, RECENT_STORE, type RecentSite } from "./browser-surface";
 import { emulationOf, emulationPayload, fitDevice, isViewportError, parseViewportArg, readViewport, serializeViewport, toggleViewport, VIEWPORT_STORE, viewportLabel, type ViewportChoice } from "./browser-viewport";
 import { browserRegistry } from "./browser-registry";
 import { OPEN_URL_EVENT, takeHeldUrl } from "./link-open";
-import { OWN_APP_ERROR, agentCommandError, claimCommand, commandForThisWorkspace, idleStatus, commandTargetsOwnApp, holdCommand, replayCommand, takeHeldCommand, withTargetUrls, type AgentCommand } from "./browser-agent";
+import { OWN_APP_ERROR, agentCommandError, agentTabFor, claimCommand, commandForThisWorkspace, idleStatus, commandTargetsOwnApp, holdCommand, replayCommand, takeHeldCommand, withTargetUrls, type AgentCommand } from "./browser-agent";
 import { browserOwnsFocus, browserShortcut, chatShortcut, globalBrowserShortcut, windowShortcut, type BrowserAction } from "./browser-shortcuts";
 import { attachmentLabel, displayUrl, type ComposerAttachment, type ElementCapture } from "./preview-attachments";
 import { toggleTerminal } from "./terminal-events";
@@ -18,6 +18,8 @@ type Tab = {
   proxyOrigin?: string; targetOrigin?: string; loading?: boolean; error?: string; nonce: number;
   /** Native WKWebView tab (desktop app): any http/https page, real history and screenshots. */
   native?: boolean; canBack?: boolean; canForward?: boolean;
+  /** The session/worker whose agent works in this tab (see agentTabFor). Not saved. */
+  owner?: string;
   /** Native tab blocked on a page alert/confirm/prompt (answered from the dialog bar or by ao-browser dialog). */
   dialog?: DialogInfo;
 };
@@ -338,6 +340,8 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const stopAgentRef = useRef<() => void>(() => undefined);
   // ---- AI agent control (ao-browser) ----
   const [agentTab, setAgentTab] = useState<string>();
+  /** Each owner's current tab (an owner may open several with `tab new` and switch with `tab select`). */
+  const ownerTabs = useRef(new Map<string, string>());
   const agentPending = useRef(new Map<string, (value: { ok: boolean; result?: unknown; error?: string }) => void>());
   const stoppedUntil = useRef(0);
   const agentIdle = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -429,9 +433,26 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     }
     if (commandTargetsOwnApp(command.action, command.args)) return { ok: false, error: OWN_APP_ERROR };
     if (!replayCommand(command.action)) onOpenChange(true);
-    const list = tabsRef.current;
-    const tab = list.find((item) => item.id === activeRef.current) ?? list[0];
-    if (command.action === "tabs") return { ok: true, result: { tabs: tab ? tabSummary(tab.id) : [] } };
+    let list = tabsRef.current;
+    const owner = command.owner;
+    const pick = agentTabFor(list, activeRef.current, owner, owner ? ownerTabs.current.get(owner) : undefined);
+    // Asking about tabs or status, or opening a tab, needs no page of its own yet.
+    const passive = command.action === "tabs" || command.action === "status" || command.action === "downloads" || command.action === "tab";
+    if (pick && "create" in pick && !passive) {
+      // Another agent owns the tab on screen: this one gets its own, shown so the user sees it work.
+      const created: Tab = { ...blankTab(), owner };
+      list = [...list, created];
+      tabsRef.current = list;
+      setTabs(list);
+      setActiveId(created.id);
+      activeRef.current = created.id;
+      ownerTabs.current.set(owner!, created.id);
+    } else if (pick && "id" in pick && owner) {
+      if (pick.claim) { list = list.map((item) => item.id === pick.id ? { ...item, owner } : item); tabsRef.current = list; patch(pick.id, { owner }); }
+      ownerTabs.current.set(owner, pick.id);
+    }
+    const tab = pick && "create" in pick && passive ? undefined : list.find((item) => item.id === (pick && "id" in pick ? pick.id : activeRef.current)) ?? list[0];
+    if (command.action === "tabs") return { ok: true, result: { tabs: tabSummary(tab?.id ?? "") } };
     if (command.action === "downloads") {
       if (!native) return { ok: false, error: "다운로드 추적은 데스크톱 앱에서만 됩니다." };
       try {
@@ -442,13 +463,14 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     }
     const idle = idleStatus(command.action, tab);
     if (idle) return idle;
-    if (!tab) return { ok: false, error: "열린 페이지가 없습니다. 먼저 `ao-browser goto <포트 또는 localhost 주소>` 로 여세요." };
+    if (!tab && command.action !== "tab") return { ok: false, error: "열린 페이지가 없습니다. 먼저 `ao-browser goto <포트 또는 localhost 주소>` 로 여세요." };
     if (command.action === "tab") {
       const op = String(command.args.op ?? "list");
       if (op === "new") {
-        const created = blankTab();
+        const created: Tab = { ...blankTab(), owner };
         setTabs((old) => [...old, created]);
         setActiveId(created.id);
+        if (owner) ownerTabs.current.set(owner, created.id);
         const url = String(command.args.url ?? "").trim();
         if (!url) return { ok: true, result: { created: true, index: list.length + 1, title: "새 탭" } };
         let opened: OpenResult | undefined;
@@ -469,6 +491,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       }
       if (op !== "select") return { ok: false, error: "탭 명령은 new, select, close 입니다. 예: ao-browser tab select 2" };
       setActiveId(picked.id);
+      if (owner) ownerTabs.current.set(owner, picked.id);
       if (picked.url && !picked.frameUrl) { try { await navigate(picked.id, picked.url); } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; } }
       if ((picked.proxied || picked.native) && picked.frameUrl) {
         const snap = await callFrame(picked.id, "snapshot", {}, 8000);
@@ -477,6 +500,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       }
       return { ok: true, result: { selected: index, url: picked.url, title: picked.title } };
     }
+    if (!tab) return { ok: false, error: "열린 페이지가 없습니다. 먼저 `ao-browser goto <포트 또는 localhost 주소>` 로 여세요." };
     setAgentTab(tab.id);
     clearTimeout(agentIdle.current);
     agentIdle.current = setTimeout(() => setAgentTab(undefined), 6000);

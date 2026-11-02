@@ -40,6 +40,8 @@ export interface UsageContext {
   sessionId: string;
   role: UsageRole;
   dataDir?: string;
+  /** The worker a worker run belongs to (several can run in one session at once). */
+  workerId?: string;
 }
 
 function object(value: unknown): Record<string, any> | undefined {
