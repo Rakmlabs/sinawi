@@ -27,6 +27,7 @@ import { browserRegistry } from "../browser-registry";
 import { chatShortcut, globalBrowserShortcut, browserOwnsFocus } from "../browser-shortcuts";
 import { isMacPlatform, SIDEBAR_OVERLAY_QUERY, sidebarLayout, sidebarShortcut } from "../sidebar-rail";
 import { classifyLiveMessage } from "../../server/live-turn";
+import { runStartedAt } from "../run-activity";
 import { promptWithAttachments, type ComposerAttachment } from "../preview-attachments";
 import { WindowHeader } from "../WindowHeader";
 import { conversationText, delegationTasks, delegationWorkers, mainConversation } from "../conversation";
@@ -582,7 +583,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const selectConversation = (id: string) => { setSelected(id); setWorkerSelection(undefined); setTab("workspace"); };
   const selectWorker = (sessionId: string, taskId: string) => { setSelected(sessionId); setWorkerSelection({ sessionId, taskId }); setTab("workspace"); };
   const activeProject = active ? groups.find((group) => group.id === active.groupId)?.name ?? folderName(active.cwd) : groups.find((group) => group.id === groupId)?.name ?? folderName(cwd);
-  const runningSince = useMemo(() => active?.status === "running" ? [...active.events].reverse().find((event) => event.agent === "user")?.time ?? active.createdAt : undefined, [active]);
+  const runningSince = useMemo(() => active ? runStartedAt(active) : undefined, [active]);
   const viewTitles: Record<string, string> = { tools: t("tools.title"), usage: t("side.usage"), sessions: t("sessions.title"), bots: t("bots.title") };
   const teamAgents = boot.agents.length ? availableAgents : allowedAgents;
   const openSettingsAt = useCallback((section?: SettingsCategory, focus?: string) => {

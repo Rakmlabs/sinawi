@@ -56,3 +56,18 @@ export function currentActivity(session: Pick<Session, "status" | "events">): Cu
     return { who, kind: CI_WATCH.test(text) ? "deploy" : "tool", text: clipped, since: event.time };
   }
 }
+
+/**
+ * When the current run started: the user message that began it. Messages typed during the run are
+ * answered or queued at once (the next event carries `metadata.live`), so they do not restart the clock.
+ */
+export function runStartedAt(session: Pick<Session, "status" | "events" | "createdAt">): string | undefined {
+  if (session.status !== "running") return undefined;
+  const { events } = session;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].agent !== "user") continue;
+    if (events[index + 1]?.metadata?.live) continue;
+    return events[index].time;
+  }
+  return session.createdAt;
+}
