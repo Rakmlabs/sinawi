@@ -57,6 +57,17 @@ export function currentActivity(session: Pick<Session, "status" | "events">): Cu
   }
 }
 
+/** "verify" while the lead checks the workers' reports, so a long review does not read as a hang. */
+export function runPhase(session: Pick<Session, "status" | "events">): "verify" | undefined {
+  if (session.status !== "running") return;
+  for (let index = session.events.length - 1; index >= 0; index--) {
+    const event = session.events[index];
+    if (event.type === "delegation" || (event.agent === "user" && !session.events[index + 1]?.metadata?.live)) return;
+    if (event.metadata?.phase === "replan") return;
+    if (event.metadata?.phase === "verify") return "verify";
+  }
+}
+
 /**
  * When the current run started: the user message that began it. Messages typed during the run are
  * answered or queued at once (the next event carries `metadata.live`), so they do not restart the clock.

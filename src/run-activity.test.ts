@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SessionEvent } from "../server/types";
-import { currentActivity, quietState, runStartedAt } from "./run-activity";
+import { currentActivity, quietState, runPhase, runStartedAt } from "./run-activity";
 
 const event = (time: string) => ({ id: "e", sessionId: "s", agent: "claude", type: "message", text: "x", time }) as SessionEvent;
 
@@ -39,4 +39,14 @@ test("the run clock starts at the message that began the run, not at messages ty
   assert.equal(runStartedAt({ status: "running", events, createdAt: "2026-11-02T03:59:00.000Z" }), "2026-11-02T04:00:00.000Z");
   assert.equal(runStartedAt({ status: "done", events, createdAt: "x" }), undefined);
   assert.equal(runStartedAt({ status: "running", events: [], createdAt: "2026-11-02T03:59:00.000Z" }), "2026-11-02T03:59:00.000Z");
+});
+
+test("the working line says the lead is verifying until a new delegation or user turn", () => {
+  const at = (extra: Partial<SessionEvent>) => ({ ...event("2026-11-02T00:00:00Z"), ...extra }) as SessionEvent;
+  const verify = at({ type: "status", text: "총괄이 워커 결과를 검증하고 있습니다.", metadata: { phase: "verify" } });
+  const read = at({ type: "tool", text: "파일 읽기: a.ts" });
+  assert.equal(runPhase({ status: "running", events: [verify, read] }), "verify");
+  assert.equal(runPhase({ status: "running", events: [verify, read, at({ agent: "user", text: "아직 하고 있어?" }), at({ type: "message", metadata: { live: "status" } })] }), "verify");
+  assert.equal(runPhase({ status: "running", events: [verify, at({ type: "delegation" })] }), undefined);
+  assert.equal(runPhase({ status: "done", events: [verify] }), undefined);
 });

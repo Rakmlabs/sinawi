@@ -1,4 +1,5 @@
 import type { RefObject } from "react";
+import { runPhase } from "../run-activity";
 import { ArrowRight } from "lucide-react";
 import { Beat } from "../Beat";
 import { AgentMark } from "../AgentMark";
@@ -83,7 +84,7 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
     <WorktreePanel session={active} />
     {active.status === "running" && (
       <div className="thinking" role="status">
-        <Beat /> {t("msg.teamWorking")} <QuietIndicator session={active} />
+        <Beat /> {t(runPhase(active) === "verify" ? "msg.leadVerifying" : "msg.teamWorking")} <QuietIndicator session={active} />
       </div>
     )}
     <div ref={bottomRef} />
