@@ -14,6 +14,9 @@ test("NO_COLOR/FORCE_COLOR warning is stripped and env never carries both", () =
   assert.equal(env.FORCE_COLOR, undefined);
   assert.equal(env.NO_COLOR, undefined);
   assert.equal(env.CI, "1");
+  assert.equal(env.LANG, "en_US.UTF-8", "launchd gives no locale; tools need UTF-8");
+  assert.equal(cliChildEnv({ LANG: "ko_KR.UTF-8" }).LANG, "ko_KR.UTF-8");
+  assert.equal(cliChildEnv({ LC_ALL: "C" }).LANG, undefined);
 });
 
 test("shared prompts keep the six-field brief and add read, verify, and replan rules", () => {

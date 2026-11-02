@@ -220,11 +220,16 @@ export function isPureNoise(text: string): boolean {
   return stripped !== text && !stripped.replace(/^(?:결과|도구 결과)\s*:?/u, "").trim();
 }
 
-/** Env for CLI children: never set NO_COLOR and FORCE_COLOR together (Node warns on every process). */
+/**
+ * Env for CLI children: never set NO_COLOR and FORCE_COLOR together (Node warns on every process).
+ * launchd starts the server without a locale; tools then see ASCII and break on non-ASCII text
+ * (CocoaPods aborts with "Unicode Normalization not appropriate for ASCII-8BIT"), so default to UTF-8.
+ */
 export function cliChildEnv(base: NodeJS.ProcessEnv, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base, ...extra };
   delete env.NO_COLOR;
   delete env.FORCE_COLOR;
+  if (!env.LC_ALL && !env.LC_CTYPE && !env.LANG) env.LANG = "en_US.UTF-8";
   return env;
 }
 
