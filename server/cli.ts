@@ -556,9 +556,12 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     let endedAfterTurn = false;
     output.on("line", (raw) => {
       options.onActivity?.();
-      if (!turnEndTimer && isTurnEnd(options.agent, raw)) {
+      // A resumed Claude first answers queued background-task notifications and ends that turn with
+      // its own result line, then works on the prompt: output after a result means it is not done.
+      if (turnEndTimer) { clearTimeout(turnEndTimer); turnEndTimer = undefined; }
+      if (isTurnEnd(options.agent, raw)) {
         // Only the CLI itself is signalled: background children it started keep running (orphanGroups).
-        turnEndTimer = setTimeout(() => { endedAfterTurn = true; try { child.kill("SIGTERM"); } catch { /* already gone */ } }, options.turnEndGraceMs ?? 10_000);
+        turnEndTimer = setTimeout(() => { endedAfterTurn = true; try { child.kill("SIGTERM"); } catch { /* already gone */ } }, options.turnEndGraceMs ?? 30_000);
         turnEndTimer.unref();
       }
       const reported = parseCliUsage(options.agent, raw);
