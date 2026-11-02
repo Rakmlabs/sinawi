@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fileToken, handlesCompletionKey, historyEntries, historyStep, matchingSkills, numberedOptions, recentPaths, slashToken } from "./composer";
+import { STOP_CLICK_GRACE_MS, fileToken, stopClickAllowed, handlesCompletionKey, historyEntries, historyStep, matchingSkills, numberedOptions, recentPaths, slashToken } from "./composer";
 
 test("slash suggestions only open for a command at the start", () => {
   assert.deepEqual(slashToken("/", 1), { start: 0, end: 1, query: "" });
@@ -94,4 +94,10 @@ test("slash menu: name matches rank first, plugin skills match their last segmen
   assert.equal(slashCommandOf(" /compact\n"), "compact");
   assert.equal(slashCommandOf("/compact now"), undefined);
   assert.equal(slashCommandOf("/frontend-design"), undefined);
+});
+
+test("a click right after send turned into stop does not stop the run", () => {
+  assert.equal(stopClickAllowed(1_000, 1_000 + 300), false);
+  assert.equal(stopClickAllowed(1_000, 1_000 + STOP_CLICK_GRACE_MS), true);
+  assert.equal(stopClickAllowed(0, 99_999), false);
 });

@@ -477,7 +477,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     return safe(async () => {
       try {
         if (active) {
-          await api(`/sessions/${active.id}/messages`, { prompt: message, skills: messageSkills, mode: active.mode ?? "manual", autoSwitch, permissionMode: sendMode });
+          await api(`/sessions/${active.id}/messages`, { prompt: message, skills: messageSkills, mode: active.mode ?? "manual", autoSwitch: active.autoSwitch ?? autoSwitch, permissionMode: sendMode });
           if (permissionOverride) setPermissionMode(permissionOverride);
         } else {
           const s = await submitSession(api, {
@@ -790,7 +790,9 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                   {!selectedWorker && <Composer completion={completion} attachments={attachmentState} prompt={prompt} setPrompt={setPrompt}
                     skills={skills} messageSkills={messageSkills} setMessageSkills={setMessageSkills} availableSkills={boot.skills}
                     active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning} onOpenWorkspaceSettings={openWorkspaceSettings}
-                    mode={mode} setMode={setMode} permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed}
+                    mode={mode} setMode={setMode} autoSwitch={active ? active.autoSwitch ?? autoSwitch : autoSwitch}
+                    setAutoSwitch={(enabled) => { if (!active) setAutoSwitch(enabled); else void safe(async () => { replaceFromServer(await api<Session>(`/sessions/${active.id}/auto-switch`, { enabled }, "PATCH")); }); }}
+                    permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed}
                     setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
                     send={send} runCommand={runCommand} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}

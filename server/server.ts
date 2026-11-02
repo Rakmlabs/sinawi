@@ -859,6 +859,14 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       res.json(session);
     } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }
   });
+  app.patch("/api/sessions/:id/auto-switch", async (req, res) => {
+    try {
+      if (typeof req.body?.enabled !== "boolean") throw new Error("자동 전환 설정이 올바르지 않습니다.");
+      const session = orchestra.setAutoSwitch(routeParam(req.params.id), req.body.enabled);
+      await persistSessions(orchestra.list());
+      res.json(session);
+    } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }
+  });
   app.patch("/api/sessions/:id/team", async (req, res) => {
     try {
       const session = orchestra.updateTeam(routeParam(req.params.id), teamInput(req.body));

@@ -176,7 +176,7 @@ test("manual media sessions keep the chosen team; auto sessions move the lead to
   assert.deepEqual(auto.workers, ["codex"]);
 });
 
-test("media follow-ups normalize the team even when automatic switching is disabled", async () => {
+test("with automatic switching off, media follow-ups keep the team the user picked", async () => {
   const calls: RunCliOptions[] = [];
   const orchestra = new Orchestra(undefined, async (options) => {
     calls.push(options);
@@ -188,10 +188,9 @@ test("media follow-ups normalize the team even when automatic switching is disab
   await orchestra.followup(session.id, "썸네일 이미지를 만들어줘", [], { mode: "auto", autoSwitch: false });
   await waitUntilSettled(session);
 
-  assert.deepEqual(calls.map((call) => call.agent), ["codex", "grok"]);
-  assert.equal(session.agent, "grok");
-  assert.equal(session.model, "grok-4.7");
-  assert.deepEqual(session.workers, ["codex", "grok"]);
+  assert.deepEqual(calls.map((call) => call.agent), ["codex", "codex"]);
+  assert.equal(session.agent, "codex");
+  assert.deepEqual(session.workers, ["claude"]);
 });
 
 test("media requests warn without execution when the workspace prohibits Grok", async () => {

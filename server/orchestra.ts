@@ -913,7 +913,8 @@ export class Orchestra {
     session.turnCount = (session.turnCount ?? session.events.filter((event) => event.agent === "user" && event.type === "message").length) + 1;
     if (!alreadyLogged) this.event(session, "user", "message", prompt);
     const allowed = new Set(this.allowedAgents(session));
-    const mediaLead = mediaRequest && session.mode === "auto";
+    // Media keywords pick Grok only while auto-switch is on: the user's own orchestrator choice wins.
+    const mediaLead = mediaRequest && session.mode === "auto" && session.autoSwitch !== false;
     if (mediaLead && !allowed.has("grok")) {
       this.fail(session, new Error(mediaUnavailableMessage), controller);
       return session;
@@ -992,7 +993,17 @@ export class Orchestra {
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.status === "running") throw new Error("실행 중에는 팀을 변경할 수 없습니다.");
     this.assertPolicy(session.workspaceId, [input.agent, ...input.workers]);
+    // Picking the orchestrator by hand pins it: auto-switch would otherwise undo it on the next turn.
+    if (input.agent !== session.agent) session.autoSwitch = false;
     return this.applyTeam(session, input);
+  }
+
+  setAutoSwitch(id: string, enabled: boolean): Session {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    session.autoSwitch = enabled;
+    this.broadcast(session);
+    return session;
   }
 
   private teamConfig(session: Session): UpdateTeamInput {

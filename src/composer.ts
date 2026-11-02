@@ -54,6 +54,12 @@ export function composerAction(running: boolean, hasDraft: boolean): "send" | "s
   return running && !hasDraft ? "stop" : "send";
 }
 
+/** How long the stop button ignores clicks after it replaced the send button under the cursor. */
+export const STOP_CLICK_GRACE_MS = 1_500;
+export function stopClickAllowed(stopSince: number, now: number): boolean {
+  return stopSince > 0 && now - stopSince >= STOP_CLICK_GRACE_MS;
+}
+
 /** A running session must keep accepting typing even if another request set the app busy. */
 export function composerLocked(running: boolean, busy: boolean): boolean {
   return busy && !running;

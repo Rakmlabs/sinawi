@@ -47,3 +47,21 @@ for (const prompt of ["Docker image 버그 수정", "video player 버그 수정"
     await settled(session);
   });
 }
+
+test("an orchestrator picked by hand stays: auto-switch turns off and media keywords no longer force Grok", async () => {
+  const leads: AgentId[] = [];
+  const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "orchestrator") leads.push(options.agent);
+    return { exitCode: 0, finalText: "done" };
+  });
+  const session = await orchestra.create({ prompt: "시작", cwd: process.cwd(), agent: "grok", workers: ["grok"], mode: "auto" });
+  await settled(session);
+  orchestra.updateTeam(session.id, { agent: "claude", workers: ["claude"] });
+  assert.equal(session.autoSwitch, false);
+  await orchestra.followup(session.id, "로고 이미지 다시 확인해봐");
+  await settled(session);
+  assert.equal(session.agent, "claude");
+  assert.equal(leads.at(-1), "claude");
+  orchestra.setAutoSwitch(session.id, true);
+  assert.equal(session.autoSwitch, true);
+});

@@ -534,6 +534,9 @@ body,
 }
 
 .composer-bottom .routing-mode button[aria-pressed="true"] { background: var(--bg-raised); box-shadow: var(--shadow-sm); color: var(--text); }
+.composer-bottom .auto-switch-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; min-height: 30px; padding: 0 9px; border: 1px solid transparent; border-radius: 8px; background: var(--bg-inset); color: var(--text-secondary); font-size: calc(12px * var(--font-scale)); white-space: nowrap; cursor: pointer; }
+.composer-bottom .auto-switch-toggle[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 10%, var(--bg-inset)); }
+.composer-bottom .auto-switch-toggle:disabled { opacity: .55; cursor: default; }
 .composer-bottom .permission-picker { flex: 0 1 auto; width: 118px; min-width: 76px; }
 .composer-bottom .permission-picker .glass-select-control { min-height: 30px; background: var(--bg-inset); border-color: transparent; color: var(--text-secondary); }
 .composer-bottom .permission-picker .glass-select-control input { padding: 4px 2px 4px 6px; font-size: calc(12px * var(--font-scale)); cursor: pointer; }

@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
-import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Square, WandSparkles, X } from "lucide-react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Shuffle, Square, WandSparkles, X } from "lucide-react";
 import { ComposerPopover } from "../ComposerPopover";
-import { composerAction, composerLocked, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
+import { composerAction, composerLocked, stopClickAllowed, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
 import type { SlashItem } from "./useComposerCompletion";
 import { kindFromName } from "../../server/media-kinds";
 import { formatBytes, kindLabel, type MediaRef } from "../viewer-model";
@@ -34,6 +34,9 @@ export type ComposerProps = {
   onOpenWorkspaceSettings?: () => void;
   mode: "auto" | "manual";
   setMode: (mode: "auto" | "manual") => void;
+  /** Auto-switch for the active session (or the workspace default for a new one). */
+  autoSwitch: boolean;
+  setAutoSwitch: (enabled: boolean) => void;
   permissionMode: PermissionMode;
   setPermissionMode: (mode: PermissionMode) => void;
   /** The workspace allows "전체 권한"; otherwise that mode is not offered. */
@@ -105,6 +108,10 @@ export function Composer(props: ComposerProps) {
     });
   };
   const action = composerAction(sessionRunning, Boolean(prompt.trim() || attachments.length));
+  // The send button turns into stop in place: a second click meant for "send" must not stop the run.
+  const stopSince = useRef(0);
+  useEffect(() => { stopSince.current = action === "stop" ? Date.now() : 0; }, [action]);
+  const clickStop = () => { if (stopClickAllowed(stopSince.current, Date.now())) stopActive(); };
   return <div className="composer-area">
     {routing && <div className="thinking" role="status"><Beat /> {t("comp.routing")}</div>}
     {liveNote && <div className="thinking" role="status"><Beat /> {liveNote}</div>}
@@ -286,6 +293,10 @@ export function Composer(props: ComposerProps) {
           <button type="button" aria-pressed={mode === "auto"} disabled={busy} title={t("comp.autoTitle")} onClick={() => setMode("auto")}>{t("comp.auto")}</button>
           <button type="button" aria-pressed={mode === "manual"} disabled={busy} title={t("comp.manualTitle")} onClick={() => setMode("manual")}>{t("comp.manual")}</button>
         </div>}
+        {(active ? active.mode === "auto" : mode === "auto") && <button type="button" className="auto-switch-toggle" aria-pressed={props.autoSwitch} disabled={busy || sessionRunning}
+          title={t(props.autoSwitch ? "comp.autoSwitchOnTitle" : "comp.autoSwitchOffTitle")} onClick={() => props.setAutoSwitch(!props.autoSwitch)}>
+          <Shuffle size={12} aria-hidden="true" />{t(props.autoSwitch ? "comp.autoSwitchOn" : "comp.autoSwitchOff")}
+        </button>}
         <GlassSelect label={t("comp.permissionMode")} value={props.permissionMode} disabled={busy || sessionRunning}
           className={`permission-picker${props.permissionMode === "full" ? " danger" : ""}`}
           onChange={(value) => props.setPermissionMode(value as PermissionMode)}
@@ -299,7 +310,7 @@ export function Composer(props: ComposerProps) {
           title={action === "stop" ? t("comp.stopTitle") : t("comp.sendTitle")}
           aria-label={action === "stop" ? t("comp.stop") : routing ? t("comp.routing") : t("comp.send")}
           disabled={action === "stop" ? busy : !canSend && !slashCommandOf(prompt)}
-          onClick={action === "stop" ? stopActive : () => void send()}
+          onClick={action === "stop" ? clickStop : () => void send()}
         >
           {action === "stop" ? (
             <Square size={16} fill="currentColor" />
