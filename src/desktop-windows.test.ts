@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clampPosition, loadWindows, newWindow, resizeWindow, MIN_W } from "./desktop-windows";
+import { clampPosition, desktopStoreKey, loadWindows, loadWorkspaceWindows, newWindow, resizeWindow, MIN_W } from "./desktop-windows";
 
 test("resizing from edges keeps the opposite edge fixed and respects minimums", () => {
   const start = { id: "a", x: 100, y: 100, w: 800, h: 600, z: 1 };
@@ -33,4 +33,16 @@ test("snap halves and maximize fill the area and toggle back", async () => {
   assert.equal(desktopMode([max, { ...win, id: "b", z: 5, snap: "right" }]), "max");
   assert.equal(desktopMode([{ ...max, minimized: true }, { ...win, id: "b", z: 5, snap: "right" }]), "right");
   assert.equal(desktopMode([win]), "none");
+});
+
+test("each workspace keeps its own browser windows; the first one inherits the old list", () => {
+  const store: Record<string, string> = {
+    "orchestra.browser.desktop": JSON.stringify([{ id: "wOld", x: 0, y: 0, w: 800, h: 600, z: 1 }]),
+    "orchestra.browser.desktop.company": JSON.stringify([{ id: "wCo", x: 0, y: 0, w: 800, h: 600, z: 1 }]),
+  };
+  const read = (key: string) => store[key] ?? null;
+  assert.deepEqual(loadWorkspaceWindows(read, "company", false).map((w) => w.id), ["wCo"]);
+  assert.deepEqual(loadWorkspaceWindows(read, "personal", true).map((w) => w.id), ["wOld"]);
+  assert.deepEqual(loadWorkspaceWindows(read, "other", false), []);
+  assert.equal(desktopStoreKey("company"), "orchestra.browser.desktop.company");
 });

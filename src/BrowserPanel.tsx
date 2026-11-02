@@ -5,7 +5,7 @@ import { pushRecent, RECENT_STORE, type RecentSite } from "./browser-surface";
 import { emulationOf, emulationPayload, fitDevice, isViewportError, parseViewportArg, readViewport, serializeViewport, toggleViewport, VIEWPORT_STORE, viewportLabel, type ViewportChoice } from "./browser-viewport";
 import { browserRegistry } from "./browser-registry";
 import { OPEN_URL_EVENT, takeHeldUrl } from "./link-open";
-import { OWN_APP_ERROR, agentCommandError, claimCommand, idleStatus, commandTargetsOwnApp, holdCommand, replayCommand, takeHeldCommand, withTargetUrls, type AgentCommand } from "./browser-agent";
+import { OWN_APP_ERROR, agentCommandError, claimCommand, commandForThisWorkspace, idleStatus, commandTargetsOwnApp, holdCommand, replayCommand, takeHeldCommand, withTargetUrls, type AgentCommand } from "./browser-agent";
 import { browserOwnsFocus, browserShortcut, chatShortcut, globalBrowserShortcut, windowShortcut, type BrowserAction } from "./browser-shortcuts";
 import { attachmentLabel, displayUrl, type ComposerAttachment, type ElementCapture } from "./preview-attachments";
 import { toggleTerminal } from "./terminal-events";
@@ -611,7 +611,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   useEffect(() => {
     const handle = (event: Event) => {
       const command = (event as CustomEvent<AgentCommand & { surface?: string }>).detail;
-      if (!command?.id || !browserRegistry.isActive(instanceRef.current) || !claimCommand(command.id)) return;
+      if (!command?.id || !commandForThisWorkspace(command) || !browserRegistry.isActive(instanceRef.current) || !claimCommand(command.id)) return;
       void runAgentRef.current(command).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) })).then((result) =>
         fetch("/api/browser/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: command.id, ...result }) }).catch(() => undefined));
     };

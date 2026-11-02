@@ -1,4 +1,12 @@
-export type AgentCommand = { type: "browser-command"; id: string; action: string; args: Record<string, unknown> };
+export type AgentCommand = { type: "browser-command"; id: string; action: string; args: Record<string, unknown>; workspaceId?: string };
+
+let browserWorkspace: string | undefined;
+/** The workspace on screen: its browser windows are the only ones mounted. */
+export function setBrowserWorkspace(id: string) { browserWorkspace = id; }
+/** An agent's command runs only in its own workspace's browser (company pages stay in company). */
+export function commandForThisWorkspace(command: { workspaceId?: string }): boolean {
+  return !command.workspaceId || !browserWorkspace || command.workspaceId === browserWorkspace;
+}
 
 export const OWN_APP_ERROR = "Sinawi 자체 주소는 열 수 없습니다. localhost 개발 서버 페이지를 여세요.";
 

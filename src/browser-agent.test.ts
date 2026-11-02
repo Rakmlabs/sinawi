@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { agentCommandError, claimCommand, idleStatus, commandTargetsOwnApp, holdCommand, isOwnAppUrl, replayCommand, takeHeldCommand, withTargetUrls } from "./browser-agent";
+import { agentCommandError, claimCommand, commandForThisWorkspace, idleStatus, commandTargetsOwnApp, holdCommand, setBrowserWorkspace, isOwnAppUrl, replayCommand, takeHeldCommand, withTargetUrls } from "./browser-agent";
 
 test("agent commands need a proxied localhost tab", () => {
   assert.match(agentCommandError(undefined)!, /goto/);
@@ -56,4 +56,11 @@ test("status with no open page answers instead of failing", () => {
   assert.equal(idleStatus("status", undefined)?.ok, true);
   assert.equal(idleStatus("status", { frameUrl: "http://localhost:5173/" }), undefined);
   assert.equal(idleStatus("snapshot", undefined), undefined);
+});
+
+test("an agent's browser command runs only in its own workspace", () => {
+  setBrowserWorkspace("company");
+  assert.equal(commandForThisWorkspace({ workspaceId: "company" }), true);
+  assert.equal(commandForThisWorkspace({ workspaceId: "personal" }), false);
+  assert.equal(commandForThisWorkspace({}), true, "a command without a workspace (older CLI) still runs");
 });

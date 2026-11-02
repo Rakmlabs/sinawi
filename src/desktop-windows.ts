@@ -1,5 +1,11 @@
 export type DesktopWindow = { id: string; x: number; y: number; w: number; h: number; z: number; minimized?: boolean; maximized?: boolean; snap?: "left" | "right"; kind?: "simulator" };
 export const DESKTOP_STORE = "orchestra.browser.desktop";
+/** Browser windows belong to a workspace (F1/F2): each keeps its own list. The first workspace also reads the pre-workspace list. */
+export function desktopStoreKey(workspaceId: string) { return `${DESKTOP_STORE}.${workspaceId}`; }
+export function loadWorkspaceWindows(read: (key: string) => string | null, workspaceId: string, isFirst: boolean): DesktopWindow[] {
+  const own = read(desktopStoreKey(workspaceId));
+  return loadWindows(own ?? (isFirst ? read(DESKTOP_STORE) : null));
+}
 export const MIN_W = 420, MIN_H = 300;
 export type Edge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 

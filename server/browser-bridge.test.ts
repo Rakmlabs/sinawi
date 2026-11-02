@@ -247,3 +247,16 @@ test("skill folders are created only for CLIs that are installed", async () => {
     await assert.rejects(stat(join(dir, ".codex")));
   } finally { process.env.PATH = savedPath; }
 });
+
+test("a command from an agent run carries that run's workspace", async () => {
+  const sent: BrowserCommand[] = [];
+  const bridge = new BrowserBridge((c) => { sent.push(c); return 1; });
+  const p = bridge.request("snapshot", {}, undefined, "company");
+  assert.equal(sent[0].workspaceId, "company");
+  bridge.resolve(sent[0].id, { ok: true });
+  await p;
+  const q = bridge.request("snapshot", {});
+  assert.equal("workspaceId" in sent[1], false);
+  bridge.resolve(sent[1].id, { ok: true });
+  await q;
+});

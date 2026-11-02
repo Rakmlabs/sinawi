@@ -12,7 +12,7 @@ import { submitSession } from "../submit";
 import { WorkerThread } from "../WorkerThread";
 import { workerLogRows } from "../worker-log";
 import { Sidebar } from "../Sidebar";
-import { inWorkspace, runningByWorkspace, workspaceTeamDefaults } from "../workspaces";
+import { inWorkspace, runningByWorkspace, workspaceTeamDefaults, workspaceName } from "../workspaces";
 import { useWorkspaces, WorkspacesContext } from "../workspace-context";
 import { WorkspaceSwitcher } from "../WorkspaceSwitcher";
 import { WorkspaceSettings } from "./WorkspaceSettings";
@@ -23,7 +23,7 @@ import { toggleTerminal, terminalOwnsKeyboardEvent, TERMINAL_AUTH_REFRESH_EVENT,
 import { BrowserDesktop, type DesktopRequest } from "../BrowserDesktop";
 import { SIM_DEVICE_STORE, SIM_OPEN_EVENT } from "../sim-panel";
 import type { DesktopMode } from "../desktop-windows";
-import { holdCommand } from "../browser-agent";
+import { claimCommand, commandForThisWorkspace, holdCommand, setBrowserWorkspace } from "../browser-agent";
 import { browserRegistry } from "../browser-registry";
 import { APP_ERROR_EVENT, holdUrl, OPEN_URL_EVENT } from "../link-open";
 import { chatShortcut, globalBrowserShortcut, browserOwnsFocus } from "../browser-shortcuts";
@@ -211,13 +211,22 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     window.addEventListener("orchestra:toggle-chat", onEvent);
     return () => { window.removeEventListener("keydown", onKey, true); window.removeEventListener("orchestra:toggle-chat", onEvent); };
   }, [toggleChat]);
+  // Browser windows and agent commands belong to the workspace on screen. Set while rendering,
+  // before the browser panels' own layout effects (children run first) look at it.
+  setBrowserWorkspace(workspaceId);
   // Commands that arrive before any browser window exists: park them and open a window.
   // The new panel drains the command from its layout effect. A timer retry never fires
   // while the webview is backgrounded (WKWebView suspends timers and animation frames).
   useEffect(() => {
     const onCommand = (event: Event) => {
       const detail = (event as CustomEvent<Parameters<typeof holdCommand>[0]>).detail;
-      if (!detail?.id || browserRegistry.count() > 0) return;
+      if (!detail?.id) return;
+      // Another workspace's agent: its pages must not open here. Answer at once instead of a timeout.
+      if (!commandForThisWorkspace(detail)) {
+        if (claimCommand(detail.id)) void fetch("/api/browser/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, ok: false, error: t("ws.browserOtherWorkspace", { name: workspaceName(workspacesApi.workspaces, detail.workspaceId), current: workspaceName(workspacesApi.workspaces, workspaceId) }) }) }).catch(() => undefined);
+        return;
+      }
+      if (browserRegistry.count() > 0) return;
       holdCommand(detail);
       showBrowser(false);
     };
@@ -228,7 +237,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     window.addEventListener("orchestra:browser-command", onCommand);
     window.addEventListener("keydown", onKey, { capture: true });
     return () => { window.removeEventListener("orchestra:browser-command", onCommand); window.removeEventListener("keydown", onKey, { capture: true }); };
-  }, [showBrowser]);
+  }, [showBrowser, workspaceId, workspacesApi.workspaces]);
   const [error, setError] = useState("");
   // A chat link opened "in the app": park it if no browser window exists yet, and bring one up.
   useEffect(() => {
@@ -755,7 +764,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         >
           {lastAnnouncement}
         </div>
-        <BrowserDesktop onAttach={addAttachments} request={desktopRequest} simRequest={simRequest} onModeChange={setDesktopMode} />
+        <BrowserDesktop onAttach={addAttachments} workspaceId={workspaceId} firstWorkspace={workspaceId === defaultWorkspaceId} request={desktopRequest} simRequest={simRequest} onModeChange={setDesktopMode} />
         {chatCollapsed && desktopMode !== "max" && <aside className="chat-rail" aria-label={t("ws.collapsedChat")}>
           <button type="button" onClick={() => setChatCollapsed(false)} aria-label={t("ws.expandChat")} title={t("ws.expandChat")}><PanelRightOpen size={18} /><MessageSquare size={18} /><span>{t("ws.chat")}</span></button>
         </aside>}

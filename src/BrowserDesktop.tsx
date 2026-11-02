@@ -4,7 +4,7 @@ import { BrowserPanel } from "./BrowserPanel";
 import { SimulatorPanel } from "./SimulatorPanel";
 import { browserRegistry } from "./browser-registry";
 import { windowShortcut } from "./browser-shortcuts";
-import { applySnap, clampPosition, desktopMode, DESKTOP_STORE, frameOf, loadWindows, newWindow, resizeWindow, simulatorWindow, topZ, type DesktopMode, type DesktopWindow, type Edge, type Snap } from "./desktop-windows";
+import { applySnap, clampPosition, desktopMode, desktopStoreKey, frameOf, loadWorkspaceWindows, newWindow, resizeWindow, simulatorWindow, topZ, type DesktopMode, type DesktopWindow, type Edge, type Snap } from "./desktop-windows";
 import type { ComposerAttachment } from "./preview-attachments";
 import { t } from "./i18n";
 
@@ -12,16 +12,16 @@ const EDGES: Edge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 const newId = () => Math.random().toString(36).slice(2, 10);
 
 export type DesktopRequest = { n: number; toggle?: boolean };
-type Props = { onAttach: (items: ComposerAttachment[]) => void; request: DesktopRequest; simRequest: DesktopRequest; onModeChange: (mode: DesktopMode) => void };
+type Props = { workspaceId: string; firstWorkspace: boolean; onAttach: (items: ComposerAttachment[]) => void; request: DesktopRequest; simRequest: DesktopRequest; onModeChange: (mode: DesktopMode) => void };
 
 /** Browser windows (and the one simulator window) floating over the workspace (the only browser layout). */
-export function BrowserDesktop({ onAttach, request, simRequest, onModeChange }: Props) {
+export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request, simRequest, onModeChange }: Props) {
   const area = useRef<HTMLDivElement>(null);
-  const [windows, setWindows] = useState<DesktopWindow[]>(() => loadWindows(localStorage.getItem(DESKTOP_STORE)));
+  const [windows, setWindows] = useState<DesktopWindow[]>(() => loadWorkspaceWindows((key) => localStorage.getItem(key), workspaceId, firstWorkspace));
   const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [, force] = useState(0);
   useEffect(() => browserRegistry.subscribe(() => force((n) => n + 1)), []);
-  useEffect(() => { localStorage.setItem(DESKTOP_STORE, JSON.stringify(windows)); }, [windows]);
+  useEffect(() => { localStorage.setItem(desktopStoreKey(workspaceId), JSON.stringify(windows)); }, [windows, workspaceId]);
   const mode = desktopMode(windows);
   useEffect(() => { onModeChange(mode); }, [mode, onModeChange]);
   useEffect(() => {

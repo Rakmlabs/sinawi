@@ -4,13 +4,15 @@ import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, extname, join } from "node:path";
 import type { Express } from "express";
 import { envVar } from "./runtime.js";
+import { resolveComputerToken } from "./computer-tokens.js";
 
 /** Actions an agent may run against the user's visible in-app browser tab. */
 export const BROWSER_ACTIONS = ["goto", "snapshot", "click", "type", "fill", "press", "scroll", "wait", "text", "console", "screenshot", "back", "forward", "reload", "tabs", "status", "viewport", "network", "dialog", "upload", "hover", "keyboard", "tab", "select", "downloads"] as const;
 export type BrowserAction = (typeof BROWSER_ACTIONS)[number];
 export const isBrowserAction = (value: string): value is BrowserAction => (BROWSER_ACTIONS as readonly string[]).includes(value);
 
-export type BrowserCommand = { type: "browser-command"; id: string; action: BrowserAction; args: Record<string, unknown> };
+/** `workspaceId`: the workspace of the agent run that sent it; the app runs it only in that workspace's browser. */
+export type BrowserCommand = { type: "browser-command"; id: string; action: BrowserAction; args: Record<string, unknown>; workspaceId?: string };
 export type BrowserResult = { ok: boolean; result?: unknown; error?: string };
 
 export const QUEUE_DIR = join(tmpdir(), "sinawi-browser");
@@ -48,11 +50,11 @@ export class BrowserBridge {
     return 0;
   }
 
-  request(action: BrowserAction, args: Record<string, unknown> = {}, timeoutMs = defaultTimeout(action, args)): Promise<BrowserResult> {
+  request(action: BrowserAction, args: Record<string, unknown> = {}, timeoutMs = defaultTimeout(action, args), workspaceId?: string): Promise<BrowserResult> {
     if ((action === "goto" || (action === "tab" && String(args.op ?? "") === "new")) && isOwnAppUrl(String(args.url ?? ""))) return Promise.resolve({ ok: false, error: "Sinawi 자체 주소는 열 수 없습니다. 개발 서버나 다른 사이트 주소를 여세요." });
     const id = randomUUID();
     return new Promise((resolve) => {
-      const command: BrowserCommand = { type: "browser-command", id, action, args };
+      const command: BrowserCommand = { type: "browser-command", id, action, args, ...(workspaceId ? { workspaceId } : {}) };
       const finish = (result: BrowserResult) => {
         const entry = this.pending.get(id);
         if (!entry) return;
@@ -130,7 +132,7 @@ export function registerBrowserRoutes(app: Express, bridge: BrowserBridge) {
     const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
     let args: Record<string, unknown>;
     try { args = await prepareBrowserArgs(action, body); } catch (error) { res.status(422).json({ ok: false, error: error instanceof Error ? error.message : String(error) }); return; }
-    const result = await materialize(await bridge.request(action, args));
+    const result = await materialize(await bridge.request(action, args, undefined, resolveComputerToken(req.get("x-sinawi-token"))?.workspaceId));
     res.status(result.ok ? 200 : 422).json(result);
   });
 }
@@ -154,7 +156,7 @@ export function watchQueue(bridge: BrowserBridge, dir = QUEUE_DIR, intervalMs = 
             await rm(join(dir, name), { force: true });
             const action = String(raw.action);
             const args = isBrowserAction(action) ? await prepareBrowserArgs(action, raw.args ?? {}) : {};
-            out = isBrowserAction(action) ? await materialize(await bridge.request(action, args), dir) : { ok: false, error: `알 수 없는 브라우저 명령: ${action}` };
+            out = isBrowserAction(action) ? await materialize(await bridge.request(action, args, undefined, resolveComputerToken(raw.token)?.workspaceId), dir) : { ok: false, error: `알 수 없는 브라우저 명령: ${action}` };
           } catch (error) { out = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
           await writeFile(join(dir, `${base}.res.tmp`), JSON.stringify(out));
           const { rename } = await import("node:fs/promises");
@@ -251,14 +253,14 @@ function parseAction(action, rest) {
   }
 }
 async function viaHttp(action, args) {
-  const res = await fetch("http://127.0.0.1:" + port + "/api/browser/" + action, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) });
+  const res = await fetch("http://127.0.0.1:" + port + "/api/browser/" + action, { method: "POST", headers: { "content-type": "application/json", "x-sinawi-token": process.env.SINAWI_COMPUTER_TOKEN || "" }, body: JSON.stringify(args) });
   return res.json();
 }
 async function viaQueue(action, args) {
   const dir = QUEUES.find((d) => { try { fs.mkdirSync(d, { recursive: true }); fs.accessSync(d, fs.constants.W_OK); return true; } catch { return false; } });
   if (!dir) throw new Error("큐 폴더에 쓸 수 없습니다");
   const id = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-  fs.writeFileSync(path.join(dir, id + ".req.tmp"), JSON.stringify({ action, args }));
+  fs.writeFileSync(path.join(dir, id + ".req.tmp"), JSON.stringify({ action, args, token: process.env.SINAWI_COMPUTER_TOKEN || "" }));
   fs.renameSync(path.join(dir, id + ".req.tmp"), path.join(dir, id + ".req.json"));
   const res = path.join(dir, id + ".res.json"), req = path.join(dir, id + ".req.json"), start = Date.now();
   while (Date.now() - start < 75000) {
