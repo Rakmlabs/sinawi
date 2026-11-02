@@ -257,6 +257,15 @@ export class Orchestra {
 
   get(id: string): Session | undefined { return this.sessions.get(id); }
 
+  /** Set by the server: app-owned resources of a session (dev servers) end with it. */
+  sessionRemoved?: (id: string) => void;
+
+  /** A status line from an app tool (ao-serve) in a session's chat. */
+  note(sessionId: string, text: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) this.event(session, session.agent, "status", text);
+  }
+
   /** Call after editing or removing events that clients may already hold. */
   private markEventsRewritten(session: Session): void {
     this.rewrittenEvents.add(session.id);
@@ -1161,6 +1170,7 @@ export class Orchestra {
     this.lastEventAt.delete(id);
     // Background servers the session's CLIs left running end with the session (see cli.ts orphanGroups).
     killSessionProcessGroups(id);
+    this.sessionRemoved?.(id);
     this.rewrittenEvents.delete(id);
     this.configs.delete(id);
     this.publishRemoval(id);

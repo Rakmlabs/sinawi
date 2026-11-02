@@ -3,7 +3,11 @@ import { registerSetupRoutes } from "./setup.js";
 import { BrowserBridge, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
 import { ComputerBridge, registerComputerRoutes, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
 import { isComputerUseAllowed } from "./workspace-policy.js";
-import { computerContextForToken, pruneComputerTokens } from "./computer-tokens.js";
+import { computerContextForToken, computerDir, pruneComputerTokens } from "./computer-tokens.js";
+import { DevServerManager } from "./dev-servers.js";
+import { registerServeRoutes, watchServeQueue } from "./serve-tool.js";
+import { cliChildEnv } from "./supervision.js";
+import { fullPath } from "./cli-path.js";
 import { envVar } from "./runtime.js";
 import { createServer as createHttpServer } from "node:http";
 import { homedir } from "node:os";
@@ -508,6 +512,16 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   httpServer.once("close", () => computerBridge.dispose());
   registerComputerRoutes(app, computerBridge);
   if (options.browserQueue) { const stop = watchComputerQueue(computerBridge); httpServer.once("close", stop); }
+  const devServers = new DevServerManager({
+    logDir: join(computerDir(), "serve-logs"),
+    env: () => cliChildEnv(process.env, { PATH: fullPath(), CI: "1" }),
+    onEvent: (sessionId, text) => orchestra.note(sessionId, text),
+  });
+  orchestra.sessionRemoved = (id) => devServers.stopSession(id);
+  httpServer.once("close", () => devServers.stopAll());
+  process.once("exit", () => devServers.stopAll("SIGKILL"));
+  registerServeRoutes(app, devServers);
+  if (options.browserQueue) { const stop = watchServeQueue(devServers); httpServer.once("close", stop); }
   app.use("/api", async (_req, _res, next) => { await ready; next(); });
 
   terminal.registerRoutes(app);
