@@ -52,7 +52,7 @@ goto 뒤 **snapshot 먼저**, 반환된 ref(e12)로 조작. 선택자 짐작 연
 - 같은 파일을 두 작업자에게 동시에 맡기지 않는다.
 
 ## R10. 이 앱에서 일하기
-총괄·워커 프롬프트 끝에 `APP_GUIDE`를 붙인다. 전문은 [prompts/app-guide.md](./prompts/app-guide.md). 한국어로 짧게 답하고, 결과는 세션 작업 폴더의 마크다운 경로로 남겨 앱 뷰어가 열게 한다. 사용자가 보낸 `orchestra-attachments`의 selector는 ao-browser ref가 아니다. 포트 3100·3101과 사용자가 명시하지 않은 프로세스 kill은 금지한다. 6필드 브리프, 정체 감지, 재위임, CLI별 지침은 그대로다.
+총괄·워커 프롬프트 끝에 `APP_GUIDE`를 붙인다. 전문은 [prompts/app-guide.md](./prompts/app-guide.md). 한국어로 짧게 답하고, 결과는 세션 작업 폴더의 마크다운 경로로 남겨 앱 뷰어가 열게 한다. 사용자가 보낸 `orchestra-attachments`의 selector는 ao-browser ref가 아니다. 사용자가 이미 띄워 둔 서버의 포트와 사용자가 명시하지 않은 프로세스 kill은 금지한다. 6필드 브리프, 정체 감지, 재위임, CLI별 지침은 그대로다.
 
 ## 조정값
 `Orchestra.stallOptions = { repeatLimit, window, idleMs }`, 재계획 상한 `maxReplanRounds = 2`.

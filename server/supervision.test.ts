@@ -25,7 +25,7 @@ test("shared prompts keep the six-field brief and add read, verify, and replan r
   assert.match(WORKER_RULES, /부분 완료/);
   assert.match(ORCHESTRATOR_RULES, /## 이 앱에서 일하기/);
   assert.match(WORKER_RULES, /## 이 앱에서 일하기/);
-  assert.match(ORCHESTRATOR_RULES, /3100/);
+  assert.match(ORCHESTRATOR_RULES, /이미 띄워 둔 다른 서버의 포트/);
   assert.match(WORKER_RULES, /orchestra-attachments/);
   assert.match(WORKER_RULES, /앱 창이 열려 있지 않습니다/);
   assert.match(WORKER_RULES, /python3 -m http\.server 8765/);

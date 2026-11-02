@@ -316,7 +316,7 @@ description: Sinawi 앱 안 브라우저 탭(사용자가 보고 있는 화면)�
 - **snapshot 먼저.** goto와 click/fill/press 등은 ref가 붙은 접근성 트리 snapshot을 돌려준다. 거기 나온 ref(e12 등)로만 조작한다. 화면이 바뀌면 다시 snapshot. 증거는 \`ao-browser screenshot e12\`(요소) 또는 \`ao-browser screenshot\`(뷰포트).
 - CSS 선택자를 짐작해서 여러 개 연달아 시도하지 않는다. "요소를 찾을 수 없습니다"가 나오면 선택자를 바꾸지 말고 snapshot을 다시 본다. 같은 오류 3번이면 멈추고 막힘으로 보고한다.
 - 사용자가 \`orchestra-attachments\`로 보낸 selector는 ref가 아니다. 메모가 요청이고, 소스(file:line)가 고칠 파일이다. snapshot에서 같은 글자를 찾거나, 그 selector를 한 번만 쓴다.
-- 데스크톱 앱에서는 http/https 페이지가 모두 조작된다(localhost 개발 서버와 외부 https 사이트). 정적 파일은 \`python3 -m http.server 8765 --directory <상대 경로>\` 로 띄운 뒤 \`ao-browser goto 8765\` 또는 \`ao-browser goto localhost:8765/index.html\`. file:// 는 열지 않는다. 포트 3100, 3101, 3001은 쓰지 않고, 띄운 서버를 kill 하지 않는다.
+- 데스크톱 앱에서는 http/https 페이지가 모두 조작된다(localhost 개발 서버와 외부 https 사이트). 정적 파일은 \`python3 -m http.server 8765 --directory <상대 경로>\` 로 띄운 뒤 \`ao-browser goto 8765\` 또는 \`ao-browser goto localhost:8765/index.html\`. file:// 는 열지 않는다. 앱 서버 포트(보통 3001)와 이미 쓰이는 포트는 쓰지 않고, 띄운 서버를 kill 하지 않는다.
 - "앱 창이 열려 있지 않습니다"면 같은 명령을 한 번만 다시 보낸다. 서버가 앱을 띄우고 최대 15초 기다린다. 그래도 같거나 사용자가 중지했으면 막힘으로 보고한다.
 - 속성(data-*, src) 확인이 필요하면 \`ao-browser text\`로 보이는 글자를, 스크린샷으로 화면을 확인하고, 구조는 소스 파일을 읽어 확인한다. screenshot PNG는 임시 폴더라 채팅 뷰어가 열지 못한다. 보여 줄 그림은 작업 폴더에 두고 마크다운 경로로 보고한다.
 - 사용법은 \`ao-browser --help\`. Sinawi 소스나 문서를 찾아 읽지 않는다.

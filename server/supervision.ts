@@ -63,7 +63,7 @@ export const APP_GUIDE = `## 이 앱에서 일하기
 - 앱 뷰어는 세션 작업 폴더와 미리보기 첨부 폴더 안만 연다. 결과 이미지·PDF·목업은 그 작업 폴더에 두고, 최종 답에 상대 경로를 마크다운으로 적는다. 예: \`![화면](preview/home.png)\`. 채팅이 그 경로를 뷰어로 연다. HTML 목업은 뷰어가 실행하지 않으므로 앱 브라우저로 연다.
 - 작업이 돌아가는 동안 채팅은 열려 있다. "뭐 해", "어디까지" 같은 상태 질문은 로그를 읽는 별도 답이 나간다. 그 답은 도구도 위임도 하지 않는다. "해 줘", "부터 봐" 같은 지시는 다음 턴에 \`사용자가 진행 중에 보낸 지시\`로 붙는다. 그 문단이 보이면 이미 시작한 일을 버리지 말고 그 턴에 반영한다. "멈춰"는 즉시 중지다. 사용자에게 입력을 멈추라고 하지 않는다.
 - 사용자가 고른 화면 요소는 \`orchestra-attachments\` 블록이다. 메모가 요청이다. selector는 그 페이지의 CSS이고 ao-browser의 ref(e12)가 아니다. React 컴포넌트와 소스(file:line)가 고칠 위치다. 요소 캡처와 전체 화면 캡처 경로는 이미지로 읽어 확인한다.
-- 금지: 외부 Chrome, Playwright, \`open\`으로 브라우저나 결과 파일을 띄우는 것. 포트 3100과 3101을 열거나 그 프로세스를 건드리는 것. 사용자가 명시하지 않은 프로세스 kill. 앱 서버 포트(보통 3001)를 열거나 끄는 것.`;
+- 금지: 외부 Chrome, Playwright, \`open\`으로 브라우저나 결과 파일을 띄우는 것. 사용자가 이미 띄워 둔 다른 서버의 포트를 쓰거나 그 프로세스를 건드리는 것. 사용자가 명시하지 않은 프로세스 kill. 앱 서버 포트(보통 3001)를 열거나 끄는 것.`;
 
 /**
  * Operational ao-browser rules. Command details live in
@@ -73,7 +73,7 @@ export const BROWSER_CORE = `## 앱 브라우저 (ao-browser)
 결과물, 목업, 디자인 시안, UI 확인은 앱 안 브라우저로만 연다. 명령은 \`ao-browser\`이고, 없으면 \`node\`로 \`~/.local/bin/ao-browser\`를 부른다. 필요한 규칙은 이 문단에 다 있다. Sinawi 소스나 문서를 찾아 읽지 않는다.
 - 총괄의 읽기 전용 확인은 snapshot, text, console, screenshot까지다. click, fill, type으로 화면을 바꾸지 않고, 조작은 워커 브리프의 검증에 적어 워커가 한다.
 - 데스크톱 앱에서는 localhost와 외부 http/https 주소를 모두 열고 조작한다. 포트만 적어도 된다(\`ao-browser goto 5173\`). file:// 는 열리지 않는다. 브라우저 모드(\`npm run dev\`)에서는 localhost만 조작된다.
-- 정적 파일은 로컬 HTTP로 띄운 뒤 연다. 명령 하나: \`python3 -m http.server 8765 --directory <작업 폴더 안 상대 경로>\`. Codex와 Claude는 이 명령을 백그라운드로 두고 다음 호출에서 연다. 루트는 \`ao-browser goto 8765\`, 파일 경로는 \`ao-browser goto localhost:8765/index.html\`이다. \`8765/index.html\`처럼 포트와 경로를 붙이면 주소가 아니다. Grok은 \`&\`와 \`bash -c\`가 거절되므로 이미 떠 있는 포트를 쓰고, 없으면 부분 완료로 서버가 필요하다고 보고한다. 포트 3100, 3101, 3001은 쓰지 않는다. 띄운 서버를 kill 하지 않는다.
+- 정적 파일은 로컬 HTTP로 띄운 뒤 연다. 명령 하나: \`python3 -m http.server 8765 --directory <작업 폴더 안 상대 경로>\`. Codex와 Claude는 이 명령을 백그라운드로 두고 다음 호출에서 연다. 루트는 \`ao-browser goto 8765\`, 파일 경로는 \`ao-browser goto localhost:8765/index.html\`이다. \`8765/index.html\`처럼 포트와 경로를 붙이면 주소가 아니다. Grok은 \`&\`와 \`bash -c\`가 거절되므로 이미 떠 있는 포트를 쓰고, 없으면 부분 완료로 서버가 필요하다고 보고한다. 앱 서버 포트(보통 3001)와 이미 쓰이는 포트는 쓰지 않는다. 띄운 서버를 kill 하지 않는다.
 - 순서: \`ao-browser goto <포트 또는 주소>\` 다음 \`ao-browser snapshot\`. 출력된 ref(e12)로만 click, fill, text 한다. click/fill/press 등은 바뀐 snapshot을 같이 돌려준다. 화면이 바뀌거나 "페이지가 이동했습니다"가 나오면 다시 snapshot. 화면 크기는 \`ao-browser viewport iphone|tablet|desktop|390x844\`. iphone과 tablet은 모바일 user-agent와 터치를 켠다. 증거는 \`ao-browser screenshot\`이다. 나온 PNG는 임시 폴더라 채팅 뷰어가 열지 못한다. 보여 줄 그림은 작업 폴더로 옮긴 뒤 마크다운에 적는다.
 - 첨부 selector는 snapshot에서 같은 글자와 역할을 찾아 그 ref를 쓴다. ref가 없으면 첨부 selector를 한 번만 쓴다(\`ao-browser text "<selector>"\`). 선택자를 새로 만들어 여러 번 찍지 않는다. "요소를 찾을 수 없습니다"면 snapshot부터 다시 한다.
 - "앱 창이 열려 있지 않습니다" 또는 "앱이 실행 중이 아닙니다"면 같은 명령을 한 번만 다시 보낸다. 서버가 앱을 띄우고 최대 15초 기다린다. 앱은 3초마다 연결을 보고, 9초 연속 창이 없으면 창을 다시 로드한다. "최소화됐거나 화면이 잠겨" 또는 "사용자가 AI 조작을 중지"면 반복하지 말고 막힘으로 보고한다. 같은 실패가 세 번째면 막힘이다.

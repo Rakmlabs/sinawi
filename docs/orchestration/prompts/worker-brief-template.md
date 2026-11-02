@@ -47,4 +47,4 @@
 - `사용자가 진행 중에 보낸 지시`가 보이면 이미 시작한 일을 버리지 않고 그 턴에 반영합니다.
 - `orchestra-attachments`의 메모가 요청이고, selector는 ao-browser ref가 아닙니다.
 - 결과물·목업·디자인 시안은 ao-browser로만 엽니다. goto 다음 snapshot, ref로 조작, 화면이 바뀌면 다시 snapshot, 증거는 screenshot입니다.
-- 금지: 외부 Chrome, Playwright, `open`, 포트 3100·3101, 사용자가 명시하지 않은 kill.
+- 금지: 외부 Chrome, Playwright, `open`, 사용자가 띄워 둔 서버의 포트, 사용자가 명시하지 않은 kill.
