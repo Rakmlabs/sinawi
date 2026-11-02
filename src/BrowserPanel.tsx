@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, Bot, ChevronDown, Download, Globe, Monitor, Mous
 import { pushRecent, RECENT_STORE, type RecentSite } from "./browser-surface";
 import { emulationOf, emulationPayload, fitDevice, isViewportError, parseViewportArg, readViewport, serializeViewport, toggleViewport, VIEWPORT_STORE, viewportLabel, type ViewportChoice } from "./browser-viewport";
 import { browserRegistry } from "./browser-registry";
-import { OWN_APP_ERROR, agentCommandError, claimCommand, commandTargetsOwnApp, holdCommand, replayCommand, takeHeldCommand, withTargetUrls, type AgentCommand } from "./browser-agent";
+import { OWN_APP_ERROR, agentCommandError, claimCommand, idleStatus, commandTargetsOwnApp, holdCommand, replayCommand, takeHeldCommand, withTargetUrls, type AgentCommand } from "./browser-agent";
 import { browserOwnsFocus, browserShortcut, chatShortcut, globalBrowserShortcut, windowShortcut, type BrowserAction } from "./browser-shortcuts";
 import { attachmentLabel, displayUrl, type ComposerAttachment, type ElementCapture } from "./preview-attachments";
 import { toggleTerminal } from "./terminal-events";
@@ -439,6 +439,8 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
         return { ok: true, result: { count: list.length, downloads: list, text: downloadsText(list) } };
       } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     }
+    const idle = idleStatus(command.action, tab);
+    if (idle) return idle;
     if (!tab) return { ok: false, error: "열린 페이지가 없습니다. 먼저 `ao-browser goto <포트 또는 localhost 주소>` 로 여세요." };
     if (command.action === "tab") {
       const op = String(command.args.op ?? "list");

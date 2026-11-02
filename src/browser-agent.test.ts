@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { agentCommandError, claimCommand, commandTargetsOwnApp, holdCommand, isOwnAppUrl, replayCommand, takeHeldCommand, withTargetUrls } from "./browser-agent";
+import { agentCommandError, claimCommand, idleStatus, commandTargetsOwnApp, holdCommand, isOwnAppUrl, replayCommand, takeHeldCommand, withTargetUrls } from "./browser-agent";
 
 test("agent commands need a proxied localhost tab", () => {
   assert.match(agentCommandError(undefined)!, /goto/);
@@ -50,4 +50,10 @@ test("a command opened before any panel exists is held without a timer", () => {
 test("proxy origins are rewritten to the dev server origin", () => {
   const out = withTargetUrls({ ok: true, result: { url: "http://127.0.0.1:5555/a", snapshot: "# t  http://127.0.0.1:5555/a", text: "at http://127.0.0.1:5555/a", href: "http://127.0.0.1:5555/a" } }, "http://127.0.0.1:5555", "http://localhost:3000");
   assert.deepEqual(out.result, { url: "http://localhost:3000/a", snapshot: "# t  http://localhost:3000/a", text: "at http://localhost:3000/a", href: "http://localhost:3000/a" });
+});
+
+test("status with no open page answers instead of failing", () => {
+  assert.equal(idleStatus("status", undefined)?.ok, true);
+  assert.equal(idleStatus("status", { frameUrl: "http://localhost:5173/" }), undefined);
+  assert.equal(idleStatus("snapshot", undefined), undefined);
 });

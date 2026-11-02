@@ -19,6 +19,12 @@ export function agentCommandError(tab: { frameUrl?: string; proxied?: boolean; n
   return undefined;
 }
 
+/** `status` before anything is open is a normal answer, not a failure (failures count toward stall detection). */
+export function idleStatus(action: string, tab: { frameUrl?: string } | undefined) {
+  if (action !== "status" || tab?.frameUrl) return undefined;
+  return { ok: true as const, result: { open: false, text: "열린 페이지가 없습니다. `ao-browser goto <주소 또는 포트>` 로 여세요." } };
+}
+
 /** goto, or a new tab, aimed at the app server itself. */
 export function commandTargetsOwnApp(action: string, args: Record<string, unknown>, appPort = 3001): boolean {
   if (action === "goto") return isOwnAppUrl(String(args.url ?? ""), appPort);
