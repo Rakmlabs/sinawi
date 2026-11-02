@@ -1,0 +1,11 @@
+.perm-stack { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; width: min(100%, 820px); min-width: 0; margin-inline: auto; padding: 0 24px 10px; font-family: var(--font-ui); font-size: var(--text-body); }
+.perm-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: var(--radius-message); background: var(--bg-raised); color: var(--text); }
+.perm-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.perm-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-session { margin-left: auto; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; background: none; color: var(--text-muted); font: inherit; text-decoration: underline; cursor: pointer; }
+.perm-detail { display: block; max-height: 120px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--bg-surface); font-family: var(--font-mono); font-size: var(--text-title); white-space: pre-wrap; word-break: break-all; }
+.perm-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.perm-actions button { height: 30px; padding: 0 14px; border-radius: var(--radius-message); font: inherit; font-weight: 700; cursor: pointer; }
+.perm-deny { border: 1px solid var(--border); background: transparent; color: var(--text); }
+.perm-allow { border: 0; background: var(--accent); color: var(--accent-text); }
+.perm-actions button:disabled { opacity: .6; cursor: default; }

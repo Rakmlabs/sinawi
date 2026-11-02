@@ -1,3 +1,4 @@
+import { ensurePermissionServerScript, PERMISSION_TOOL, PROMPT_TIMEOUT_MS, permissionMcpConfig, registerRunActivity, unregisterRunActivity } from "./permission-prompts.js";
 import { cliChildEnv, DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
 import { envVar } from "./runtime.js";
@@ -50,6 +51,11 @@ export interface RunCliOptions {
    * uncommitted docs and node_modules its worktree lacks. Claude needs them granted; edits are denied.
    */
   readOnlyDirs?: string[];
+  /**
+   * `--mcp-config` JSON for Sinawi's permission server (see permission-prompts.ts); set by runCli
+   * for writable Claude runs. Claude then asks the user through the app instead of refusing.
+   */
+  permissionMcp?: string;
   /** `--settings` JSON for Claude (the Bash pre-approval hook); set by prepareCliInvocation. */
   claudeSettings?: string;
   /**
@@ -149,6 +155,8 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
       for (const tool of ["Edit", "Write", "NotebookEdit"]) args.push("--disallowedTools", `${tool}(/${dir}/**)`);
     }
     for (const pattern of new Set(blockedMcp ?? [])) args.push("--disallowedTools", pattern);
+    // A hidden (SDK) flag, so `--help` never lists it; every Claude Code that has --settings has it.
+    if (!readOnly && !full && options.permissionMcp) args.push("--mcp-config", options.permissionMcp, "--permission-prompt-tool", PERMISSION_TOOL);
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     return { command: cliName("claude"), args, cwd };
   }
@@ -534,6 +542,15 @@ function installExitHook() {
 }
 
 export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
+  // SINAWI_SESSION_ID (display) + a per-run SINAWI_COMPUTER_TOKEN: ao-computer is attributed by the token only.
+  const computerEnv = computerRunEnv(options.agent, options.usageContext);
+  const token = computerEnv.SINAWI_COMPUTER_TOKEN;
+  // Writable Claude runs ask the user through the app when a tool needs permission (permission-prompts.ts).
+  if (options.agent === "claude" && token && !options.readOnly && !options.fullAccess && !options.permissionMcp && options.usageContext?.dataDir) {
+    const script = await ensurePermissionServerScript(options.usageContext.dataDir).catch(() => undefined);
+    if (script) options = { ...options, permissionMcp: permissionMcpConfig(script, token) };
+  }
+  if (token && options.onActivity) registerRunActivity(token, options.onActivity);
   const invocation = await prepareCliInvocation(options);
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
@@ -542,11 +559,10 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     let providerQuotaSave: Promise<void> = Promise.resolve();
     let aborted = false;
     let finished = false;
-    // SINAWI_SESSION_ID (display) + a per-run SINAWI_COMPUTER_TOKEN: ao-computer is attributed by the token only.
-    const computerEnv = computerRunEnv(options.agent, options.usageContext);
     const child = spawn(invocation.command, invocation.args, {
       cwd: invocation.cwd,
-      env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv }),
+      // A permission question waits for the user; Claude must not give up on that MCP call first.
+      env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv, ...(options.permissionMcp ? { MCP_TOOL_TIMEOUT: String(PROMPT_TIMEOUT_MS + 60_000) } : {}) }),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
@@ -690,7 +706,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       if (turnEndTimer) clearTimeout(turnEndTimer);
       // The turn was already over when we told the lingering CLI to exit: that is a normal end.
       const code = endedAfterTurn && !aborted ? 0 : closeCode;
-      if (computerEnv.SINAWI_COMPUTER_TOKEN) revokeComputerToken(computerEnv.SINAWI_COMPUTER_TOKEN);
+      if (token) { revokeComputerToken(token); unregisterRunActivity(token); }
       if (finished) return;
       finished = true;
       if (!aborted) clearEscalation();

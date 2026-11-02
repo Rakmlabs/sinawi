@@ -67,6 +67,7 @@ import { QuotaReturnBanner } from "./QuotaReturnBanner";
 import { SessionsView } from "./SessionsView";
 import { TeamBarSlot } from "./TeamBarSlot";
 import { t } from "../i18n";
+import { PermissionPrompts, PERMISSIONS_EVENT } from "../PermissionPrompts";
 import { ComputerUseLayer } from "../ComputerUse";
 import { handleComputerMessage } from "../computer-use";
 
@@ -364,6 +365,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   }, [error, workspaceId]);
   const onServerMessage = (message: ServerMessage) => {
     if (message.type === "notifications") window.dispatchEvent(new Event("orchestra:notifications"));
+    if (message.type === "permissions") window.dispatchEvent(new CustomEvent(PERMISSIONS_EVENT, { detail: message.requests }));
     if (message.type === "browser-command") window.dispatchEvent(new CustomEvent("orchestra:browser-command", { detail: message }));
     // An agent launched an app on a simulator: show that device in the simulator window.
     if (message.type === "sim-open" && typeof message.udid === "string") {
@@ -819,6 +821,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     )}
                   </div>
                   {showChatBottom && !selectedWorker && <button type="button" className="chat-bottom-button" onClick={() => scrollToChatBottom()}><ArrowDown size={15} />{t("ws.toBottom")}</button>}
+                  <PermissionPrompts workspaceId={workspaceId} activeSessionId={active?.id} sessionTitle={(id) => sessions.find((item) => item.id === id)?.title}
+                    onOpenSession={(id) => setSelected(id)} />
                   {!selectedWorker && <Composer completion={completion} attachments={attachmentState} prompt={prompt} setPrompt={setPrompt}
                     skills={skills} messageSkills={messageSkills} setMessageSkills={setMessageSkills} availableSkills={boot.skills}
                     active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning} onOpenWorkspaceSettings={openWorkspaceSettings}
