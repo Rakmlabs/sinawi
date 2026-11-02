@@ -203,8 +203,8 @@ export async function recommendAutoSwitch(
   signal?.addEventListener("abort", abort, { once: true });
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<undefined>((resolve) => {
+    // Ref'd on purpose: it is what settles the awaited race if the CLI never does; `finally` clears it.
     timer = setTimeout(() => { controller.abort(); resolve(undefined); }, Math.max(1, timeoutMs));
-    timer.unref();
   });
   const invocation = Promise.resolve().then(() => runner({
     agent: planner,

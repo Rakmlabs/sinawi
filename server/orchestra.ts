@@ -617,8 +617,8 @@ export class Orchestra {
     const digest = statusDigest(session);
     this.event(session, "user", "message", prompt);
     const controller = new AbortController();
+    // Ref'd on purpose: the abort is what ends the status run if the CLI hangs; `finally` clears it.
     const timer = setTimeout(() => controller.abort(), 45_000);
-    timer.unref();
     let answer = "";
     try {
       const result = await this.runner({

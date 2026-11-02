@@ -450,8 +450,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const controller = new AbortController();
       let timer: NodeJS.Timeout | undefined;
       const timeout = new Promise<undefined>((resolve) => {
+        // Ref'd on purpose: it is what settles the awaited race if the CLI never does; `finally` clears it.
         timer = setTimeout(() => { controller.abort(); resolve(undefined); }, 15_000);
-        timer.unref();
       });
       const limitsPolicy = policyFor(currentWorkspace());
       const invocation = Promise.resolve().then(() => (options.limitsRunner ?? runCli)({
