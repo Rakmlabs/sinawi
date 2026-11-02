@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { killSessionProcessGroups, runCli } from "./cli.js";
+import { QUEUE_DIR } from "./browser-bridge.js";
+import { SHOT_DIR } from "./computer-bridge.js";
 import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
 import { enabledPublicSkills, resolveSkillPrompt } from "./skills.js";
 import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, PermissionMode, Session, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
@@ -757,14 +759,15 @@ export class Orchestra {
     const runSignal = guard ? AbortSignal.any([signal, guard.kill.signal]) : signal;
     // Workers run in their own worktree; read-only lead runs may read every worktree of the session.
     const cwd = role === "worker" && workerId ? session.worktrees?.find((item) => item.workerId === workerId)?.cwd ?? session.cwd : session.cwd;
-    const extraDirs = readOnly && role === "orchestrator" ? session.worktrees?.map((item) => item.path) : undefined;
+    // Every run may also read the screenshots ao-browser/ao-computer save outside the worktree.
+    const extraDirs = [...(readOnly && role === "orchestrator" ? session.worktrees?.map((item) => item.path) ?? [] : []), QUEUE_DIR, SHOT_DIR];
     const pending = this.runner({
       blockedMcp: [...new Set([...blockedMcp, ...policyDenyPatterns(policy, agent)])],
       lockedMcp: lockedToolsFor(policy, agent),
       // Review/planning runs are read-only but must still be able to read files to verify (see readTools).
       agent, prompt, cwd, model, reasoningEffort, readOnly, readTools: readOnly, resumeSessionId, signal: runSignal,
       ...(permissionMode === "full" ? { fullAccess: true } : {}),
-      ...(extraDirs?.length ? { extraDirs } : {}),
+      extraDirs,
       usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role, dataDir: this.usageDataDir },
       onActivity: () => this.heartbeat(session, signal, guard && !guard.stall ? guard.detector : undefined),
       onLine: (line) => {

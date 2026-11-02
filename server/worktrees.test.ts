@@ -4,7 +4,9 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { QUEUE_DIR } from "./browser-bridge.js";
 import type { RunCliOptions } from "./cli.js";
+import { SHOT_DIR } from "./computer-bridge.js";
 import { Orchestra } from "./orchestra.js";
 import type { Session } from "./types.js";
 import { cleanupSessionWorktrees, ensureWorkerWorktree, pruneEmptyWorktrees, removeWorktree, userWorktrees, worktreeReviewNote, worktreeStatus, WorktreeDirtyError } from "./worktrees.js";
@@ -142,7 +144,8 @@ test("workers run in separate worktrees and the lead's review is told where the 
   assert.match(claude.prompt, /작업 위치 \(git worktree\)/);
   assert.equal(review.readOnly, true);
   assert.equal(review.cwd, repo);
-  assert.deepEqual(new Set(review.extraDirs), new Set([claude.cwd, grok.cwd]));
+  assert.deepEqual(new Set(review.extraDirs), new Set([claude.cwd, grok.cwd, QUEUE_DIR, SHOT_DIR]));
+  assert.deepEqual(claude.extraDirs, [QUEUE_DIR, SHOT_DIR], "workers can read the screenshots ao-browser/ao-computer save");
   assert.match(review.prompt, /워커 변경 위치 \(git worktree\)/);
   assert.match(review.prompt, new RegExp(`sinawi/${session.id.slice(0, 8)}/claude`));
   assert.match(review.prompt, /a\.txt/);
