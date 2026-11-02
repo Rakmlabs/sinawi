@@ -296,3 +296,16 @@ test("long tool output keeps the failure tail", () => {
   assert.match(error.text, /TAIL_EXIT_1"}$/);
   assert.ok(error.text.length <= 2_000);
 });
+
+test("text the CLI feeds back in a user turn (skill bodies, tool output) is never a message or final answer", () => {
+  const skill = normalizeCliLine("claude", JSON.stringify({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text: "Base directory for this skill: /Users/me/.claude/skills/test-driven-development\n\n# TDD\n..." }] },
+  }));
+  assert.deepEqual(skill.map((line) => [line.type, line.text, line.finalText]), [["tool", "스킬 불러옴: test-driven-development", undefined]]);
+  const other = normalizeCliLine("claude", JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "hook output" }] } }));
+  assert.equal(other[0].type, "tool");
+  assert.equal(other[0].finalText, undefined);
+  const assistant = normalizeCliLine("claude", JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "done" }] } }));
+  assert.deepEqual(assistant.map((line) => [line.type, line.finalText]), [["message", "done"]]);
+});

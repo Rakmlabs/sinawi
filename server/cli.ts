@@ -384,7 +384,13 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
         normalized.push({ type: "tool", text: `도구 결과: ${raw ? clipToolResult(raw) : clippedJson(block.content)}`, sessionId });
       } else {
         const text = asText(block);
-        if (text) normalized.push({ type: "message", text, finalText: text, sessionId });
+        if (!text) continue;
+        // A `user` turn carries what the CLI fed back to the model (a loaded skill body, tool output),
+        // never the model's own words, so it must not become a chat message or the final answer.
+        if (data.type === "user") {
+          const skill = /^Base directory for this skill: (\S+)/u.exec(text)?.[1];
+          normalized.push({ type: "tool", text: skill ? `스킬 불러옴: ${skill.split("/").filter(Boolean).at(-1)}` : `도구 결과: ${clipToolResult(text)}`, sessionId });
+        } else normalized.push({ type: "message", text, finalText: text, sessionId });
       }
     }
     if (normalized.length) return normalized;
