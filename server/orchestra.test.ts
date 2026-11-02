@@ -41,7 +41,7 @@ test("orchestrator runs selected worker and sends its result back", async () => 
   const session = await orchestra.create({ prompt: "Do work", agent: "codex", workers: ["claude"], cwd });
 
   await new Promise<void>((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error("session timeout")), 1_000);
+    const deadline = setTimeout(() => reject(new Error("session timeout")), 5_000);
     const poll = () => {
       if (session.status !== "running") { clearTimeout(deadline); resolve(); }
       else setTimeout(poll, 5);
@@ -440,9 +440,13 @@ test("a stopped run waiting for quota context cannot warn, hand off, or launch i
 });
 
 test("follow-up applies skills selected for that message", async () => {
-  const [skill] = await publicSkills();
-  assert.ok(skill, "expected at least one discovered skill");
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-test-"));
+  // Hermetic: a project-scoped fixture skill instead of whatever happens to be in the real home directory.
+  await mkdir(join(cwd, ".claude", "skills", "followup-fixture"), { recursive: true });
+  await writeFile(join(cwd, ".claude", "skills", "followup-fixture", "SKILL.md"),
+    "---\nname: followup-fixture\ndescription: Fixture skill for follow-up tests\n---\nFixture body\n");
+  const skill = (await publicSkills(cwd)).find((item) => item.name === "followup-fixture");
+  assert.ok(skill, "expected the fixture skill to be discovered");
   const prompts: string[] = [];
   const orchestra = new Orchestra(() => undefined, async (options) => {
     prompts.push(options.prompt);

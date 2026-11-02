@@ -618,7 +618,8 @@ export class RoutingService {
         reject(new Error("플래너 응답 시간이 초과되었습니다."));
       }, timeoutMs);
     });
-    timer?.unref();
+    // Deliberately ref'd: this timer is the only thing guaranteed to settle the awaited race if the runner never does;
+    // an unref'd timer lets the event loop drain first and strands the caller on an unresolved promise.
     try {
       const planner = choice(settings, settings.planner.agent, "설정된 라우팅 플래너", settings.planner);
       const invocation = Promise.resolve().then(() => (this.options.runner ?? runCli)({
