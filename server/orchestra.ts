@@ -101,6 +101,8 @@ export class Orchestra {
    * After this long without a session event (message, tool, command, status, error) the run fails.
    */
   quietLimitMs = 20 * 60 * 1_000;
+  /** Set by the server: whether the user denied or stopped computer use for a session since a time. */
+  computerHalt?: (sessionId: string, since: number) => "denied" | "stopped" | undefined;
   /** Time of the last session event per running session (see quietLimitMs). */
   private lastEventAt = new Map<string, number>();
   /**
@@ -260,11 +262,13 @@ export class Orchestra {
     const workspaceId = input.workspaceId ?? "personal";
     const mediaRequest = await this.isMediaRequest(input.prompt, input.skills, workspaceId);
     if (mediaRequest) assertMediaAllowed(this.workspacePolicyResolver?.(workspaceId));
-    if (mediaRequest && !this.allowedAgents({ workspaceId }).includes("grok")) throw new Error(mediaUnavailableMessage);
-    const agent = mediaRequest ? "grok" : input.agent;
+    // Media requests move the lead to Grok only in auto mode; a manually chosen team is kept as is.
+    const mediaLead = mediaRequest && (input.mode ?? "manual") === "auto";
+    if (mediaLead && !this.allowedAgents({ workspaceId }).includes("grok")) throw new Error(mediaUnavailableMessage);
+    const agent = mediaLead ? "grok" : input.agent;
     const workers: AgentId[] = [...input.workers];
-    const model = mediaRequest ? "grok-4.7" : input.model;
-    const reasoningEffort = mediaRequest ? undefined : input.reasoningEffort;
+    const model = mediaLead ? "grok-4.7" : input.model;
+    const reasoningEffort = mediaLead ? undefined : input.reasoningEffort;
     const workerConfigs = normalizeWorkerConfigs(workers, input.workerConfigs);
     this.assertPolicy(workspaceId, [agent, ...workers, ...(input.planner ? [input.planner.agent] : [])]);
     const cwd = resolve(input.cwd);
@@ -289,13 +293,14 @@ export class Orchestra {
     this.controllers.set(session.id, controller);
     this.event(session, agent, "status", `${agentNames[agent]} 세션을 시작했습니다.`);
     this.event(session, "user", "message", input.prompt);
-    void this.execute(session, input.prompt, selectedSkills, input.systemPrompt ?? "", controller, mediaRequest)
+    void this.execute(session, input.prompt, selectedSkills, input.systemPrompt ?? "", controller, mediaLead || (mediaRequest && agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
     return session;
   }
 
   private async execute(session: Session, userPrompt: string, skillIds: string[], systemPrompt: string, controller: AbortController, requiresGrokMedia: boolean) {
     if (!this.isCurrentRun(session, controller.signal)) return;
+    const runStartedAt = Date.now();
     this.assertSessionPolicy(session);
     if (requiresGrokMedia) assertMediaAllowed(this.workspacePolicyResolver?.(session.workspaceId));
     if (requiresGrokMedia && session.agent !== "grok") {
@@ -414,6 +419,9 @@ export class Orchestra {
       }
 
       if (controller.signal.aborted) return this.finishStopped(session, controller);
+      // The user said no to computer use: end the run instead of letting the lead look for workarounds.
+      const halt = this.computerHalt?.(session.id, runStartedAt);
+      if (halt) throw new Error(halt === "denied" ? "사용자가 컴퓨터 조작을 거부해 작업을 멈췄습니다." : "사용자가 컴퓨터 조작을 중지해 작업을 멈췄습니다.");
       const roundsLeft = maxReplanRounds - round;
       const originalContext = session.cliSessionId ? "" : `\n\n원래 사용자 요청:\n${userPrompt}\n\n당신의 첫 응답:\n${first.finalText}`;
       this.event(session, session.agent, "status", round === 0 ? "총괄이 워커 결과를 검증하고 있습니다." : `총괄이 재계획 ${round}회차 결과를 검증하고 있습니다.`, { role: "orchestrator", metadata: { phase: "verify", round } });
@@ -849,11 +857,12 @@ export class Orchestra {
     session.turnCount = (session.turnCount ?? session.events.filter((event) => event.agent === "user" && event.type === "message").length) + 1;
     this.event(session, "user", "message", prompt);
     const allowed = new Set(this.allowedAgents(session));
-    if (mediaRequest && !allowed.has("grok")) {
+    const mediaLead = mediaRequest && session.mode === "auto";
+    if (mediaLead && !allowed.has("grok")) {
       this.fail(session, new Error(mediaUnavailableMessage), controller);
       return session;
     }
-    if (mediaRequest && (session.agent !== "grok" || session.model !== "grok-4.7")) {
+    if (mediaLead && (session.agent !== "grok" || session.model !== "grok-4.7")) {
       const workers = session.agent === "grok" ? session.workers : this.mediaWorkers(session.workspaceId);
       this.applyTeam(session, {
         agent: "grok", model: "grok-4.7", workers,
@@ -890,7 +899,7 @@ export class Orchestra {
     if (controller.signal.aborted) return session;
     const config = this.configs.get(id) ?? { skills: [], systemPrompt: "" };
     const selectedSkills = [...new Set([...config.skills, ...skills, ...mediaSkills(prompt, await enabledPublicSkills(session.cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills))])];
-    void this.execute(session, prompt, selectedSkills, config.systemPrompt, controller, mediaRequest)
+    void this.execute(session, prompt, selectedSkills, config.systemPrompt, controller, mediaLead || (mediaRequest && session.agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
     return session;
   }

@@ -503,6 +503,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     }) : undefined,
     logFile: envVar("COMPUTER_LOG"),
   });
+  orchestra.computerHalt = (sessionId, since) => computerBridge.userHalt(sessionId, since);
   httpServer.once("close", () => computerBridge.dispose());
   registerComputerRoutes(app, computerBridge);
   if (options.browserQueue) { const stop = watchComputerQueue(computerBridge); httpServer.once("close", stop); }

@@ -410,3 +410,23 @@ test("CLI ships the tested parser, needs a token, and the queue fallback answers
   stop();
   h.bridge.dispose();
 });
+
+test("userHalt reports a denial or a stop that happened during the run", async () => {
+  const h = await harness();
+  const since = Date.now();
+  assert.equal(h.bridge.userHalt("s1", since), undefined);
+  const p = h.bridge.request("cursor", {}, T1);
+  await h.reply({ ok: false, error: `${NATIVE_DENIED}사용자가 거부` });
+  await p;
+  assert.equal(h.bridge.userHalt("s1", since), "denied");
+  assert.equal(h.bridge.userHalt("s1", Date.now() + 1000), undefined, "an older denial does not halt a later run");
+  assert.equal(h.bridge.userHalt("s2", since), undefined, "other sessions are not affected");
+
+  const other = h.bridge.request("cursor", {}, { token: "t2" });
+  for (let i = 0; i < 100 && h.sent.length < 2; i++) await tick();
+  h.bridge.stop("user");
+  assert.equal((await other).error, STOPPED_MESSAGE);
+  assert.equal(h.bridge.userHalt("s2", since), "stopped");
+  assert.equal(h.bridge.userHalt("s3", since), undefined, "a stop halts only sessions that were using the computer");
+  h.bridge.dispose();
+});

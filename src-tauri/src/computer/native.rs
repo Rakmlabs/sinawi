@@ -453,10 +453,11 @@ pub fn approval_alert(title: &str, body: &str, buttons: &[&str], timeout: Durati
         let _: () = msg_send![&*alert, setMessageText: &*NSString::from_str(title)];
         let _: () = msg_send![&*alert, setInformativeText: &*NSString::from_str(body)];
         let empty = NSString::from_str("");
-        for (index, label) in buttons.iter().enumerate() {
+        for label in buttons {
             let button: *mut AnyObject = msg_send![&*alert, addButtonWithTitle: &*NSString::from_str(label)];
-            // Only the first (deny) button answers to Return.
-            if index > 0 && !button.is_null() { let _: () = msg_send![button, setKeyEquivalent: &*empty]; }
+            // No button answers to Return: the alert takes focus while the user may be typing in the
+            // chat box, and a stray Return must not decide. Esc (monitor below) still denies.
+            if !button.is_null() { let _: () = msg_send![button, setKeyEquivalent: &*empty]; }
         }
         let nsapp: *mut AnyObject = msg_send![app_cls, sharedApplication];
         let _: () = msg_send![nsapp, activateIgnoringOtherApps: Bool::YES];

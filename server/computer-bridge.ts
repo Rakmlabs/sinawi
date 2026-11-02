@@ -281,6 +281,10 @@ export class ComputerBridge {
   private pending = new Map<string, Pending>();
   private grants = new Map<string, Grant>();
   private denied = new Map<string, number>();
+  /** Per session: when the user last denied computer use, and when it last asked (for global stops). */
+  private userDenied = new Map<string, number>();
+  private lastRequest = new Map<string, number>();
+  private lastStop = 0;
   private shots = new Map<string, Shot>();
   private activity: ComputerActivity[] = [];
   private chain: Promise<unknown> = Promise.resolve();
@@ -335,9 +339,21 @@ export class ComputerBridge {
 
   flushLog() { return this.logChain; }
 
+  /**
+   * Whether the user said no to computer use for this session since `since` (a deny in the native
+   * alert, or a global stop while the session was using the computer). The run should end then,
+   * not go on looking for another way.
+   */
+  userHalt(sessionId: string, since: number): "denied" | "stopped" | undefined {
+    if ((this.userDenied.get(sessionId) ?? -Infinity) >= since) return "denied";
+    if (this.lastStop >= since && (this.lastRequest.get(sessionId) ?? -Infinity) >= since) return "stopped";
+    return undefined;
+  }
+
   /** User-initiated stop: revoke every approval, reject queued and in-flight commands. */
   stop(reason = "user") {
     this.epoch++;
+    this.lastStop = this.now();
     this.stoppedUntil = this.now() + (this.opts.stopCooldownMs ?? 60_000);
     this.grants.clear();
     for (const entry of [...this.pending.values()]) entry.finish({ ok: false, error: STOPPED_MESSAGE });
@@ -442,8 +458,9 @@ export class ComputerBridge {
     const allowed = this.opts.isAllowed(ctx.workspaceId);
     if (action === "status") return this.status(ctx, allowed);
     if (!allowed) { void this.log(ctx, action, summary, "blocked by workspace setting"); return { ok: false, error: computerUseBlockedMessage }; }
+    if (ctx.sessionId) this.lastRequest.set(ctx.sessionId, this.now());
     if (this.now() < this.stoppedUntil) return { ok: false, error: STOPPED_MESSAGE };
-    if ((this.denied.get(ctx.key) ?? 0) > this.now()) return { ok: false, error: DENIED_MESSAGE };
+    if ((this.denied.get(ctx.key) ?? 0) > this.now()) { if (ctx.sessionId) this.userDenied.set(ctx.sessionId, this.now()); return { ok: false, error: DENIED_MESSAGE }; }
 
     const epoch = this.epoch;
     if (args.space === "pixels") {
@@ -503,6 +520,7 @@ export class ComputerBridge {
     const error = result.error ?? "";
     if (error.startsWith(NATIVE_DENIED)) {
       this.denied.set(ctx.key, this.now() + 10 * 60_000);
+      if (ctx.sessionId) this.userDenied.set(ctx.sessionId, this.now());
       if (this.grants.delete(ctx.key)) this.publishState();
       void this.log(ctx, "approval", "native alert", "deny");
       return { ok: false, error: DENIED_MESSAGE };

@@ -150,23 +150,30 @@ test("manual new sessions automatically attach marketing-shorts for shorts reque
   assert.ok(session.skills?.length);
 });
 
-test("manual media sessions normalize a non-Grok team to Grok 4.7", async () => {
+test("manual media sessions keep the chosen team; auto sessions move the lead to Grok 4.7", async () => {
   const calls: RunCliOptions[] = [];
   const orchestra = new Orchestra(undefined, async (options) => {
     calls.push(options);
     return { exitCode: 0, finalText: "done" };
   });
 
-  const session = await orchestra.create({
+  const manual = await orchestra.create({
     prompt: "광고 영상을 만들어줘", agent: "claude", model: "opus", workers: ["codex"], cwd: process.cwd(), mode: "manual", resumeSessionId: "claude-thread",
   });
-  await waitUntilSettled(session);
+  await waitUntilSettled(manual);
+  assert.equal(manual.agent, "claude");
+  assert.equal(manual.model, "opus");
+  assert.deepEqual(manual.workers, ["codex"]);
 
-  assert.deepEqual(calls.map((call) => call.agent), ["grok"]);
-  assert.equal(calls[0].resumeSessionId, undefined);
-  assert.equal(session.agent, "grok");
-  assert.equal(session.model, "grok-4.7");
-  assert.deepEqual(session.workers, ["codex"]);
+  const auto = await orchestra.create({
+    prompt: "광고 영상을 만들어줘", agent: "claude", model: "opus", workers: ["codex"], cwd: process.cwd(), mode: "auto", resumeSessionId: "claude-thread",
+  });
+  await waitUntilSettled(auto);
+  assert.deepEqual(calls.map((call) => call.agent), ["claude", "grok"]);
+  assert.equal(calls[1].resumeSessionId, undefined);
+  assert.equal(auto.agent, "grok");
+  assert.equal(auto.model, "grok-4.7");
+  assert.deepEqual(auto.workers, ["codex"]);
 });
 
 test("media follow-ups normalize the team even when automatic switching is disabled", async () => {
@@ -196,12 +203,12 @@ test("media requests warn without execution when the workspace prohibits Grok", 
   }, undefined, undefined, undefined, allowed);
 
   await assert.rejects(
-    orchestra.create({ prompt: "사진 편집해줘", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "manual" }),
+    orchestra.create({ prompt: "사진 편집해줘", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "auto" }),
     /Grok 조정자를 사용할 수 없습니다/,
   );
-  const session = await orchestra.create({ prompt: "첫 요청", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "manual" });
+  const session = await orchestra.create({ prompt: "첫 요청", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "auto" });
   await waitUntilSettled(session);
-  await orchestra.followup(session.id, "로고 시안을 만들어줘", [], { mode: "manual" });
+  await orchestra.followup(session.id, "로고 시안을 만들어줘", [], { mode: "auto" });
 
   assert.equal(calls.length, 1);
   assert.equal(session.status, "error");
@@ -1199,4 +1206,22 @@ test("manual media followups preserve an existing customized media team", async 
   assert.deepEqual(session.workers, ["grok"]);
   assert.equal(session.workerConfigs?.[0].id, "custom");
   assert.equal(session.workerConfigs?.[0].model, "grok-4.7-build-fast");
+});
+
+test("a run ends after the worker round when the user denied computer use, without a review", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "orchestra-test-"));
+  const roles: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    roles.push(options.usageContext?.role ?? "?");
+    const text = roles.length === 1 ? '<<DELEGATE to="claude">>Open TextEdit<</DELEGATE>>' : "막힘: 사용자가 거부했습니다";
+    options.onLine({ type: "message", text, finalText: text });
+    return { exitCode: 0, finalText: text };
+  };
+  const orchestra = new Orchestra(() => undefined, runner);
+  orchestra.computerHalt = () => "denied";
+  const session = await orchestra.create({ prompt: "TextEdit에 hello", agent: "grok", workers: ["claude"], cwd });
+  await waitUntilSettled(session);
+  assert.equal(session.status, "error");
+  assert.equal(roles.length, 2, "lead + worker only; no review round");
+  assert.match(session.events.at(-1)?.text ?? "", /컴퓨터 조작을 거부해 작업을 멈췄습니다/);
 });

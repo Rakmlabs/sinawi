@@ -52,7 +52,7 @@ pub(crate) const INDICATOR_TITLE: &str = "Sinawi 컴퓨터 조작 중";
 /// Error prefixes the server maps to its own messages.
 const DENIED: &str = "[denied] ";
 const APPROVAL_TIMEOUT: &str = "[approval-timeout] ";
-/// NSAlert buttons, in order. The first one is the default (Return); Esc is mapped to it too.
+/// NSAlert buttons, in order. No button answers to Return; Esc denies.
 pub(crate) const DIALOG_BUTTONS: [&str; 3] = ["거부", "이번만", "이 세션 동안"];
 
 /// What the user chose in the native alert.
@@ -181,7 +181,9 @@ fn ask_user(app: &tauri::AppHandle, ctx: &RequestContext) -> Decision {
     let (tx, rx) = std::sync::mpsc::channel();
     let posted = app.run_on_main_thread(move || {
         let previous = native::frontmost_pid().filter(|pid| *pid != std::process::id() as i32);
-        let decision = decision_from_response(native::approval_alert(&title, &body, &DIALOG_BUTTONS, DIALOG_TIMEOUT));
+        let response = native::approval_alert(&title, &body, &DIALOG_BUTTONS, DIALOG_TIMEOUT);
+        let decision = decision_from_response(response);
+        log(&format!("native approval response {response}"));
         // Hand focus back to the app the agent was working in.
         if let (Some(pid), Decision::Once | Decision::Session) = (previous, decision) { native::activate_pid(pid); }
         let _ = tx.send(decision);
@@ -499,7 +501,7 @@ mod tests {
 
     #[test]
     fn alert_responses_map_to_decisions_and_default_to_deny() {
-        assert_eq!(DIALOG_BUTTONS[0], "거부", "the default (Return/Esc) button denies");
+        assert_eq!(DIALOG_BUTTONS[0], "거부", "the first (Esc) button denies");
         assert_eq!(decision_from_response(1000), Decision::Deny);
         assert_eq!(decision_from_response(1001), Decision::Once);
         assert_eq!(decision_from_response(1002), Decision::Session);
