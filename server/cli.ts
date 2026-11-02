@@ -45,6 +45,11 @@ export interface RunCliOptions {
   turnEndGraceMs?: number;
   /** Folders outside `cwd` the run may read (e.g. worker worktrees a reviewer checks). */
   extraDirs?: string[];
+  /**
+   * Folders the run may read but must not edit: a worktree worker's main checkout, which holds the
+   * uncommitted docs and node_modules its worktree lacks. Claude needs them granted; edits are denied.
+   */
+  readOnlyDirs?: string[];
   /** `--settings` JSON for Claude (the Bash pre-approval hook); set by prepareCliInvocation. */
   claudeSettings?: string;
   /**
@@ -137,6 +142,12 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     else args.push("--permission-mode", "acceptEdits", "--allowedTools", ...developmentBashRules);
     if (!readOnly && !full && options.claudeSettings && supports("--settings")) args.push("--settings", options.claudeSettings);
     for (const dir of extraDirs) args.push("--add-dir", dir);
+    for (const dir of new Set(options.readOnlyDirs ?? [])) {
+      if (!dir || dir === cwd || extraDirs.includes(dir)) continue;
+      // `//path` is an absolute path in Claude permission rules.
+      args.push("--add-dir", dir);
+      for (const tool of ["Edit", "Write", "NotebookEdit"]) args.push("--disallowedTools", `${tool}(/${dir}/**)`);
+    }
     for (const pattern of new Set(blockedMcp ?? [])) args.push("--disallowedTools", pattern);
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     return { command: cliName("claude"), args, cwd };

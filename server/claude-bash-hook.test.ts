@@ -146,3 +146,12 @@ test("writable Claude runs get the hook and partial messages; read-only runs nev
   const grok = buildInvocation({ agent: "grok", prompt: "review", cwd: "/work/repo", readOnly: true, readTools: true, extraDirs: ["/wt/a"] });
   assert.ok(!grok.args.includes("--add-dir"), "Grok rejects additionalDirectories; it reads absolute paths instead");
 });
+
+test("a worktree worker can read the main checkout but every edit tool is denied there", () => {
+  const worker = buildInvocation({ agent: "claude", prompt: "work", cwd: "/work/repo/.wt/w1", readOnlyDirs: ["/work/repo"] });
+  assert.deepEqual(worker.args.flatMap((arg, index) => worker.args[index - 1] === "--add-dir" ? [arg] : []), ["/work/repo"]);
+  const denied = worker.args.flatMap((arg, index) => worker.args[index - 1] === "--disallowedTools" ? [arg] : []);
+  for (const tool of ["Edit", "Write", "NotebookEdit"]) assert.ok(denied.includes(`${tool}(//work/repo/**)`), tool);
+  const grok = buildInvocation({ agent: "grok", prompt: "work", cwd: "/work/repo/.wt/w1", readOnlyDirs: ["/work/repo"] });
+  assert.ok(!grok.args.includes("--add-dir"));
+});

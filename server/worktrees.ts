@@ -286,7 +286,7 @@ ${sections.join("\n")}`;
 export function worktreeWorkerNote(info: WorktreeInfo, mainCwd: string): string {
   return `## 작업 위치 (git worktree)
 이 작업은 전용 git worktree \`${info.cwd}\` (브랜치 \`${info.branch}\`)에서 실행된다. 현재 작업 디렉터리가 이미 그곳이다. 파일은 이 폴더 안에서만 고치고, 메인 폴더 \`${mainCwd}\`는 수정하지 않는다. 커밋·브랜치 전환·병합은 브리프에 있을 때만 한다.
-- 이 worktree는 마지막 커밋(HEAD) 기준이다.${info.mainDirty ? " 메인 폴더의 커밋되지 않은 변경은 여기에 없다." : ""} node_modules처럼 git에 없는 파일(의존성, 빌드 결과, .env)도 없다. 검증에 필요하면 메인 폴더의 것을 절대 경로로 쓰고(예: \`node ${mainCwd}/node_modules/.bin/tsc\`), 그래도 안 되면 그 사실을 보고한다.`;
+- 이 worktree는 마지막 커밋(HEAD) 기준이다.${info.mainDirty ? " 메인 폴더의 커밋되지 않은 변경은 여기에 없다. 브리프가 그 파일(아직 커밋 안 된 문서 등)을 보라고 하면 메인 폴더의 절대 경로로 읽는다. 메인 폴더는 읽기만 되고 수정은 막혀 있다." : ""} node_modules처럼 git에 없는 파일(의존성, 빌드 결과, .env)도 없다. 검증에 필요하면 메인 폴더의 것을 절대 경로로 쓰고(예: \`node ${mainCwd}/node_modules/.bin/tsc\`), 그래도 안 되면 그 사실을 보고한다.`;
 }
 
 /** Uncommitted changes in the session's main checkout (they are not copied into worktrees). */

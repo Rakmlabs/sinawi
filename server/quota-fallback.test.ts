@@ -71,3 +71,15 @@ test("a number 429 inside a JSON event (Claude init timings) is not a quota fail
   assert.equal(isQuotaExhaustion(JSON.stringify({ type: "error", message: "HTTP 429 Too Many Requests" })), true);
   assert.equal(isQuotaExhaustion(JSON.stringify({ type: "turn.failed", error: { message: "You’ve hit your usage limit." } })), true);
 });
+
+test("a command or tool output that merely mentions quota, limit or 429 is not exhaustion", () => {
+  const toolUse = { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", name: "Bash", input: { command: 'rg -n -i "quota|limit|rate|tooMany|429" schema.d.ts' } }] } };
+  assert.equal(isQuotaExhaustion(JSON.stringify(toolUse)), false);
+  const toolResult = { type: "user", message: { content: [{ type: "tool_result", content: "429: too many requests (rate limit reached)" }] } };
+  assert.equal(isQuotaExhaustion(JSON.stringify(toolResult)), false);
+  const grokTool = { type: "tool_call", toolName: "run_terminal_command", rawInput: { command: "grep quota_exceeded logs" } };
+  assert.equal(isQuotaExhaustion(JSON.stringify(grokTool)), false);
+  // The provider's own words still count.
+  assert.equal(isQuotaExhaustion(JSON.stringify({ type: "result", is_error: true, result: "Claude AI usage limit reached|1793610000" })), true);
+  assert.equal(isQuotaExhaustion(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Usage limit reached. Try again later." }] } })), true);
+});

@@ -783,6 +783,8 @@ export class Orchestra {
     const cwd = role === "worker" && workerId ? session.worktrees?.find((item) => item.workerId === workerId)?.cwd ?? session.cwd : session.cwd;
     // Every run may also read the screenshots ao-browser/ao-computer save outside the worktree.
     const extraDirs = [...(readOnly && role === "orchestrator" ? session.worktrees?.map((item) => item.path) ?? [] : []), QUEUE_DIR, SHOT_DIR];
+    // A worktree worker reads (never edits) the main checkout: uncommitted docs and node_modules live there.
+    const worktreeRoot = role === "worker" && workerId ? session.worktrees?.find((item) => item.workerId === workerId)?.repoRoot : undefined;
     const pending = this.runner({
       blockedMcp: [...new Set([...blockedMcp, ...policyDenyPatterns(policy, agent)])],
       lockedMcp: lockedToolsFor(policy, agent),
@@ -790,6 +792,7 @@ export class Orchestra {
       agent, prompt, cwd, model, reasoningEffort, readOnly, readTools: readOnly, resumeSessionId, signal: runSignal,
       ...(permissionMode === "full" ? { fullAccess: true } : {}),
       extraDirs,
+      ...(worktreeRoot ? { readOnlyDirs: [worktreeRoot] } : {}),
       usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role, dataDir: this.usageDataDir },
       onActivity: () => this.heartbeat(session, signal, guard && !guard.stall ? guard.detector : undefined),
       onLine: (line) => {
