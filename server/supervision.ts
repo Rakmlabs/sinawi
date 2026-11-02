@@ -119,8 +119,9 @@ export function permissionModeRules(mode: "plan" | "auto" | "full"): string {
 
 export const WORKER_RULES = `## 작업자 운영 규칙 (Sinawi)
 - 편집하기 전에 대상 파일을 읽는다. 내용을 추측해서 고치지 않는다. 다음 단계가 이전 도구 결과에 의존하면, 그 결과를 확인한 뒤에만 진행한다.
-- 브라우저(ao-browser): goto 뒤에는 반드시 \`ao-browser snapshot\`으로 실제 요소 목록을 먼저 보고, 반환된 ref(예: e12)로 click/fill/text 한다. CSS 선택자를 짐작해서 여러 개 시도하지 않는다. 화면이 바뀌면 다시 snapshot. "요소를 찾을 수 없습니다"가 나오면 선택자를 바꿔 재시도하지 말고 snapshot부터 다시 본다.
+- 브라우저(ao-browser): 처음에는 status로 확인하지 말고 바로 goto로 연다. goto 뒤에는 반드시 \`ao-browser snapshot\`으로 실제 요소 목록을 먼저 보고, 반환된 ref(예: e12)로 click/fill/text 한다. CSS 선택자를 짐작해서 여러 개 시도하지 않는다. 화면이 바뀌면 다시 snapshot. "요소를 찾을 수 없습니다"가 나오면 선택자를 바꿔 재시도하지 말고 snapshot부터 다시 본다.
 - 같은 오류가 3번 나오거나 같은 수정이 3번 실패하면 같은 방법을 더 시도하지 말고 멈춘다. 원래 목표, 시도한 것, 오류, 틀렸을 수 있는 가정을 '막힘'으로 보고한다. 앱도 반복 오류·장시간 무진전을 감지하면 작업을 중단시키고 총괄이 다시 계획한다.
+- 명령이 거부되거나 승인이 필요하다고 나오면 arch, env, 변수, 절대 경로, 다른 셸로 감싸 우회하지 않는다. 거부된 명령과 이유를 증거에 적고 막힘으로 보고한다. 네이티브 모듈의 아키텍처 불일치(arm64/x64, Rosetta)도 같은 환경 문제다.
 - 주석이나 TODO로 구현을 대신하지 않는다. 요청한 범위만 완전히 구현하고, 관련 없는 수정은 하지 않는다.
 - 라이브러리, 명령, 스크립트가 있다고 가정하지 않는다. package.json, Cargo.toml, requirements, 저장소 스크립트에서 확인한다.
 - 다른 작업자나 사용자가 만든 변경은 되돌리지 않는다. 내가 만든 변경도 오류를 고치려는 경우가 아니면 되돌리지 않는다.
@@ -293,7 +294,7 @@ export class StallDetector {
   constructor(options: StallOptions = {}) {
     this.repeatLimit = options.repeatLimit ?? 3;
     this.window = options.window ?? 15;
-    this.idleMs = options.idleMs ?? 8 * 60_000;
+    this.idleMs = options.idleMs ?? 5 * 60_000;
     this.now = options.now ?? Date.now;
     this.familyLimit = options.familyLimit ?? 6;
     this.failLimit = options.failLimit ?? 5;
