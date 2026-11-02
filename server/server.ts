@@ -842,6 +842,13 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       res.json(session);
     } catch (error) { errorResponse(res, error); }
   });
+  app.post("/api/sessions/:id/compact", async (req, res) => {
+    try {
+      const session = orchestra.compact(routeParam(req.params.id));
+      await persistSessions(orchestra.list());
+      res.json(session);
+    } catch (error) { errorResponse(res, error); }
+  });
   app.post("/api/sessions/:id/stop", (req, res) => {
     try { res.json(orchestra.stop(routeParam(req.params.id))); }
     catch (error) { errorResponse(res, error, 404); }

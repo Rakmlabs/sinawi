@@ -10,9 +10,35 @@ export function fileToken(text: string, cursor: number) {
   return match ? { start: cursor - match[1].length - 1, end: cursor, query: match[1] } : undefined;
 }
 
+/** Skills matching a `/query`, best first: name prefix, then name substring, then description/source. */
 export function matchingSkills(skills: SkillInfo[], query: string) {
   const normalized = query.toLocaleLowerCase();
-  return skills.filter((skill) => `${skill.name} ${skill.source} ${skill.description}`.toLocaleLowerCase().includes(normalized));
+  const rank = (skill: SkillInfo) => {
+    const name = skill.name.toLocaleLowerCase();
+    // "oh-my-claudecode:ask" also matches "ask" as a prefix of its last segment.
+    if (name.startsWith(normalized) || name.split(":").at(-1)!.startsWith(normalized)) return 0;
+    if (name.includes(normalized)) return 1;
+    return `${skill.source} ${skill.description}`.toLocaleLowerCase().includes(normalized) ? 2 : -1;
+  };
+  return skills.map((skill, index) => ({ skill, index, score: rank(skill) }))
+    .filter((item) => item.score >= 0)
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .map((item) => item.skill);
+}
+
+/** Built-in `/` commands, like Claude Code's: handled by the app, never sent to an agent. */
+export const SLASH_COMMANDS = ["clear", "compact", "usage"] as const;
+export type SlashCommand = (typeof SLASH_COMMANDS)[number];
+
+export function matchingCommands(query: string): SlashCommand[] {
+  const normalized = query.toLocaleLowerCase();
+  return SLASH_COMMANDS.filter((command) => command.startsWith(normalized));
+}
+
+/** The command a whole message names (`/clear`), if any. */
+export function slashCommandOf(text: string): SlashCommand | undefined {
+  const name = text.trim().match(/^\/([a-z]+)$/u)?.[1];
+  return SLASH_COMMANDS.find((command) => command === name);
 }
 
 export function recentPaths(value: unknown, limit = 8): string[] {

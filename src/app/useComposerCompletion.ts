@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { fileToken, matchingSkills, slashToken } from "../composer";
+import { fileToken, matchingCommands, matchingSkills, slashToken, type SlashCommand } from "../composer";
 import type { Api } from "./api";
 import type { SkillInfo as Skill } from "../../server/types";
+
+export type SlashItem = { kind: "command"; command: SlashCommand } | { kind: "skill"; skill: Skill };
 
 /** `/skill` and `@file` completion plus prompt-history cursor for the composer textarea. */
 export function useComposerCompletion(api: Api, skills: Skill[], messageSkills: string[], cwd: string) {
@@ -15,7 +17,9 @@ export function useComposerCompletion(api: Api, skills: Skill[], messageSkills: 
   const historyDraft = useRef("");
   const lastEscape = useRef(0);
   const filteredSkills = slash ? matchingSkills(skills, slash.query).filter((skill) => !messageSkills.includes(skill.id)) : [];
-  const highlightedSkill = Math.min(skillIndex, Math.max(0, filteredSkills.length - 1));
+  // One list for keyboard navigation: commands first, then skills.
+  const slashItems: SlashItem[] = slash ? [...matchingCommands(slash.query).map((command) => ({ kind: "command" as const, command })), ...filteredSkills.map((skill) => ({ kind: "skill" as const, skill }))] : [];
+  const highlightedSkill = Math.min(skillIndex, Math.max(0, slashItems.length - 1));
   useEffect(() => {
     if (slash) document.getElementById(`slash-skill-${highlightedSkill}`)?.scrollIntoView({ block: "nearest" });
   }, [slash?.query, highlightedSkill]);
@@ -31,7 +35,7 @@ export function useComposerCompletion(api: Api, skills: Skill[], messageSkills: 
   }, [fileCompletion?.query, cwd]);
   return {
     slash, setSlash, skillIndex, setSkillIndex, fileCompletion, setFileCompletion, fileSuggestions, setFileSuggestions, fileIndex, setFileIndex,
-    composerInput, historyIndex, historyDraft, lastEscape, filteredSkills, highlightedSkill,
+    composerInput, historyIndex, historyDraft, lastEscape, filteredSkills, slashItems, highlightedSkill,
   };
 }
 

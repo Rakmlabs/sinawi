@@ -82,3 +82,16 @@ test("usage command is exact and does not consume ordinary prompts or skills", a
 test("numbered choices support Markdown lists separated by blank lines", () => {
   assert.deepEqual(numberedOptions("선택하세요:\n1. 빠르게 진행\n\n2. 검토 후 진행\n\n3) 직접 지정"), ["빠르게 진행", "검토 후 진행", "직접 지정"]);
 });
+
+test("slash menu: name matches rank first, plugin skills match their last segment, commands are built in", async () => {
+  const { matchingSkills, matchingCommands, slashCommandOf } = await import("./composer");
+  const skill = (name: string, description = "") => ({ id: name, name, description, source: "Claude" }) as never;
+  const skills = [skill("docx", "for frontend docs"), skill("oh-my-claudecode:ask"), skill("frontend-design"), skill("my-frontend")];
+  assert.deepEqual(matchingSkills(skills, "front").map((item: { name: string }) => item.name), ["frontend-design", "my-frontend", "docx"]);
+  assert.deepEqual(matchingSkills(skills, "ask").map((item: { name: string }) => item.name), ["oh-my-claudecode:ask"]);
+  assert.deepEqual(matchingCommands("c"), ["clear", "compact"]);
+  assert.deepEqual(matchingCommands(""), ["clear", "compact", "usage"]);
+  assert.equal(slashCommandOf(" /compact\n"), "compact");
+  assert.equal(slashCommandOf("/compact now"), undefined);
+  assert.equal(slashCommandOf("/frontend-design"), undefined);
+});

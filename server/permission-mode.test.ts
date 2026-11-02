@@ -69,3 +69,18 @@ test("auto never stops to ask the user; only plan mode collects questions", asyn
   assert.match(prompts[1], /모호한 점은 계획 끝에 질문으로/);
   assert.doesNotMatch(prompts[1], /되묻지 않는다/);
 });
+
+test("/compact drops the CLI sessions so the next turn starts fresh from a summary", async () => {
+  const calls: RunCliOptions[] = [];
+  const orchestra = orchestraWith(defaultWorkspacePolicy(), async (options) => { calls.push(options); return { exitCode: 0, finalText: "답", sessionId: "cli-1" }; });
+  const session = await orchestra.create({ prompt: "첫 요청", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await settle(session);
+  assert.equal(session.cliSessionId, "cli-1");
+  orchestra.compact(session.id);
+  assert.equal(session.cliSessionId, undefined);
+  await orchestra.followup(session.id, "다음 요청");
+  await settle(session);
+  const next = calls.at(-1)!;
+  assert.equal(next.resumeSessionId, undefined, "no resume after compaction");
+  assert.match(next.prompt, /이전 오케스트라의 대화 요약:[\s\S]*첫 요청/);
+});

@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Square, WandSparkles, X } from "lucide-react";
 import { ComposerPopover } from "../ComposerPopover";
-import { composerAction, composerLocked, fileToken, handlesCompletionKey, historyEntries, historyStep, isUsageCommand, slashToken } from "../composer";
+import { composerAction, composerLocked, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
+import type { SlashItem } from "./useComposerCompletion";
 import { kindFromName } from "../../server/media-kinds";
 import { formatBytes, kindLabel, type MediaRef } from "../viewer-model";
 import { names } from "./labels";
@@ -45,9 +46,16 @@ export type ComposerProps = {
   stopActive: () => void;
   openModal: (modal: string) => void;
   openViewer: (items: MediaRef[], index: number) => void;
+  /** Runs a built-in `/` command (`/clear`, `/compact`, `/usage`). */
+  runCommand: (command: SlashCommand) => void;
   /** Team/agent picker rendered in the bottom bar (TeamBarSlot). */
   teamPicker?: ReactNode;
 };
+
+function slashDetail(item: SlashItem): string {
+  if (item.kind === "skill") return item.skill.description || item.skill.source;
+  return { clear: t("comp.cmd.clear"), compact: t("comp.cmd.compact"), usage: t("comp.usageHint") }[item.command];
+}
 
 function permissionModes(fullAccessAllowed: boolean): { mode: PermissionMode; label: string; title: string }[] {
   return [
@@ -59,9 +67,16 @@ function permissionModes(fullAccessAllowed: boolean): { mode: PermissionMode; la
 
 export function Composer(props: ComposerProps) {
   const { completion, prompt, setPrompt, skills, messageSkills, setMessageSkills, active, sessionRunning, busy, routing, liveNote, chatError, unavailableWarning, onOpenWorkspaceSettings, mode, setMode, agent, cwd, shownCwd, canSend, choiceOptions, send, stopActive, openModal, openViewer } = props;
-  const { slash, setSlash, setSkillIndex, fileCompletion, setFileCompletion, fileSuggestions, setFileSuggestions, fileIndex, setFileIndex, composerInput, historyIndex, historyDraft, lastEscape, filteredSkills, highlightedSkill } = completion;
+  const { slash, setSlash, setSkillIndex, fileCompletion, setFileCompletion, fileSuggestions, setFileSuggestions, fileIndex, setFileIndex, composerInput, historyIndex, historyDraft, lastEscape, slashItems, highlightedSkill } = completion;
   const { attachments, attachFiles, removeAttachment, pasteImage, fileInput, dragging } = props.attachments;
   const skillName = (id: string) => props.availableSkills.find((skill) => skill.id === id)?.name ?? id;
+  const chooseSlashItem = (item: SlashItem) => {
+    if (item.kind === "skill") return attachSkill(item.skill);
+    if (!slash) return;
+    setPrompt(prompt.slice(0, slash.start) + prompt.slice(slash.end));
+    setSlash(undefined);
+    props.runCommand(item.command);
+  };
   const attachSkill = (skill: Skill) => {
     if (!slash || messageSkills.length >= 20 || new Set([...skills, ...messageSkills, skill.id]).size > 20) return;
     const insertion = `/${skill.name} `;
@@ -97,16 +112,18 @@ export function Composer(props: ComposerProps) {
     <div className={`composer${dragging ? " drop-target" : ""}`}>
       {slash && (
         <ComposerPopover anchor={composerInput}>
-          {(!slash.query || "usage".startsWith(slash.query.toLowerCase())) && <button type="button" role="option" aria-selected={false} onPointerDown={(event) => event.preventDefault()} onClick={() => { openModal("usage"); setPrompt(prompt.slice(0, slash.start) + prompt.slice(slash.end)); setSlash(undefined); }}><strong>/usage</strong><small>{t("comp.usageHint")}</small></button>}
-          <div className="slash-heading">{t("comp.skillHeading")}</div>
-          {filteredSkills.length ? filteredSkills.map((skill, index) => (
-            <button type="button" role="option" id={`slash-skill-${index}`} aria-selected={highlightedSkill === index}
-              disabled={new Set([...skills, ...messageSkills, skill.id]).size > 20}
-              className={highlightedSkill === index ? "highlighted" : ""} key={skill.id}
-              onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onClick={() => attachSkill(skill)}>
-              <strong>{skill.name}</strong><small>{skill.description || skill.source}</small>
-            </button>
-          )) : <p role="status">{t("comp.noSkillMatch")}</p>}
+          <div className="slash-list">
+            {slashItems.length ? slashItems.map((item, index) => {
+              const full = item.kind === "skill" && new Set([...skills, ...messageSkills, item.skill.id]).size > 20;
+              return <button type="button" role="option" id={`slash-skill-${index}`} aria-selected={highlightedSkill === index} disabled={full}
+                className={`slash-row${highlightedSkill === index ? " highlighted" : ""}`} key={item.kind === "command" ? `cmd-${item.command}` : item.skill.id}
+                onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => completion.setSkillIndex(index)} onClick={() => chooseSlashItem(item)}>
+                <strong>{item.kind === "command" ? `/${item.command}` : item.skill.name}</strong>
+                <span className="slash-kind">{item.kind === "command" ? t("comp.cmd.kind") : item.skill.source}</span>
+              </button>;
+            }) : <p role="status">{t("comp.noSkillMatch")}</p>}
+          </div>
+          {slashItems[highlightedSkill] && <div className="slash-detail" aria-live="polite">{slashDetail(slashItems[highlightedSkill])}</div>}
           {new Set([...skills, ...messageSkills]).size >= 20 && <p role="status">{t("comp.skillLimit")}</p>}
         </ComposerPopover>
       )}
@@ -161,7 +178,7 @@ export function Composer(props: ComposerProps) {
         aria-expanded={Boolean(slash || fileCompletion)}
         aria-autocomplete="list"
         onBlur={() => { setSlash(undefined); setFileCompletion(undefined); }}
-        aria-activedescendant={slash && filteredSkills.length ? `slash-skill-${highlightedSkill}` : fileCompletion && fileSuggestions.length ? `file-suggestion-${fileIndex}` : undefined}
+        aria-activedescendant={slash && slashItems.length ? `slash-skill-${highlightedSkill}` : fileCompletion && fileSuggestions.length ? `file-suggestion-${fileIndex}` : undefined}
         aria-label={t("comp.inputLabel")}
         title={t("comp.inputTitle")}
         placeholder={sessionRunning ? t("comp.placeholderRunning") : !active && mode === "auto" ? t("comp.placeholderAuto") : t("comp.placeholderAgent", { agent: active ? names[active.agent] : names[agent] })}
@@ -192,8 +209,8 @@ export function Composer(props: ComposerProps) {
           if (slash && handlesCompletionKey(e.key, e.shiftKey)) {
             e.preventDefault();
             if (e.key === "Escape") setSlash(undefined);
-            else if (e.key === "Enter" || e.key === "Tab") { if (isUsageCommand(prompt)) { void send(); } else if (filteredSkills[highlightedSkill]) attachSkill(filteredSkills[highlightedSkill]); }
-            else setSkillIndex((highlightedSkill + (e.key === "ArrowDown" ? 1 : -1) + filteredSkills.length) % Math.max(1, filteredSkills.length));
+            else if (e.key === "Enter" || e.key === "Tab") { if (slashItems[highlightedSkill]) chooseSlashItem(slashItems[highlightedSkill]); }
+            else setSkillIndex((highlightedSkill + (e.key === "ArrowDown" ? 1 : -1) + slashItems.length) % Math.max(1, slashItems.length));
             return;
           }
           if (sessionRunning && (e.key === "Escape" || (e.key.toLowerCase() === "c" && e.ctrlKey && e.currentTarget.selectionStart === e.currentTarget.selectionEnd))) {
@@ -281,7 +298,7 @@ export function Composer(props: ComposerProps) {
           className="send-button"
           title={action === "stop" ? t("comp.stopTitle") : t("comp.sendTitle")}
           aria-label={action === "stop" ? t("comp.stop") : routing ? t("comp.routing") : t("comp.send")}
-          disabled={action === "stop" ? busy : !canSend && !isUsageCommand(prompt)}
+          disabled={action === "stop" ? busy : !canSend && !slashCommandOf(prompt)}
           onClick={action === "stop" ? stopActive : () => void send()}
         >
           {action === "stop" ? (

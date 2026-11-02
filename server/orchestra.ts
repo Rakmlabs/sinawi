@@ -1097,6 +1097,18 @@ export class Orchestra {
     return summary.length > 4_000 ? `…${summary.slice(-3_999)}` : summary || "이전 대화 내용이 없습니다.";
   }
 
+  /** "/compact", like Claude Code's: the next turn starts fresh CLI sessions that get a summary instead of the full history. */
+  compact(id: string): Session {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    if (session.status === "running") throw new Error("작업 중에는 압축할 수 없습니다. 끝난 뒤 다시 시도하세요.");
+    session.handoffContext = this.conversationSummary(session, session.agent);
+    delete session.cliSessionId;
+    delete session.workerSessionIds;
+    this.event(session, session.agent, "status", "대화를 압축했습니다. 다음 메시지부터 요약을 이어받은 새 CLI 세션으로 시작합니다.");
+    return session;
+  }
+
   /** Replaces the session's worktree list (after a worktree was removed from the UI). */
   setWorktrees(id: string, worktrees: NonNullable<Session["worktrees"]>): Session {
     const session = this.sessions.get(id);

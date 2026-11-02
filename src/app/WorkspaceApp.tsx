@@ -6,7 +6,7 @@ import { isNetworkFailure, teamAvailabilityWarning } from "../team";
 import { normalizeWorkerConfigs } from "../../server/workers";
 import { WorkspaceAgentPolicy, RecommendationCard } from "../RoutingControls";
 import type { RoutingSettings, RoutingRecommendation } from "../../server/routing";
-import { historyEntries, numberedOptions, recentPaths, isUsageCommand } from "../composer";
+import { historyEntries, numberedOptions, recentPaths, isUsageCommand, slashCommandOf, type SlashCommand } from "../composer";
 import { allowedAgentsForWorkspace } from "../../server/workspace-policy";
 import { submitSession } from "../submit";
 import { WorkerThread } from "../WorkerThread";
@@ -453,9 +453,19 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       setChatError(error instanceof Error ? error.message : String(error));
     });
   };
+  const runCommand = (command: SlashCommand) => {
+    setChatError("");
+    if (command === "usage") { setTab("usage"); return; }
+    if (command === "clear") { newSession(); return; }
+    // "/compact": the next turn starts fresh CLI sessions from a summary of this one.
+    if (!active) { setChatError(t("comp.cmd.compactNoSession")); return; }
+    if (active.status === "running") { setChatError(t("comp.cmd.compactRunning")); return; }
+    void api<Session>(`/sessions/${active.id}/compact`, {}).then(adoptSession).catch((error) => setChatError(error instanceof Error ? error.message : String(error)));
+  };
   const send = (executeRecommendation = false, message = prompt, permissionOverride?: PermissionMode) => {
     const sendMode = permissionOverride ?? shownPermissionMode;
-    if (isUsageCommand(message)) { setTab("usage"); setPrompt(""); setSlash(undefined); return Promise.resolve(); }
+    const command = slashCommandOf(message);
+    if (command) { setPrompt(""); setSlash(undefined); runCommand(command); return Promise.resolve(); }
     if (active?.status === "running") return sendWhileRunning(message);
     if ((!message.trim() && !attachments.length) || !canSendBase || !attachmentsReady || sending.current) return Promise.resolve();
     sending.current = true;
@@ -781,7 +791,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning} onOpenWorkspaceSettings={openWorkspaceSettings}
                     mode={mode} setMode={setMode} permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed}
                     setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
-                    send={send} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
+                    send={send} runCommand={runCommand} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
                       manual={{ agent, model, reasoningEffort, workers, workerConfigs }} availableAgents={teamAgents}
                       quotaFallback={quotaFallback} quotaThreshold={quotaThreshold} routingSettings={routingSettings} busy={busy}
