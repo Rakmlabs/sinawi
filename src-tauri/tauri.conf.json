@@ -53,7 +53,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDAxNzU0NEE4QjZGQzJEODMKUldTRExmeTJxRVIxQVhqWG00b2NobjhIcTlsdEdYanM2bHRFOEZCQW1hOGpueDErV2gzL3ZvSDIK",
       "endpoints": [
-        "https://github.com/OWNER/sinawi/releases/latest/download/latest.json"
+        "https://github.com/Rakmlabs/sinawi/releases/latest/download/latest.json"
       ],
       "requireSignedVersion": true
     }
