@@ -65,33 +65,48 @@ export function composerLocked(running: boolean, busy: boolean): boolean {
   return busy && !running;
 }
 
+/**
+ * Reply buttons for a message that asks the user to pick: the numbered list must close the message
+ * and a question must introduce or follow it. Reports also end in numbered lists (evidence, findings);
+ * without the question those stay plain text instead of turning into a choice the model never offered.
+ */
 export function numberedOptions(text: string): string[] {
+  type Block = { options: string[]; before: string; end: number };
+  const lines = text.split("\n");
   let current: Array<{ number: number; text: string }> = [];
-  let latest: string[] = [];
+  let currentBefore = "";
+  let lastText = "";
+  let latest: Block | undefined;
   let fenced = false;
-  const finishBlock = () => {
+  const finishBlock = (end: number) => {
     if (current.length >= 2 && current.every((option, index) => option.number === index + 1)) {
-      latest = current.map((option) => option.text);
+      latest = { options: current.map((option) => option.text), before: currentBefore, end };
     }
     current = [];
   };
-  for (const line of text.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) { finishBlock(); fenced = !fenced; continue; }
-    if (fenced || !line.trim()) continue;
+  lines.forEach((line, index) => {
+    if (/^\s*(```|~~~)/.test(line)) { finishBlock(index); fenced = !fenced; lastText = line; return; }
+    if (fenced || !line.trim()) return;
     const match = /^\s*([1-9])[.)]\s+(.+?)\s*$/.exec(line);
-    if (!match) { finishBlock(); continue; }
+    if (!match) { finishBlock(index); lastText = line; return; }
     const option = { number: Number(match[1]), text: match[2] };
     if (option.number === 1) {
-      finishBlock();
+      finishBlock(index);
       current = [option];
+      currentBefore = lastText;
     } else if (current.length && option.number === current.at(-1)!.number + 1) {
       current.push(option);
     } else {
       current = [];
     }
-  }
-  finishBlock();
-  return latest;
+    lastText = line;
+  });
+  finishBlock(lines.length);
+  if (!latest) return [];
+  const after = lines.slice(latest.end).join("\n").trim();
+  const asks = (value: string) => /[?？]\W*$/u.test(value.trim());
+  if (after ? !asks(after) || after.split("\n").length > 2 : !asks(latest.before)) return [];
+  return latest.options;
 }
 
 export function handlesCompletionKey(key: string, shiftKey: boolean): boolean {

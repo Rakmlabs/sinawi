@@ -20,13 +20,21 @@ test("file suggestions follow the active at token", () => {
 });
 
 test("ordered choices parse from assistant markdown without consuming ordinary lists", () => {
-  assert.deepEqual(numberedOptions("Choose:\n1. Fast path\n2) Safer path\n3. Custom path"), ["Fast path", "Safer path", "Custom path"]);
+  assert.deepEqual(numberedOptions("Which way?\n1. Fast path\n2) Safer path\n3. Custom path"), ["Fast path", "Safer path", "Custom path"]);
   assert.deepEqual(numberedOptions("1. only one item"), []);
   assert.deepEqual(numberedOptions("10. outside keyboard range\n11. another"), []);
   assert.deepEqual(numberedOptions("1. First\n3. Third"), []);
   assert.deepEqual(numberedOptions("```text\n1. example\n2. example\n```"), []);
-  assert.deepEqual(numberedOptions("Steps:\n1. Open settings\n2. Save changes\n\nChoose:\n1. Fast path\n2. Safe path"), ["Fast path", "Safe path"]);
-  assert.deepEqual(numberedOptions("1. First choice\n2. Second choice\n\nLater note without options"), ["First choice", "Second choice"]);
+  assert.deepEqual(numberedOptions("Steps:\n1. Open settings\n2. Save changes\n\nWhich one?\n1. Fast path\n2. Safe path"), ["Fast path", "Safe path"]);
+  assert.deepEqual(numberedOptions("1. First choice\n2. Second choice\n\nWhich should I do?"), ["First choice", "Second choice"]);
+  assert.deepEqual(numberedOptions("Which one?\n1. First choice\n2. Second choice\n\nLater note without options"), [], "a list followed by more report is not the last word");
+});
+
+test("a report ending in a numbered evidence list offers no reply buttons", () => {
+  const report = "상태: 완료 — 시뮬레이터에 로그인 화면이 떠 있습니다.\n\n증거:\n1. 서버 로그에 `VITE ready`가 찍혔습니다.\n2. 시뮬레이터가 Booted입니다.\n3. 캡처에 로그인 버튼이 보입니다.";
+  assert.deepEqual(numberedOptions(report), []);
+  assert.deepEqual(numberedOptions("발견:\n1. A 버그\n2. B 회귀"), []);
+  assert.deepEqual(numberedOptions("어느 쪽으로 고칠까요?\n\n1. **A안** 서버에서 막기\n2. **B안** UI에서 막기"), ["**A안** 서버에서 막기", "**B안** UI에서 막기"]);
 });
 
 test("completion navigation leaves Shift+Enter available for a newline", () => {
@@ -80,7 +88,7 @@ test("usage command is exact and does not consume ordinary prompts or skills", a
 });
 
 test("numbered choices support Markdown lists separated by blank lines", () => {
-  assert.deepEqual(numberedOptions("선택하세요:\n1. 빠르게 진행\n\n2. 검토 후 진행\n\n3) 직접 지정"), ["빠르게 진행", "검토 후 진행", "직접 지정"]);
+  assert.deepEqual(numberedOptions("어떻게 진행할까요?\n1. 빠르게 진행\n\n2. 검토 후 진행\n\n3) 직접 지정"), ["빠르게 진행", "검토 후 진행", "직접 지정"]);
 });
 
 test("slash menu: name matches rank first, plugin skills match their last segment, commands are built in", async () => {
