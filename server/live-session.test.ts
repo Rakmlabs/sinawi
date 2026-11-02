@@ -63,12 +63,13 @@ test("a running session answers status from the log and delivers a directive on 
   assert.match(session.events.find((event) => event.metadata?.live === "directive")?.text ?? "", /B의 다음 턴/);
   assert.equal(session.pendingInstructions?.some((item) => item.targetWorkerId === "claude-2"), true);
 
-  await orchestra.liveTurn(session.id, "옆 문서를 먼저");
-  const ambiguous = session.events.find((event) => event.metadata?.ambiguous);
-  assert.equal(ambiguous?.metadata?.live, "status");
-  await orchestra.promoteLive(session.id, ambiguous!.id);
-  assert.equal(ambiguous?.metadata?.promoted, true);
-  assert.equal(session.pendingInstructions?.some((item) => item.text === "옆 문서를 먼저" && !item.targetWorkerId), true);
+  const beforeUnclear = calls.length;
+  for (const instruction of ["옆 문서를 먼저", "추가로 모든 함수에 JSDoc 주석도 달아줘."]) {
+    await orchestra.liveTurn(session.id, instruction);
+    assert.equal(session.pendingInstructions?.some((item) => item.text === instruction && !item.targetWorkerId), true, `${instruction} reaches the lead`);
+  }
+  assert.equal(calls.length, beforeUnclear, "an unclear message is queued, not answered by a status run");
+  assert.equal(session.events.some((event) => event.metadata?.ambiguous), false);
 
   releaseWorker();
   await waitFor(() => session.status !== "running");
@@ -149,9 +150,9 @@ test("promoting a live answer republishes a full snapshot so clients see the pro
   const orchestra = new Orchestra((_session, options) => { publishes.push(Boolean(options?.full)); }, runner);
   const session = await orchestra.create({ prompt: "조사", agent: "codex", workers: ["claude"], cwd: process.cwd() });
   await waitFor(() => callsWaiting(session));
-  await orchestra.liveTurn(session.id, "중지하지 마");
-  const answer = session.events.find((event) => event.metadata?.live === "status" && event.metadata.ambiguous);
-  assert.ok(answer);
+  // Answers saved by older versions can still carry the promote button.
+  const answer = { id: "old-answer", sessionId: session.id, agent: "grok" as const, type: "message" as const, text: "상태", time: new Date().toISOString(), metadata: { live: "status" as const, ambiguous: true, prompt: "중지하지 마" } };
+  session.events.push(answer);
   assert.equal(publishes.includes(true), false);
   orchestra.promoteLive(session.id, answer.id);
   assert.equal(publishes.at(-1), true);

@@ -606,14 +606,16 @@ export class Orchestra {
     if (session.status !== "running") return this.followup(id, prompt);
     const classified = classifyLiveMessage(prompt, this.liveWorkers(session));
     if (classified.intent === "stop") return this.stop(id);
-    if (classified.intent === "directive") {
+    // Like Claude Code and Codex, anything that is not plainly a status question reaches the agent:
+    // a dropped instruction costs far more than a question answered at the next turn.
+    if (classified.intent === "directive" || classified.intent === "ambiguous") {
       this.event(session, "user", "message", prompt);
       this.enqueueInstruction(session, prompt, classified.targetWorkerId);
       return session;
     }
     // The status answer is a Grok CLI run, so it obeys the same workspace policy as every other run.
     this.assertPolicy(session.workspaceId, ["grok"]);
-    const ambiguous = classified.intent === "ambiguous";
+    const ambiguous = false;
     const digest = statusDigest(session);
     this.event(session, "user", "message", prompt);
     const controller = new AbortController();
