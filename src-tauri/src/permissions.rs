@@ -101,6 +101,20 @@ mod mac {
     pub fn request_notifications() -> State { State::Unknown }
 }
 
+/// Called when computer use finds a permission missing: asks once per app run, off the calling
+/// thread, so the app is added to the System Settings list and the user only has to switch it on.
+pub fn register_missing(kind: &'static str) {
+    use std::sync::{Mutex, OnceLock};
+    static ASKED: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
+    let mut asked = ASKED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if asked.contains(&kind) { return; }
+    asked.push(kind);
+    std::thread::spawn(move || {
+        let result = match kind { "screen" => mac::request_screen(), _ => mac::request_accessibility() };
+        log(&format!("register_missing({kind}) -> {result:?}"));
+    });
+}
+
 /// Async so the blocking waits never run on the main (UI) thread.
 #[tauri::command]
 pub async fn permission_status() -> Status {

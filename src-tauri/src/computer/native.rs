@@ -90,11 +90,13 @@ pub fn accessibility_granted() -> bool { unsafe { AXIsProcessTrusted() } }
 
 pub fn require_screen() -> Result<(), String> {
     if screen_granted() { return Ok(()); }
-    Err(format!("화면 기록 권한이 없습니다. 시스템 설정 › 개인정보 보호 및 보안 › 화면 및 시스템 오디오 기록에서 Sinawi를 켠 뒤 앱을 다시 여세요. ({SCREEN_PANE})"))
+    crate::permissions::register_missing("screen");
+    Err(format!("화면 기록 권한이 없습니다. 시스템 설정 › 개인정보 보호 및 보안 › 화면 및 시스템 오디오 기록에 Sinawi가 추가되어 있습니다. 켠 뒤 앱을 다시 여세요. ({SCREEN_PANE})"))
 }
 pub fn require_accessibility() -> Result<(), String> {
     if accessibility_granted() { return Ok(()); }
-    Err(format!("손쉬운 사용 권한이 없습니다. 시스템 설정 › 개인정보 보호 및 보안 › 손쉬운 사용에서 Sinawi를 켜세요. ({ACCESSIBILITY_PANE})"))
+    crate::permissions::register_missing("accessibility");
+    Err(format!("손쉬운 사용 권한이 없습니다. 시스템 설정 › 개인정보 보호 및 보안 › 손쉬운 사용에 Sinawi가 추가되어 있습니다. 켜세요. ({ACCESSIBILITY_PANE})"))
 }
 
 // ---------- displays ----------
