@@ -713,6 +713,7 @@ export class Orchestra {
       lockedMcp: lockedToolsFor(policy, agent),
       // Review/planning runs are read-only but must still be able to read files to verify (see readTools).
       agent, prompt, cwd, model, reasoningEffort, readOnly, readTools: readOnly, resumeSessionId, signal: runSignal,
+      ...(policy?.fullAccess ? { fullAccess: true } : {}),
       ...(extraDirs?.length ? { extraDirs } : {}),
       usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role, dataDir: this.usageDataDir },
       onActivity: () => this.heartbeat(session, signal, guard && !guard.stall ? guard.detector : undefined),

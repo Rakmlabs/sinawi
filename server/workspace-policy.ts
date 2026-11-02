@@ -29,6 +29,7 @@ export const blockedToolMessage = (name: string) => `이 작업 공간 설정에
 /** A fresh workspace: every agent, media generation and tool allowed. */
 export function defaultWorkspacePolicy(): WorkspacePolicy {
   // Computer control is the one opt-in: it reaches outside the project, so it starts off.
+  // Full access (no approval prompts) is opt-in for the same reason; absent means off.
   return { mediaGeneration: true, computerUse: false, grokMcp: true, blockedTools: [], authAlertTools: [] };
 }
 
@@ -73,11 +74,11 @@ export function normalizeWorkspacePolicy(value: unknown, strict = false, base: W
     return structuredClone(base);
   }
   const input = value as Record<string, unknown>;
-  const flag = (key: "mediaGeneration" | "computerUse" | "grokMcp", label: string): boolean => {
-    if (input[key] == null) return base[key];
+  const flag = (key: "mediaGeneration" | "computerUse" | "grokMcp" | "fullAccess", label: string): boolean => {
+    if (input[key] == null) return base[key] ?? false;
     if (typeof input[key] === "boolean") return input[key] as boolean;
     if (strict) throw new WorkspacePolicyInputError(`${label} 설정이 올바르지 않습니다.`);
-    return base[key];
+    return base[key] ?? false;
   };
   let mediaPrompt = base.mediaPrompt;
   if (input.mediaPrompt !== undefined) {
@@ -89,6 +90,7 @@ export function normalizeWorkspacePolicy(value: unknown, strict = false, base: W
     mediaGeneration: flag("mediaGeneration", "이미지·영상 생성"),
     computerUse: flag("computerUse", "컴퓨터 조작"),
     grokMcp: flag("grokMcp", "Grok MCP 도구"),
+    ...(flag("fullAccess", "전체 권한") ? { fullAccess: true } : {}),
     blockedTools: input.blockedTools === undefined ? [...base.blockedTools] : toolList(input.blockedTools, strict, "차단 도구"),
     authAlertTools: input.authAlertTools === undefined ? [...base.authAlertTools] : toolList(input.authAlertTools, strict, "인증 알림 도구"),
     ...(mediaPrompt ? { mediaPrompt } : {}),

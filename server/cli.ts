@@ -31,6 +31,8 @@ export interface RunCliOptions {
    * finished work it cannot inspect (Grok), so the run never ends with an answer.
    */
   readTools?: boolean;
+  /** No approval prompts for this run (the workspace's opt-in "full access"); ignored when read-only. */
+  fullAccess?: boolean;
   resumeSessionId?: string;
   blockedMcp?: string[];
   /** MCP servers the workspace locks off; Grok also gets them disabled in the project config. */
@@ -91,9 +93,10 @@ export const grokHeadlessRules = [
 
 export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine" | "exitGraceMs" | "onActivity">): CliInvocation {
   const { agent, prompt, cwd, model, reasoningEffort, readOnly, readTools, resumeSessionId, blockedMcp } = options;
+  const full = Boolean(options.fullAccess && !readOnly);
   const extraDirs = [...new Set(options.extraDirs ?? [])].filter((dir) => dir && dir !== cwd);
   if (agent === "codex") {
-    const args = ["exec", "--json", "--sandbox", readOnly ? "read-only" : "workspace-write", "-C", cwd, "--skip-git-repo-check"];
+    const args = ["exec", "--json", ...(full ? ["--dangerously-bypass-approvals-and-sandbox"] : ["--sandbox", readOnly ? "read-only" : "workspace-write"]), "-C", cwd, "--skip-git-repo-check"];
     for (const pattern of blockedMcp ?? []) {
       const name = pattern.match(/^mcp__(.+)__\*$/)?.[1];
       if (name) args.push("-c", `mcp_servers.${JSON.stringify(name)}.enabled=false`);
@@ -113,8 +116,9 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     if (reasoningEffort) args.push("--effort", reasoningEffort);
     if (readOnly && readTools) args.push("--tools", ...CLAUDE_READ_TOOLS, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan", "--allowedTools", ...CLAUDE_READ_ONLY_BASH_RULES, "--disallowedTools", ...CLAUDE_READ_ONLY_BASH_DENY);
     else if (readOnly) args.push("--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan");
+    else if (full) args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", "acceptEdits", "--allowedTools", ...developmentBashRules);
-    if (!readOnly && options.claudeSettings && supports("--settings")) args.push("--settings", options.claudeSettings);
+    if (!readOnly && !full && options.claudeSettings && supports("--settings")) args.push("--settings", options.claudeSettings);
     for (const dir of extraDirs) args.push("--add-dir", dir);
     for (const pattern of new Set(blockedMcp ?? [])) args.push("--disallowedTools", pattern);
     if (resumeSessionId) args.push("--resume", resumeSessionId);
@@ -127,6 +131,7 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
   // absolute paths, so the worktree paths in the review note are enough.
   if (readOnly && readTools) args.push("--tools", GROK_READ_TOOLS, "--permission-mode", "plan", "--disable-web-search");
   else if (readOnly) args.push("--tools", "", "--deny", "*", "--disable-web-search");
+  else if (full) args.push("--permission-mode", "bypassPermissions", "--always-approve");
   else {
     // Headless Grok cancels the whole run when a command isn't pre-allowed (e.g. `cd x && ffprobe`);
     // "auto" lets its safety classifier approve routine commands while deny rules still apply.
@@ -183,7 +188,7 @@ export async function prepareCliInvocation(
     if (flags) options = { ...options, claudeFlags: flags };
   }
   // Writable Claude runs get the Bash pre-approval hook, bounded to their own folder (see claude-bash-hook.ts).
-  if (options.agent === "claude" && !options.readOnly && !options.claudeSettings && options.usageContext?.dataDir) {
+  if (options.agent === "claude" && !options.readOnly && !options.fullAccess && !options.claudeSettings && options.usageContext?.dataDir) {
     const script = await ensureBashHookScript(options.usageContext.dataDir).catch(() => undefined);
     if (script) options = { ...options, claudeSettings: bashHookSettings(script, options.cwd) };
   }

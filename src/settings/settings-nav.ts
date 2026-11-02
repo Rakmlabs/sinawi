@@ -73,6 +73,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "workspaces", category: "workspaces", section: "wsset.title", label: "wsset.title", description: "set.ws.desc", keywords: "workspace 작업 공간 F1 F2" },
   { id: "ws-media", category: "workspaces", section: "wsset.rules", label: "wsset.media", description: "wsset.mediaHint", keywords: "image video media 이미지 영상" },
   { id: "ws-computer", category: "workspaces", section: "wsset.rules", label: "wsset.computerUse", description: "wsset.computerUseHint", keywords: "computer use 컴퓨터 조작" },
+  { id: "ws-full-access", category: "workspaces", section: "wsset.rules", label: "wsset.fullAccess", description: "wsset.fullAccessHint", keywords: "full access permission approval 전체 권한 승인 허용 bypass" },
   { id: "ws-grok-mcp", category: "workspaces", section: "wsset.rules", label: "wsset.grokMcp", description: "wsset.grokMcpHint", keywords: "grok mcp" },
   { id: "ws-blocked", category: "workspaces", section: "wsset.rules", label: "wsset.blockedTools", description: "wsset.blockedToolsHint", keywords: "block tool mcp 차단 도구" },
   { id: "ws-alerts", category: "workspaces", section: "wsset.rules", label: "wsset.alertTools", description: "wsset.alertToolsHint", keywords: "auth alert 인증 알림" },

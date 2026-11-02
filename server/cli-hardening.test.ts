@@ -128,3 +128,31 @@ test("the review prompt tells the reviewer to read test evidence, not run tests"
   assert.match(prompt, /테스트·빌드·스크립트는 직접 실행하지 마세요/);
   assert.match(prompt, /<<DELEGATE>>로 워커에게 맡기세요/);
 });
+
+test("workspace full access runs every CLI without approval prompts, but never a read-only run", async () => {
+  const { buildInvocation } = await import("./cli.js");
+  const { defaultWorkspacePolicy, normalizeWorkspacePolicy } = await import("./workspace-policy.js");
+  assert.ok(!defaultWorkspacePolicy().fullAccess, "opt-in");
+  assert.ok(!normalizeWorkspacePolicy({ mediaGeneration: true }).fullAccess, "stored policies without the field stay off");
+  assert.ok(!normalizeWorkspacePolicy({ fullAccess: false }, true, { ...defaultWorkspacePolicy(), fullAccess: true }).fullAccess, "can be turned off again");
+  assert.equal(normalizeWorkspacePolicy({ fullAccess: true }, true).fullAccess, true);
+
+  const base = { prompt: "p", cwd: "/work", blockedMcp: ["mcp__x__*"] };
+  const claude = buildInvocation({ ...base, agent: "claude", fullAccess: true }).args;
+  assert.ok(claude.includes("--dangerously-skip-permissions"));
+  assert.ok(!claude.includes("acceptEdits"));
+  assert.ok(claude.includes("mcp__x__*"), "blocked tools stay blocked");
+  const codex = buildInvocation({ ...base, agent: "codex", fullAccess: true }).args;
+  assert.ok(codex.includes("--dangerously-bypass-approvals-and-sandbox"));
+  assert.ok(!codex.includes("--sandbox"));
+  const grok = buildInvocation({ ...base, agent: "grok", fullAccess: true }).args;
+  assert.deepEqual(grok.slice(grok.indexOf("--permission-mode"), grok.indexOf("--permission-mode") + 3), ["--permission-mode", "bypassPermissions", "--always-approve"]);
+  assert.ok(grok.includes("mcp__x__*"));
+
+  for (const agent of ["claude", "codex", "grok"] as const) {
+    const review = buildInvocation({ ...base, agent, fullAccess: true, readOnly: true, readTools: true }).args.join(" ");
+    assert.doesNotMatch(review, /dangerously|bypassPermissions|always-approve/, agent);
+    const normal = buildInvocation({ ...base, agent }).args.join(" ");
+    assert.doesNotMatch(normal, /dangerously|bypassPermissions|always-approve/, agent);
+  }
+});

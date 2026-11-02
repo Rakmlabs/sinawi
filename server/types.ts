@@ -160,6 +160,13 @@ export interface WorkspacePolicy {
   mediaGeneration: boolean;
   /** Agents may see the screen and use mouse/keyboard through Sinawi (needs macOS Screen Recording and Accessibility). */
   computerUse: boolean;
+  /**
+   * Opt-in, set by the user: agents run without approval prompts (Claude
+   * --dangerously-skip-permissions, Codex without sandbox, Grok bypassPermissions), like an
+   * interactive CLI session where every prompt is accepted. Blocked tools stay blocked.
+   * Read-only review runs are not affected.
+   */
+  fullAccess?: boolean;
   /** Grok may call MCP tools at all. Off adds a blanket MCP deny to every Grok run. */
   grokMcp: boolean;
   /**
