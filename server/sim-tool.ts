@@ -14,7 +14,7 @@ import { watchRequestQueue, type ServeOut } from "./serve-tool.js";
  * no Simulator window, Screen Recording or Accessibility grant is needed and the user's mouse is
  * never moved. The simulator is a sandboxed device, so this is not gated like computer use.
  */
-export const SIM_OPS = ["devices", "screenshot", "launch", "terminate", "openurl", "tap", "swipe", "type", "button", "ui"] as const;
+export const SIM_OPS = ["devices", "screenshot", "launch", "terminate", "openurl", "tap", "swipe", "type", "ui"] as const;
 type SimOp = (typeof SIM_OPS)[number];
 
 export type Exec = (file: string, args: string[], timeoutMs: number) => Promise<{ code: number; stdout: string; stderr: string }>;
@@ -100,20 +100,82 @@ export async function handleSim(op: string, body: Record<string, unknown>, optio
       }
       case "terminate": return simctl(["terminate", device.udid, String(body.bundle ?? "")]);
       case "openurl": return simctl(["openurl", device.udid, String(body.url ?? "")]);
+      // AXe's own `tap`/`swipe`/`button` report success without reaching the app on some
+      // Xcode/runtime pairs (seen on Xcode 27 + iOS 18.6); a held touch and a drag of explicit
+      // touch-move events always land, so labels are resolved here and touched by point.
       case "tap": {
-        if (typeof body.label === "string" && body.label) return axe(exec, ["tap", "--label", body.label], device.udid);
-        if (typeof body.id === "string" && body.id) return axe(exec, ["tap", "--id", body.id], device.udid);
-        return axe(exec, ["tap", "-x", num(body.x, "x"), "-y", num(body.y, "y")], device.udid);
+        let x = body.x, y = body.y;
+        const target = typeof body.label === "string" && body.label ? { label: body.label } : typeof body.id === "string" && body.id ? { id: body.id } : undefined;
+        if (target) {
+          const tree = await axe(exec, ["describe-ui"], device.udid);
+          if (!tree.ok) return tree;
+          const found = findElement(String(tree.result), target);
+          if ("error" in found) return { ok: false, error: found.error };
+          ({ x, y } = found);
+        }
+        const out = await axe(exec, ["touch", "-x", num(x, "x"), "-y", num(y, "y"), "--down", "--up", "--delay", "0.1"], device.udid);
+        return out.ok ? { ok: true, result: `(${num(x, "x")}, ${num(y, "y")}) 탭. 결과는 ao-sim screenshot이나 ui로 확인하세요.` } : out;
       }
-      case "swipe": return axe(exec, ["swipe", "--start-x", num(body.x1, "x1"), "--start-y", num(body.y1, "y1"), "--end-x", num(body.x2, "x2"), "--end-y", num(body.y2, "y2")], device.udid);
+      case "swipe": return axe(exec, ["drag", "--start-x", num(body.x1, "x1"), "--start-y", num(body.y1, "y1"), "--end-x", num(body.x2, "x2"), "--end-y", num(body.y2, "y2"), "--duration", "0.5"], device.udid);
       case "type": return axe(exec, ["type", String(body.text ?? "")], device.udid);
-      case "button": return axe(exec, ["button", String(body.name ?? "home")], device.udid);
-      case "ui": return axe(exec, ["describe-ui"], device.udid);
+      case "ui": {
+        const out = await axe(exec, ["describe-ui"], device.udid);
+        return out.ok && typeof out.result === "string" ? { ok: true, result: compactUi(out.result) } : out;
+      }
     }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
   return { ok: false, error: `알 수 없는 명령: ${op}` };
+}
+
+type UiNode = { role?: string; AXLabel?: string | null; AXValue?: string | null; AXUniqueId?: string | null; frame?: { x: number; y: number; width: number; height: number }; children?: UiNode[] };
+
+/**
+ * AXe's describe-ui is ~100KB of pretty JSON for one screen; an agent needs what it can see and
+ * where to tap. One line per labelled or input element, with the tap point in device points.
+ */
+export function compactUi(raw: string): string {
+  let roots: UiNode[];
+  try { roots = JSON.parse(raw) as UiNode[]; } catch { return raw; }
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  const walk = (node: UiNode) => {
+    const role = (node.role ?? "").replace(/^AX/u, "");
+    const label = node.AXLabel?.trim();
+    const value = node.AXValue?.trim();
+    const input = /TextField|TextArea|SearchField/u.test(role);
+    if ((label || value || input) && node.frame && role !== "Application") {
+      const { x, y, width, height } = node.frame;
+      const line = `${role}${label ? ` "${label}"` : ""}${value ? ` 값="${value.slice(0, 80)}"` : ""}${node.AXUniqueId ? ` id=${node.AXUniqueId}` : ""} 탭 ${Math.round(x + width / 2)} ${Math.round(y + height / 2)}`;
+      if (!seen.has(line)) { seen.add(line); lines.push(line); }
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  roots.forEach(walk);
+  const app = roots.find((node) => node.role === "AXApplication");
+  const size = app?.frame ? `화면 ${Math.round(app.frame.width)}×${Math.round(app.frame.height)}pt` : "";
+  return [`${app?.AXLabel ?? "앱"} ${size}`.trim(), ...(lines.length ? lines : ["(라벨 있는 요소 없음. ao-sim screenshot으로 보고 좌표로 탭하세요)"])].join("\n");
+}
+
+/** The tap point of the one element whose label (or accessibility id) matches exactly. */
+export function findElement(raw: string, target: { label?: string; id?: string }): { x: number; y: number } | { error: string } {
+  let roots: UiNode[];
+  try { roots = JSON.parse(raw) as UiNode[]; } catch { return { error: "화면 구조를 읽지 못했습니다. 좌표로 탭하세요." }; }
+  const points = new Map<string, { x: number; y: number }>();
+  const walk = (node: UiNode) => {
+    const hit = target.id ? node.AXUniqueId === target.id : node.AXLabel?.trim() === target.label?.trim();
+    if (hit && node.frame && node.role !== "AXApplication") {
+      const point = { x: Math.round(node.frame.x + node.frame.width / 2), y: Math.round(node.frame.y + node.frame.height / 2) };
+      points.set(`${point.x},${point.y}`, point);
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  roots.forEach(walk);
+  const what = target.id ? `id '${target.id}'` : `라벨 '${target.label}'`;
+  if (!points.size) return { error: `${what} 요소가 화면에 없습니다. ao-sim ui로 지금 화면의 라벨을 확인하세요.` };
+  if (points.size > 1) return { error: `${what} 요소가 ${points.size}개입니다: ${[...points.values()].map((p) => `(${p.x}, ${p.y})`).join(", ")}. 좌표로 탭하세요.` };
+  return [...points.values()][0];
 }
 
 export function registerSimRoutes(app: Express, options: Parameters<typeof handleSim>[2] = {}) {
@@ -166,7 +228,6 @@ export function parseSimArgv(argv: string[]): { op?: string; body: Record<string
       [body.x1, body.y1, body.x2, body.y2] = rest.slice(0, 4).map(Number);
       break;
     case "type": if (!rest.length) return { body: {}, error: "입력할 텍스트가 필요합니다" }; body.text = rest.join(" "); break;
-    case "button": body.name = rest[0] ?? "home"; break;
     default: return { body: {}, error: `알 수 없는 명령: ${op}` };
   }
   return { op, body };
@@ -181,7 +242,6 @@ const USAGE = `사용법: ao-sim <명령> [--device <이름|UDID>]   (iOS 시뮬
   tap <x> <y> | tap --label <텍스트>     탭 (좌표는 포인트)
   swipe <x1> <y1> <x2> <y2>              스와이프·스크롤
   type <텍스트>                          포커스된 입력칸에 입력 (비밀번호는 입력하지 않는다)
-  button home                            하드웨어 버튼
 예: ao-sim launch com.example.app --metro 8081 && ao-sim screenshot`;
 
 export const SIM_CLI_SOURCE = `#!/usr/bin/env node

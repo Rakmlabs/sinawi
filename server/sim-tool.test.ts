@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import express from "express";
 import { clearComputerTokens, issueComputerToken } from "./computer-tokens.js";
-import { AXE_MISSING, axeBinary, handleSim, metroUrl, parseSimArgv, registerSimRoutes, SIM_CLI_SOURCE, type Exec } from "./sim-tool.js";
+import { AXE_MISSING, axeBinary, compactUi, findElement, handleSim, metroUrl, parseSimArgv, registerSimRoutes, SIM_CLI_SOURCE, type Exec } from "./sim-tool.js";
 
 const BOOTED = JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-18-6": [{ udid: "UDID-1", name: "iPhone 16 Pro", state: "Booted" }], "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [{ udid: "UDID-2", name: "iPhone 15", state: "Shutdown" }] } });
 
@@ -43,10 +43,15 @@ test("screenshots land in the shot folder; touches go to AXe on the booted devic
     const shot = await handleSim("screenshot", { token }, { exec, shotDir: tmpdir(), now: () => 42 });
     assert.equal((shot.result as { path: string }).path, join(tmpdir(), "sim-42.png"));
     assert.deepEqual(calls.at(-1)?.[1], ["simctl", "io", "UDID-1", "screenshot", join(tmpdir(), "sim-42.png")]);
-    await handleSim("tap", { token, label: "휴대폰 번호로 로그인" }, { exec });
-    assert.deepEqual(calls.at(-1)?.[1], ["tap", "--label", "휴대폰 번호로 로그인", "--udid", "UDID-1"]);
     await handleSim("tap", { token, x: 120.4, y: 300 }, { exec });
-    assert.deepEqual(calls.at(-1)?.[1], ["tap", "-x", "120", "-y", "300", "--udid", "UDID-1"]);
+    assert.deepEqual(calls.at(-1)?.[1], ["touch", "-x", "120", "-y", "300", "--down", "--up", "--delay", "0.1", "--udid", "UDID-1"], "a held touch, not axe tap");
+    await handleSim("swipe", { token, x1: 200, y1: 700, x2: 200, y2: 200 }, { exec });
+    assert.equal(calls.at(-1)?.[1][0], "drag", "explicit touch moves, not axe swipe");
+    const tree = JSON.stringify([{ role: "AXApplication", frame: { x: 0, y: 0, width: 402, height: 874 }, children: [{ role: "AXButton", AXLabel: "휴대폰 번호로 로그인", frame: { x: 20, y: 576, width: 362, height: 52 } }] }]);
+    const byLabel = fakeExec((file, args) => (file.endsWith("axe") && args[0] === "describe-ui" ? { code: 0, stdout: tree } : undefined));
+    const tapped = await handleSim("tap", { token, label: "휴대폰 번호로 로그인" }, { exec: byLabel.exec });
+    assert.equal(tapped.ok, true, tapped.error);
+    assert.deepEqual(byLabel.calls.at(-1)?.[1].slice(0, 5), ["touch", "-x", "201", "-y", "602"]);
     assert.equal((await handleSim("tap", { token, x: "a", y: 1 }, { exec })).ok, false);
     const noAxe = fakeExec((file) => (file.endsWith("axe") ? { code: 127, stderr: "spawn axe ENOENT" } : undefined));
     assert.equal((await handleSim("ui", { token }, { exec: noAxe.exec })).error, AXE_MISSING);
@@ -98,4 +103,32 @@ test("the generated ao-sim script reaches the app with the run token", async () 
     clearComputerTokens();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("the screen tree comes back as one line per element with its tap point", () => {
+  const frame = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+  const tree = JSON.stringify([{ role: "AXApplication", AXLabel: "SIOT 회의실", frame: frame(0, 0, 402, 874), children: [
+    { role: "AXGroup", frame: frame(0, 0, 402, 874), children: [
+      { role: "AXButton", AXLabel: "휴대폰 번호로 로그인", frame: frame(20, 576.3, 362, 52) },
+      { role: "AXStaticText", AXLabel: "또는", frame: frame(189, 542, 23.6, 18.3) },
+      { role: "AXStaticText", AXLabel: "또는", frame: frame(189, 542, 23.6, 18.3) },
+      { role: "AXTextField", AXValue: "", AXUniqueId: "phone", frame: frame(20, 200, 362, 48) },
+    ] },
+  ] }]);
+  assert.equal(compactUi(tree), [
+    "SIOT 회의실 화면 402×874pt",
+    "Button \"휴대폰 번호로 로그인\" 탭 201 602",
+    "StaticText \"또는\" 탭 201 551",
+    "TextField id=phone 탭 201 224",
+  ].join("\n"));
+  assert.equal(compactUi("not json"), "not json");
+});
+
+test("a label taps only when exactly one element carries it", () => {
+  const node = (label: string, y: number, id?: string) => ({ role: "AXButton", AXLabel: label, AXUniqueId: id ?? null, frame: { x: 0, y, width: 100, height: 20 } });
+  const tree = JSON.stringify([{ role: "AXApplication", AXLabel: "정보", frame: { x: 0, y: 0, width: 402, height: 874 }, children: [node("정보", 100), node("정보", 300), node("다음", 500, "next"), node("다음", 500)] }]);
+  assert.match((findElement(tree, { label: "정보" }) as { error: string }).error, /2개입니다: \(50, 110\), \(50, 310\)/);
+  assert.deepEqual(findElement(tree, { label: "다음" }), { x: 50, y: 510 }, "the same element reported twice is one");
+  assert.deepEqual(findElement(tree, { id: "next" }), { x: 50, y: 510 });
+  assert.match((findElement(tree, { label: "없음" }) as { error: string }).error, /화면에 없습니다/);
 });
