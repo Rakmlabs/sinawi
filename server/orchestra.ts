@@ -14,7 +14,7 @@ import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
-import { classifyLiveMessage, instructionSuffix, pushInstruction, STATUS_AGENT_MODEL, statusDigest, statusPrompt, takePending, type LiveWorker } from "./live-turn.js";
+import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, STATUS_AGENT_MODEL, statusDigest, statusPrompt, takePending, type LiveWorker } from "./live-turn.js";
 
 const delegationPattern = /<<DELEGATE\s+to=["']([\w.-]{1,100})["']>>(.*?)<<\/DELEGATE>>/gis;
 const maxEvents = 2_000;
@@ -842,10 +842,13 @@ export class Orchestra {
     return `${originalPrompt}${delegatedTask}${conversation}\n\n한도 소진으로 작업을 이어받았습니다. 원래 작업을 계속 완료하세요.\n지금까지의 로그:\n${partial}`;
   }
 
-  async followup(id: string, prompt: string, skills: string[] = [], settings: ConversationSettings = {}): Promise<Session> {
+  async followup(id: string, prompt: string, skills: string[] = [], settings: ConversationSettings = {}, alreadyLogged = false): Promise<Session> {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.status === "running") throw new Error("세션이 이미 실행 중입니다.");
+    // Left over from a run that was stopped or failed: older than this message, so it must not read as newer.
+    const carried = session.pendingInstructions ?? [];
+    delete session.pendingInstructions;
     const mediaRequest = await this.isMediaRequest(prompt, [...(session.skills ?? []), ...skills], session.workspaceId);
     if (mediaRequest) assertMediaAllowed(this.workspacePolicyResolver?.(session.workspaceId));
     this.assertSessionPolicy(session);
@@ -856,7 +859,7 @@ export class Orchestra {
     if (settings.mode !== undefined) session.mode = settings.mode;
     if (settings.autoSwitch !== undefined) session.autoSwitch = settings.autoSwitch;
     session.turnCount = (session.turnCount ?? session.events.filter((event) => event.agent === "user" && event.type === "message").length) + 1;
-    this.event(session, "user", "message", prompt);
+    if (!alreadyLogged) this.event(session, "user", "message", prompt);
     const allowed = new Set(this.allowedAgents(session));
     const mediaLead = mediaRequest && session.mode === "auto";
     if (mediaLead && !allowed.has("grok")) {
@@ -900,7 +903,7 @@ export class Orchestra {
     if (controller.signal.aborted) return session;
     const config = this.configs.get(id) ?? { skills: [], systemPrompt: "" };
     const selectedSkills = [...new Set([...config.skills, ...skills, ...mediaSkills(prompt, await enabledPublicSkills(session.cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills))])];
-    void this.execute(session, prompt, selectedSkills, config.systemPrompt, controller, mediaLead || (mediaRequest && session.agent === "grok"))
+    void this.execute(session, carriedOverPrompt(carried, prompt), selectedSkills, config.systemPrompt, controller, mediaLead || (mediaRequest && session.agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
     return session;
   }
@@ -1154,6 +1157,14 @@ export class Orchestra {
     session.status = "done"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     this.event(session, session.agent, "status", "세션이 완료되었습니다.");
+    // A message typed during this run that no turn picked up is the user's next request, not a note for later.
+    const leftover = session.pendingInstructions ?? [];
+    if (!leftover.length) return;
+    delete session.pendingInstructions;
+    this.event(session, session.agent, "status", "진행 중에 받은 메시지를 이어서 처리합니다.");
+    const latest = leftover[leftover.length - 1];
+    void this.followup(session.id, carriedOverPrompt(leftover.slice(0, -1), latest.text), [], {}, true)
+      .catch((error) => this.event(session, session.agent, "error", error instanceof Error ? error.message : String(error)));
   }
   private finishStopped(session: Session, controller?: AbortController) {
     if (controller && this.controllers.get(session.id) !== controller) return;

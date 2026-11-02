@@ -155,6 +155,20 @@ export function instructionSuffix(items: PendingInstruction[]): string {
   ].join("\n");
 }
 
+/** Messages queued during a run that ended before any turn read them, put ahead of the newest one. */
+export function carriedOverPrompt(items: PendingInstruction[], prompt: string): string {
+  if (!items.length) return prompt;
+  return [
+    "앞선 작업이 진행 중일 때 보냈지만 아직 처리되지 않은 메시지입니다(보낸 순서).",
+    ...items.map((item) => `- ${item.text}`),
+    "",
+    "가장 최근 메시지:",
+    prompt,
+    "",
+    "앞선 메시지와 최근 메시지가 어긋나면 최근 메시지를 따르세요.",
+  ].join("\n");
+}
+
 export function pushInstruction(pending: PendingInstruction[] | undefined, item: PendingInstruction, limit = 20): PendingInstruction[] {
   return [...(pending ?? []), item].slice(-limit);
 }

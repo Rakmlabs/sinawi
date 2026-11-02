@@ -159,3 +159,48 @@ test("promoting a live answer republishes a full snapshot so clients see the pro
   await orchestra.stop(session.id);
   releaseWorker();
 });
+
+test("a directive queued while the lead answers starts the next turn when the run ends", async () => {
+  let releaseLead = () => {};
+  const leadGate = new Promise<void>((resolve) => { releaseLead = () => resolve(); });
+  const prompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.readOnly) return { exitCode: 0, finalText: "status" };
+    prompts.push(options.prompt);
+    if (prompts.length === 1) await leadGate;
+    return { exitCode: 0, finalText: "답변" };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "작업끝난거야?", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitFor(() => prompts.length === 1);
+  await orchestra.liveTurn(session.id, "배포까지 해줘야돼");
+  assert.ok(session.pendingInstructions?.length);
+  releaseLead();
+  await waitFor(() => prompts.length === 2 && session.status === "done");
+  assert.match(prompts[1], /배포까지 해줘야돼/);
+  assert.doesNotMatch(prompts[1], /진행 중에 보낸 지시입니다/);
+  assert.equal(session.pendingInstructions, undefined);
+  assert.equal(session.events.filter((event) => event.agent === "user" && event.text === "배포까지 해줘야돼").length, 1, "the queued message is not logged twice");
+});
+
+test("a message left from a stopped run reaches the next turn as older than the new one", async () => {
+  const prompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.readOnly) return { exitCode: 0, finalText: "status" };
+    prompts.push(options.prompt);
+    if (prompts.length === 1) await new Promise((resolve) => options.signal?.addEventListener("abort", resolve));
+    return { exitCode: 0, finalText: "답변" };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "롤백해줘", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitFor(() => prompts.length === 1);
+  await orchestra.liveTurn(session.id, "배포까지 해줘야돼");
+  await orchestra.stop(session.id);
+  await waitFor(() => session.status === "stopped");
+  await orchestra.followup(session.id, "이전꺼로 돌려놔줘");
+  await waitFor(() => session.status === "done");
+  const last = prompts[prompts.length - 1];
+  assert.ok(last.indexOf("배포까지 해줘야돼") < last.indexOf("이전꺼로 돌려놔줘"));
+  assert.match(last, /최근 메시지를 따르세요/);
+  assert.doesNotMatch(last, /진행 중에 보낸 지시입니다/);
+});
