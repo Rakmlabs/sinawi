@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, Square, WandSparkles, X } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Square, WandSparkles, X } from "lucide-react";
 import { ComposerPopover } from "../ComposerPopover";
 import { composerAction, composerLocked, fileToken, handlesCompletionKey, historyEntries, historyStep, isUsageCommand, slashToken } from "../composer";
 import { kindFromName } from "../../server/media-kinds";
@@ -7,7 +7,7 @@ import { formatBytes, kindLabel, type MediaRef } from "../viewer-model";
 import { names } from "./labels";
 import type { AttachmentsState } from "./useAttachments";
 import type { ComposerCompletion } from "./useComposerCompletion";
-import type { AgentId, Session, SkillInfo as Skill } from "../../server/types";
+import type { AgentId, PermissionMode, Session, SkillInfo as Skill } from "../../server/types";
 import { t } from "../i18n";
 import { isWorkspacePolicyMessage } from "../../server/workspace-policy";
 import { Beat } from "../Beat";
@@ -32,6 +32,10 @@ export type ComposerProps = {
   onOpenWorkspaceSettings?: () => void;
   mode: "auto" | "manual";
   setMode: (mode: "auto" | "manual") => void;
+  permissionMode: PermissionMode;
+  setPermissionMode: (mode: PermissionMode) => void;
+  /** The workspace allows "전체 권한"; otherwise that mode is not offered. */
+  fullAccessAllowed: boolean;
   agent: AgentId;
   cwd: string;
   shownCwd: string;
@@ -44,6 +48,14 @@ export type ComposerProps = {
   /** Team/agent picker rendered in the bottom bar (TeamBarSlot). */
   teamPicker?: ReactNode;
 };
+
+function permissionModes(fullAccessAllowed: boolean): { mode: PermissionMode; label: string; title: string }[] {
+  return [
+    { mode: "plan", label: t("comp.perm.plan"), title: t("comp.perm.planTitle") },
+    { mode: "auto", label: t("comp.perm.auto"), title: t("comp.perm.autoTitle") },
+    ...(fullAccessAllowed ? [{ mode: "full" as const, label: t("comp.perm.full"), title: t("comp.perm.fullTitle") }] : []),
+  ];
+}
 
 export function Composer(props: ComposerProps) {
   const { completion, prompt, setPrompt, skills, messageSkills, setMessageSkills, active, sessionRunning, busy, routing, liveNote, chatError, unavailableWarning, onOpenWorkspaceSettings, mode, setMode, agent, cwd, shownCwd, canSend, choiceOptions, send, stopActive, openModal, openViewer } = props;
@@ -256,6 +268,11 @@ export function Composer(props: ComposerProps) {
           <button type="button" aria-pressed={mode === "auto"} disabled={busy} title={t("comp.autoTitle")} onClick={() => setMode("auto")}>{t("comp.auto")}</button>
           <button type="button" aria-pressed={mode === "manual"} disabled={busy} title={t("comp.manualTitle")} onClick={() => setMode("manual")}>{t("comp.manual")}</button>
         </div>}
+        <div className="routing-mode permission-mode" role="group" aria-label={t("comp.permissionMode")} title={t("comp.permissionMode")}>
+          <ShieldCheck size={13} aria-hidden="true" className="permission-mode-icon" />
+          {permissionModes(props.fullAccessAllowed).map((item) => <button key={item.mode} type="button" aria-pressed={props.permissionMode === item.mode} disabled={busy || sessionRunning}
+            className={item.mode === "full" ? "danger" : undefined} title={item.title} onClick={() => props.setPermissionMode(item.mode)}>{item.label}</button>)}
+        </div>
         <span className="composer-bottom-spacer" />
         <input ref={fileInput} type="file" multiple hidden onChange={(event) => { attachFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
         <button type="button" className="icon-button" aria-label={t("comp.attachFile")} title={t("comp.attachTitle")} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>

@@ -92,6 +92,8 @@ export interface Session {
   handoffContext?: string;
   mode?: "auto" | "manual";
   autoSwitch?: boolean;
+  /** Unset on sessions from before modes: they follow the workspace's full-access switch. */
+  permissionMode?: PermissionMode;
   turnCount?: number;
   lastAutoSwitchTurn?: number;
   workspaceId: WorkspaceId;
@@ -144,6 +146,7 @@ export interface WorkspaceDefaults {
   quotaFallback?: boolean;
   quotaThreshold?: number;
   fallbackOrder?: Partial<Record<AgentId, AgentId[]>>;
+  permissionMode?: PermissionMode;
 }
 
 export interface WorkspaceInfo {
@@ -201,9 +204,17 @@ export interface UpdateTeamInput extends AgentSelection {
   workerConfigs?: AgentSelection[];
 }
 
+/**
+ * How much a run may do without asking, like Claude Code's modes. "plan": every CLI read-only, the
+ * lead answers with a plan; "auto": the default sandboxes and approval rules; "full": no approvals
+ * (only where the workspace allows it, WorkspacePolicy.fullAccess).
+ */
+export type PermissionMode = "plan" | "auto" | "full";
+
 export interface ConversationSettings {
   mode?: "auto" | "manual";
   autoSwitch?: boolean;
+  permissionMode?: PermissionMode;
 }
 
 export interface StartSessionInput extends ConversationSettings {

@@ -4,12 +4,12 @@ import { resolve } from "node:path";
 import { killSessionProcessGroups, runCli } from "./cli.js";
 import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
 import { enabledPublicSkills, resolveSkillPrompt } from "./skills.js";
-import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Session, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
+import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, PermissionMode, Session, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
 import type { AutoSwitchRecommendation } from "./auto-routing.js";
-import { allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
+import { allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, fullAccessBlockedMessage, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
@@ -79,6 +79,11 @@ function titleFrom(prompt: string) {
 const REPORT_HEADER = /^\[[^\]\n]*결과\]\n/u;
 /** The report opens with "상태: 완료" (not "부분 완료" or "막힘"), optionally in bold. */
 const CLEAN_REPORT = /^\[[^\]\n]*결과\]\n\s*(?:\*\*)?상태(?:\*\*)?\s*:\s*(?:\*\*)?완료/u;
+
+const PLAN_MODE_NOTICE = `## 계획 모드
+사용자가 계획 모드를 골랐습니다. 이번 턴에는 파일 수정, 커밋, push, 배포, 워커 위임(<<DELEGATE>>)을 하지 않습니다. 모든 도구가 읽기 전용입니다.
+읽기 전용으로 확인한 뒤 실행 계획만 짧게 쓰세요: 목표(무엇을 어떤 상태로, git이면 대상 브랜치·커밋), 바꿀 파일, 실행할 명령과 순서(커밋·push·배포 포함), 확인 방법, 사용자에게 물어볼 것.
+사용자가 "이대로 실행"을 누르면 다음 턴에 이 계획대로 실행합니다.`;
 
 export class Orchestra {
   private sessions = new Map<string, Session>();
@@ -213,6 +218,17 @@ export class Orchestra {
     assertAgentsAllowed(workspaceId, agents, this.allowedAgentResolver?.(workspaceId));
   }
 
+  /** The session's permission mode; sessions from before modes follow the workspace switch. */
+  private permissionModeOf(session: Session): PermissionMode {
+    const allowFull = Boolean(this.workspacePolicyResolver?.(session.workspaceId)?.fullAccess);
+    const mode = session.permissionMode ?? (allowFull ? "full" : "auto");
+    return mode === "full" && !allowFull ? "auto" : mode;
+  }
+
+  private assertPermissionMode(workspaceId: Session["workspaceId"], mode: PermissionMode | undefined): void {
+    if (mode === "full" && !this.workspacePolicyResolver?.(workspaceId)?.fullAccess) throw new Error(fullAccessBlockedMessage);
+  }
+
   private assertSessionPolicy(session: Session): void {
     this.assertPolicy(session.workspaceId, [session.agent, ...session.workers, ...(session.planner ? [session.planner.agent] : [])]);
   }
@@ -276,6 +292,7 @@ export class Orchestra {
     const reasoningEffort = mediaLead ? undefined : input.reasoningEffort;
     const workerConfigs = normalizeWorkerConfigs(workers, input.workerConfigs);
     this.assertPolicy(workspaceId, [agent, ...workers, ...(input.planner ? [input.planner.agent] : [])]);
+    this.assertPermissionMode(workspaceId, input.permissionMode);
     const cwd = resolve(input.cwd);
     if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
     const selectedSkills = [...new Set([...(input.skills ?? []), ...mediaSkills(input.prompt, await enabledPublicSkills(cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), workspaceId).disabledSkills))])];
@@ -286,6 +303,7 @@ export class Orchestra {
       workerConfigs,
       planner: input.planner,
       mode: input.mode ?? "manual", autoSwitch: input.autoSwitch ?? true, turnCount: 1,
+      ...(input.permissionMode ? { permissionMode: input.permissionMode } : {}),
       status: "running", createdAt: new Date().toISOString(), events: [],
       cliSessionId: agent === input.agent ? input.resumeSessionId : undefined,
       groupId: input.groupId,
@@ -333,12 +351,16 @@ export class Orchestra {
     const planningContext = plan ? `\n\n계획 전문 에이전트가 작성한 실행 계획:\n${plan}` : "";
     const handoffContext = session.handoffContext ? `\n\n이전 오케스트라의 대화 요약:\n${session.handoffContext}` : "";
     const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";
-    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${skills}${planningContext}${handoffContext}${resumeBrief}\n\n사용자 요청:\n${userPrompt}`;
+    const planMode = this.permissionModeOf(session) === "plan";
+    const planNotice = planMode ? `\n\n${PLAN_MODE_NOTICE}${await repoSnapshot(session.cwd).then((facts) => facts ? `\n\n${facts}` : "").catch(() => "")}` : "";
+    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
     const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     if (first.sessionId) session.cliSessionId = first.sessionId;
     if (first.exitCode !== 0) throw new Error(`${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
     delete session.handoffContext;
+    // Plan mode: the lead's read-only answer is the plan; nothing is handed to workers.
+    if (planMode) return this.finish(session);
 
     const resolveRequests = (text: string) => parseDelegations(text).flatMap((request) => {
       const exact = workers.find((candidate) => candidate.id === request.target);
@@ -711,6 +733,8 @@ export class Orchestra {
     this.requireCurrentRun(session, signal);
     this.assertPolicy(session.workspaceId, [agent]);
     const policy = this.workspacePolicyResolver?.(session.workspaceId);
+    const permissionMode = this.permissionModeOf(session);
+    if (permissionMode === "plan") readOnly = true;
     // Claude has no media generation tools, so the workspace's media worker hint does not apply to it.
     if (agent === "claude" && policy?.mediaPrompt) prompt = prompt.replace(`${policy.mediaPrompt}\n\n`, "");
     const originalDelegation = delegationId ? session.events.find((event) => event.id === delegationId) : undefined;
@@ -734,7 +758,7 @@ export class Orchestra {
       lockedMcp: lockedToolsFor(policy, agent),
       // Review/planning runs are read-only but must still be able to read files to verify (see readTools).
       agent, prompt, cwd, model, reasoningEffort, readOnly, readTools: readOnly, resumeSessionId, signal: runSignal,
-      ...(policy?.fullAccess ? { fullAccess: true } : {}),
+      ...(permissionMode === "full" ? { fullAccess: true } : {}),
       ...(extraDirs?.length ? { extraDirs } : {}),
       usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role, dataDir: this.usageDataDir },
       onActivity: () => this.heartbeat(session, signal, guard && !guard.stall ? guard.detector : undefined),
@@ -873,12 +897,14 @@ export class Orchestra {
     const mediaRequest = await this.isMediaRequest(prompt, [...(session.skills ?? []), ...skills], session.workspaceId);
     if (mediaRequest) assertMediaAllowed(this.workspacePolicyResolver?.(session.workspaceId));
     this.assertSessionPolicy(session);
+    this.assertPermissionMode(session.workspaceId, settings.permissionMode);
     session.status = "running";
     delete session.endedAt;
     const controller = new AbortController();
     this.controllers.set(id, controller);
     if (settings.mode !== undefined) session.mode = settings.mode;
     if (settings.autoSwitch !== undefined) session.autoSwitch = settings.autoSwitch;
+    if (settings.permissionMode !== undefined) session.permissionMode = settings.permissionMode;
     session.turnCount = (session.turnCount ?? session.events.filter((event) => event.agent === "user" && event.type === "message").length) + 1;
     if (!alreadyLogged) this.event(session, "user", "message", prompt);
     const allowed = new Set(this.allowedAgents(session));

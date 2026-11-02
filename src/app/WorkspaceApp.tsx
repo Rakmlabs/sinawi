@@ -35,7 +35,7 @@ import { ViewerContext } from "../media-ui";
 import { FileViewer } from "../FileViewer";
 import type { MediaRef } from "../viewer-model";
 import { ToolsPanel, toolsShortcut } from "../ToolsPanel";
-import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, Session, SkillInfo as Skill, Bot as Preset } from "../../server/types";
+import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SkillInfo as Skill, Bot as Preset } from "../../server/types";
 import { scopedApi, workspaceApi, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
@@ -127,13 +127,19 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const [workerConfigs, setWorkerConfigs] = useState<AgentSelection[]>(() => normalizeWorkerConfigs(initialTeam.workers, initialTeam.workerConfigs));
   const [mode, setMode] = useState<"auto" | "manual">(() => defaults.mode ?? "auto");
   const [autoSwitch, setAutoSwitch] = useState(() => defaults.autoSwitch ?? true);
+  const fullAccessAllowed = Boolean(workspacesApi.settings[workspaceId]?.fullAccess);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => defaults.permissionMode ?? (workspacesApi.settings[workspaceId]?.fullAccess ? "full" : "auto"));
+  // "전체 권한" exists only while the workspace allows it.
+  const shownPermissionMode: PermissionMode = permissionMode === "full" && !fullAccessAllowed ? "auto" : permissionMode;
+  /** The mode to go back to when a plan is executed. */
+  const permissionModeBeforePlan = useRef<PermissionMode>("auto");
   const [quotaFallback, setQuotaFallback] = useState(defaults.quotaFallback ?? true);
   const [quotaThreshold, setQuotaThreshold] = useState(defaults.quotaThreshold ?? 3);
   const [fallbackOrder, setFallbackOrder] = useState(defaults.fallbackOrder ?? {});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => savedBoolean(readPreference("sidebarCollapsed")));
   useEffect(() => {
-    onDefaultsChange(workspaceId, { cwd, mode, agent, workers, model, reasoningEffort, workerConfigs, autoSwitch, allowedAgents, quotaFallback, quotaThreshold, fallbackOrder });
-  }, [workspaceId, cwd, mode, agent, workers, model, reasoningEffort, workerConfigs, autoSwitch, allowedAgents, quotaFallback, quotaThreshold, fallbackOrder, onDefaultsChange]);
+    onDefaultsChange(workspaceId, { cwd, mode, agent, workers, model, reasoningEffort, workerConfigs, autoSwitch, allowedAgents, quotaFallback, quotaThreshold, fallbackOrder, permissionMode });
+  }, [workspaceId, cwd, mode, agent, workers, model, reasoningEffort, workerConfigs, autoSwitch, allowedAgents, quotaFallback, quotaThreshold, fallbackOrder, permissionMode, onDefaultsChange]);
   useEffect(() => { writePreference("sidebarCollapsed", String(sidebarCollapsed)); }, [sidebarCollapsed]);
   const [routingSettings, setRoutingSettings] = useState<RoutingSettings>();
   const [recommendation, setRecommendation] = useState<{ key: string; value: RoutingRecommendation }>();
@@ -244,6 +250,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const [turns, setTurns] = useState(4);
   const [activityOpen, setActivityOpen] = useState(false);
   const active = useMemo(() => sessions.find((s) => s.id === selected), [sessions, selected]);
+  // An opened session shows the mode it last ran in.
+  useEffect(() => { if (active?.permissionMode) setPermissionMode(active.permissionMode); }, [active?.id, active?.permissionMode]);
   const shownCwd = active?.cwd ?? cwd;
   const completion = useComposerCompletion(api, boot.skills, messageSkills, shownCwd);
   const { setSlash, setFileCompletion, historyIndex, historyDraft, composerInput } = completion;
@@ -445,7 +453,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       setChatError(error instanceof Error ? error.message : String(error));
     });
   };
-  const send = (executeRecommendation = false, message = prompt) => {
+  const send = (executeRecommendation = false, message = prompt, permissionOverride?: PermissionMode) => {
+    const sendMode = permissionOverride ?? shownPermissionMode;
     if (isUsageCommand(message)) { setTab("usage"); setPrompt(""); setSlash(undefined); return Promise.resolve(); }
     if (active?.status === "running") return sendWhileRunning(message);
     if ((!message.trim() && !attachments.length) || !canSendBase || !attachmentsReady || sending.current) return Promise.resolve();
@@ -457,13 +466,14 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     return safe(async () => {
       try {
         if (active) {
-          await api(`/sessions/${active.id}/messages`, { prompt: message, skills: messageSkills, mode: active.mode ?? "manual", autoSwitch });
+          await api(`/sessions/${active.id}/messages`, { prompt: message, skills: messageSkills, mode: active.mode ?? "manual", autoSwitch, permissionMode: sendMode });
+          if (permissionOverride) setPermissionMode(permissionOverride);
         } else {
           const s = await submitSession(api, {
             prompt: message, agent, workers, cwd, model, reasoningEffort: reasoningEffort || undefined,
             workerConfigs: normalizeWorkerConfigs(workers, workerConfigs),
             skills: [...new Set([...skills, ...messageSkills])], groupId: groupId || undefined,
-            systemPrompt, mode, autoSwitch, workspaceId,
+            systemPrompt, mode, autoSwitch, workspaceId, permissionMode: sendMode,
           }, executeRecommendation ? pendingRecommendation : undefined, setRouting);
           setSessions((old) => [s, ...old.filter((x) => x.id !== s.id)]);
           setSelected(s.id);
@@ -761,14 +771,16 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                         onUndoHandoff={(eventId) => void sessionAction(`/sessions/${active.id}/handoff/undo`, { eventId })}
                         onOpenWorker={(workerId) => { selectWorker(active.id, workerId); if (!sidebarState.current.overlay) setSidebarOpen(true); }}
                         onPromote={promoteLiveMessage}
-                        onChoose={(option) => void send(false, option)} />
+                        onChoose={(option) => void send(false, option)}
+                        onExecutePlan={() => void send(false, t("msg.executePlanPrompt"), fullAccessAllowed && permissionModeBeforePlan.current === "full" ? "full" : "auto")} />
                     )}
                   </div>
                   {showChatBottom && !selectedWorker && <button type="button" className="chat-bottom-button" onClick={() => scrollToChatBottom()}><ArrowDown size={15} />{t("ws.toBottom")}</button>}
                   {!selectedWorker && <Composer completion={completion} attachments={attachmentState} prompt={prompt} setPrompt={setPrompt}
                     skills={skills} messageSkills={messageSkills} setMessageSkills={setMessageSkills} availableSkills={boot.skills}
                     active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning} onOpenWorkspaceSettings={openWorkspaceSettings}
-                    mode={mode} setMode={setMode} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
+                    mode={mode} setMode={setMode} permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed}
+                    setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
                     send={send} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
                       manual={{ agent, model, reasoningEffort, workers, workerConfigs }} availableAgents={teamAgents}

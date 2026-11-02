@@ -194,7 +194,8 @@ function agents(value: unknown, max = 20): AgentId[] {
 function conversationSettings(body: any): ConversationSettings {
   if (body?.mode !== undefined && body.mode !== "auto" && body.mode !== "manual") throw new Error("배정 방식이 올바르지 않습니다.");
   if (body?.autoSwitch !== undefined && typeof body.autoSwitch !== "boolean") throw new Error("자동 전환 설정이 올바르지 않습니다.");
-  return { mode: body?.mode, autoSwitch: body?.autoSwitch };
+  if (body?.permissionMode !== undefined && !["plan", "auto", "full"].includes(body.permissionMode)) throw new Error("권한 모드가 올바르지 않습니다.");
+  return { mode: body?.mode, autoSwitch: body?.autoSwitch, permissionMode: body?.permissionMode };
 }
 
 function startInput(body: any, workspace: WorkspaceResolver, fallbackWorkspace: WorkspaceId): StartSessionInput {

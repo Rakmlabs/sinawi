@@ -534,6 +534,10 @@ body,
 }
 
 .composer-bottom .routing-mode button[aria-pressed="true"] { background: var(--bg-raised); box-shadow: var(--shadow-sm); color: var(--text); }
+.composer-bottom .permission-mode button.danger[aria-pressed="true"] { color: var(--danger-fg); }
+.composer-bottom .permission-mode { display: flex; align-items: center; }
+.composer-bottom .permission-mode-icon { margin: 0 2px 0 6px; color: var(--text-muted); flex: 0 0 auto; }
+.message .execute-plan { margin-top: 10px; }
 
 .composer-bottom .session-group-control {
   display: flex;

@@ -29,6 +29,8 @@ export type MessageListProps = {
   onOpenWorker: (workerId: string) => void;
   onPromote: (eventId: string) => void;
   onChoose: (option: string) => void;
+  /** Runs the plan a plan-mode turn just wrote. */
+  onExecutePlan?: () => void;
 };
 
 const delegationTitle = (text: string) => text.replace(/^.*?에게 위임:\s*/, "");
@@ -49,7 +51,7 @@ function DelegationCard({ e, task, active, onOpenWorker }: { e: SessionEvent; ta
 }
 
 /** The main conversation of the active session: messages, handoffs and delegation cards. */
-export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose }: MessageListProps) {
+export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan }: MessageListProps) {
   return <div className="messages">
     {events.flatMap((e, index) => [(() => {
       if (e.type === "handoff") return <div className="handoff-divider" key={e.id}>
@@ -70,6 +72,8 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
           <CopyButton text={copied} className="message-copy" ariaLabel={t("msg.copy", { agent: names[e.agent] || e.agent })} />
         </div>
         <div className={`message-text ${e.type === "error" ? "error-banner" : e.type === "warning" ? "warning-banner" : ""}`} role={e.type === "error" || e.type === "warning" ? "alert" : undefined}>{isUser ? <UserMessageBody text={text} /> : <MessageFold text={text} streaming={streamingMessageId === e.id}><Markdown text={text} /></MessageFold>}</div>
+        {!isUser && e.id === latestAssistantId && active.permissionMode === "plan" && active.status !== "running" && onExecutePlan && e.type === "message" &&
+          <button type="button" className="button primary execute-plan" disabled={busy} title={t("msg.executePlanTitle")} onClick={onExecutePlan}>{t("msg.executePlan")}</button>}
         {canPromoteLive(e) && <button type="button" className="button light live-promote" onClick={() => onPromote(e.id)}>{t("msg.promote")}</button>}
         {!isUser && e.id === latestAssistantId && choiceOptions.length > 0 && <div className="message-options" aria-label={t("msg.options")}>
           {choiceOptions.map((option, index) => <button type="button" key={option} onClick={() => onChoose(option)}><span>{index + 1}</span>{option}</button>)}

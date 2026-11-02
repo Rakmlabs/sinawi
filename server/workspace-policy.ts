@@ -23,6 +23,7 @@ export class WorkspacePolicyInputError extends Error {}
 export const workspacePolicyHint = "설정 › 작업 공간";
 export const isWorkspacePolicyMessage = (text: string | undefined) => Boolean(text?.includes(`이 작업 공간 설정에서`) && text.includes(workspacePolicyHint));
 
+export const fullAccessBlockedMessage = "이 작업 공간 설정에서 전체 권한 모드가 꺼져 있습니다. 설정 › 작업 공간에서 켤 수 있습니다.";
 export const mediaBlockedMessage = "이 작업 공간 설정에서 이미지·영상 생성이 꺼져 있습니다. 설정 › 작업 공간에서 켤 수 있습니다.";
 export const blockedToolMessage = (name: string) => `이 작업 공간 설정에서 차단된 도구입니다: ${name}. 설정 › 작업 공간에서 차단을 풀 수 있습니다.`;
 
