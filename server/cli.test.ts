@@ -17,7 +17,7 @@ test("buildInvocation passes Claude effort and omits unsupported Grok effort", (
 });
 
 test("buildInvocation grants non-read-only Claude and Grok runs only the common development commands", () => {
-  const commands = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer"];
+  const commands = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl"];
   const rules = commands.map((command) => `Bash(${command}:*)`);
 
   const claude = buildInvocation({ agent: "claude", prompt: "fix", cwd: "/tmp/project" });
