@@ -4,8 +4,7 @@ dist/
 .env*
 !.env.example
 *.log
-.impeccable/review/
-.impeccable/hook.cache.json
+.impeccable/
 src-tauri/target/
 src-tauri/resources/
 
