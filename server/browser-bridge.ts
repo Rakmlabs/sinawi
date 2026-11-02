@@ -319,7 +319,7 @@ description: Sinawi 앱 안 브라우저 탭(사용자가 보고 있는 화면)�
 - 데스크톱 앱에서는 http/https 페이지가 모두 조작된다(localhost 개발 서버와 외부 https 사이트). 정적 파일은 \`python3 -m http.server 8765 --directory <상대 경로>\` 로 띄운 뒤 \`ao-browser goto 8765\` 또는 \`ao-browser goto localhost:8765/index.html\`. file:// 는 열지 않는다. 포트 3100, 3101, 3001은 쓰지 않고, 띄운 서버를 kill 하지 않는다.
 - "앱 창이 열려 있지 않습니다"면 같은 명령을 한 번만 다시 보낸다. 서버가 앱을 띄우고 최대 15초 기다린다. 그래도 같거나 사용자가 중지했으면 막힘으로 보고한다.
 - 속성(data-*, src) 확인이 필요하면 \`ao-browser text\`로 보이는 글자를, 스크린샷으로 화면을 확인하고, 구조는 소스 파일을 읽어 확인한다. screenshot PNG는 임시 폴더라 채팅 뷰어가 열지 못한다. 보여 줄 그림은 작업 폴더에 두고 마크다운 경로로 보고한다.
-- 명령 전문은 작업 폴더가 이 저장소일 때 \`docs/orchestration/prompts/in-app-browser.md\`. \`ao-browser --help\` 로도 사용법이 출력된다.
+- 사용법은 \`ao-browser --help\`. Sinawi 소스나 문서를 찾아 읽지 않는다.
 
 ## 기본 흐름
 1. \`ao-browser goto 5173\` — 포트 번호, http://localhost:... 또는 https://... 주소. 탭이 없으면 패널이 자동으로 열린다.

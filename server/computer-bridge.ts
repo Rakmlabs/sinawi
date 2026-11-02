@@ -711,7 +711,7 @@ description: Sinawi를 통해 macOS 화면을 스크린샷으로 보고, 다른 
 - "사용자가 컴퓨터 조작을 중지했습니다"/"거부했습니다"가 나오면 즉시 멈추고 보고한다. 우회(osascript, cliclick 등)하지 않는다.
 - Sinawi 자신의 창은 기본으로 조작되지 않는다. 삭제·전송·결제 같은 되돌릴 수 없는 버튼은 사용자 확인 없이 누르지 않는다.
 - 스크린샷 PNG는 임시 폴더다. 보여 줄 그림은 작업 폴더로 복사해 마크다운 경로로 보고한다.
-- 전문: 이 저장소의 \`docs/orchestration/prompts/computer-use.md\`, \`ao-computer --help\`.
+- 사용법은 \`ao-computer --help\`. Sinawi 소스, 로그, 문서를 찾아 읽지 않는다.
 `;
 
 async function pathExists(path: string) {

@@ -70,7 +70,7 @@ export const APP_GUIDE = `## 이 앱에서 일하기
  * docs/orchestration/prompts/in-app-browser.md.
  */
 export const BROWSER_CORE = `## 앱 브라우저 (ao-browser)
-결과물, 목업, 디자인 시안, UI 확인은 앱 안 브라우저로만 연다. 명령은 \`ao-browser\`이고, 없으면 \`node\`로 \`~/.local/bin/ao-browser\`를 부른다. 인수와 오류 전문은 \`docs/orchestration/prompts/in-app-browser.md\`에 있다.
+결과물, 목업, 디자인 시안, UI 확인은 앱 안 브라우저로만 연다. 명령은 \`ao-browser\`이고, 없으면 \`node\`로 \`~/.local/bin/ao-browser\`를 부른다. 필요한 규칙은 이 문단에 다 있다. Sinawi 소스나 문서를 찾아 읽지 않는다.
 - 총괄의 읽기 전용 확인은 snapshot, text, console, screenshot까지다. click, fill, type으로 화면을 바꾸지 않고, 조작은 워커 브리프의 검증에 적어 워커가 한다.
 - 데스크톱 앱에서는 localhost와 외부 http/https 주소를 모두 열고 조작한다. 포트만 적어도 된다(\`ao-browser goto 5173\`). file:// 는 열리지 않는다. 브라우저 모드(\`npm run dev\`)에서는 localhost만 조작된다.
 - 정적 파일은 로컬 HTTP로 띄운 뒤 연다. 명령 하나: \`python3 -m http.server 8765 --directory <작업 폴더 안 상대 경로>\`. Codex와 Claude는 이 명령을 백그라운드로 두고 다음 호출에서 연다. 루트는 \`ao-browser goto 8765\`, 파일 경로는 \`ao-browser goto localhost:8765/index.html\`이다. \`8765/index.html\`처럼 포트와 경로를 붙이면 주소가 아니다. Grok은 \`&\`와 \`bash -c\`가 거절되므로 이미 떠 있는 포트를 쓰고, 없으면 부분 완료로 서버가 필요하다고 보고한다. 포트 3100, 3101, 3001은 쓰지 않는다. 띄운 서버를 kill 하지 않는다.
@@ -81,7 +81,7 @@ export const BROWSER_CORE = `## 앱 브라우저 (ao-browser)
 
 /** Operational ao-computer rules. Details: docs/orchestration/prompts/computer-use.md. */
 export const COMPUTER_CORE = `## 컴퓨터 조작 (ao-computer)
-웹 페이지는 ao-browser로 다룬다. 파일·셸·CLI로 안 되는 네이티브 앱(TextEdit, Finder, 시스템 설정 등)만 \`ao-computer\`로 조작한다. 전문은 \`docs/orchestration/prompts/computer-use.md\`.
+웹 페이지는 ao-browser로 다룬다. 파일·셸·CLI로 안 되는 네이티브 앱(TextEdit, Finder, 시스템 설정 등)만 \`ao-computer\`로 조작한다. 필요한 규칙은 이 문단에 다 있다. Sinawi 소스, 로그, 스킬 파일을 찾아 읽지 않는다.
 - 작업 공간 설정 "컴퓨터 조작 허용"이 꺼져 있으면 모든 명령이 거부된다(기본 꺼짐). \`ao-computer status\`로 확인하고, 꺼져 있으면 사용자에게 켜 달라고 보고하고 멈춘다.
 - 첫 명령 때 사용자가 허용 여부를 고른다. 거부, 권한 없음, 사용자 중지(Esc 길게·⌃⌥⌘.) 오류가 나오면 반복하지 말고 바로 보고한다.
 - 순서: screenshot으로 보고 → ax의 ref로 ax_click/ax_set_value(좌표보다 우선) → 다시 screenshot으로 확인. 같은 실패 세 번이면 막힘으로 보고한다.
