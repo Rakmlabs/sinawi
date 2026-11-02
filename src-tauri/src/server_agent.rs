@@ -146,11 +146,13 @@ fn install_files(layout: &Layout, version: &str) -> std::io::Result<()> {
 
 fn xml(text: &str) -> String { text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;") }
 
-/// Resolve (node binary, PATH) once from the user's login shell, so launchd can start node directly
-/// without a login shell on every (re)start. Falls back to common install locations.
+/// Resolve (node binary, PATH) once from the user's interactive login shell (so ~/.zshrc version
+/// managers like n/nvm/fnm count, as in a terminal), so launchd can start node directly without a
+/// shell on every (re)start. On Apple Silicon an arm64 node is preferred: an Intel node runs under
+/// Rosetta and every CLI, pnpm and native module it spawns runs as x86_64 too.
 fn resolve_node_env() -> (String, String) {
     let mut shell_out = String::new();
-    if let Ok(mut child) = Command::new("/bin/zsh").args(["-lc", "printf '__AO_PATH__%s\\n__AO_NODE__%s\\n' \"$PATH\" \"$(command -v node)\""])
+    if let Ok(mut child) = Command::new("/bin/zsh").args(["-ilc", "printf '__AO_PATH__%s\\n__AO_NODE__%s\\n' \"$PATH\" \"$(command -v node)\""])
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
     {
         let started = Instant::now();
@@ -172,17 +174,62 @@ fn resolve_node_env() -> (String, String) {
     {
         if !dirs.contains(&extra) { dirs.push(extra); }
     }
-    let path = dirs.join(":");
-    let mut node = field("__AO_NODE__");
-    if !Path::new(&node).is_file() {
-        node = dirs.iter().map(|d| format!("{d}/node")).find(|c| Path::new(c).is_file()).unwrap_or_else(|| "/usr/local/bin/node".into());
+    let mut candidates: Vec<String> = vec![field("__AO_NODE__")];
+    candidates.extend(dirs.iter().map(|d| format!("{d}/node")));
+    candidates.extend([format!("{home}/.n/bin/node"), format!("{home}/.volta/bin/node"), format!("{home}/.local/share/fnm/aliases/default/bin/node")]);
+    candidates.retain(|c| Path::new(c).is_file());
+    let node = pick_node(&candidates, apple_silicon()).unwrap_or_else(|| "/usr/local/bin/node".into());
+    // The chosen node's directory goes first so `node`/`npx` spawned by the server resolve to it too.
+    if let Some(dir) = Path::new(&node).parent().map(|d| d.to_string_lossy().to_string()) {
+        dirs.retain(|d| d != &dir);
+        dirs.insert(0, dir);
     }
-    (node, path)
+    (node, dirs.join(":"))
 }
 
-/// True when the installed plist predates the direct-node launch (still goes through a login shell).
+/// First candidate, except on Apple Silicon, where the first one with an arm64 slice wins.
+fn pick_node(candidates: &[String], arm: bool) -> Option<String> {
+    if arm { if let Some(c) = candidates.iter().find(|c| macho_has_arm64(Path::new(c))) { return Some(c.clone()); } }
+    candidates.first().cloned()
+}
+
+/// True on Apple Silicon even when this process itself runs translated.
+fn apple_silicon() -> bool {
+    cfg!(target_arch = "aarch64") || Command::new("/usr/sbin/sysctl").args(["-n", "hw.optional.arm64"]).output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1").unwrap_or(false)
+}
+
+/// Reads the Mach-O header: a thin arm64 binary, or a universal one with an arm64 slice.
+fn macho_has_arm64(path: &Path) -> bool {
+    const ARM64: u32 = 0x0100_000c;
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Ok(mut file) = fs::File::open(target) else { return false };
+    let mut head = [0u8; 8 + 20 * 8];
+    let Ok(read) = file.read(&mut head) else { return false };
+    if read < 8 { return false; }
+    let le = |i: usize| u32::from_le_bytes(head[i..i + 4].try_into().unwrap());
+    let be = |i: usize| u32::from_be_bytes(head[i..i + 4].try_into().unwrap());
+    match le(0) {
+        0xfeed_facf => le(4) == ARM64,
+        0xbeba_feca => (0..be(4) as usize).map(|n| 8 + n * 20).take_while(|&i| i + 4 <= read).any(|i| be(i) == ARM64),
+        _ => false,
+    }
+}
+
+/// The node binary an installed plist launches (first ProgramArguments string).
+fn plist_node(contents: &str) -> Option<String> {
+    let rest = &contents[contents.find("<key>ProgramArguments</key>")?..];
+    let start = rest.find("<string>")? + "<string>".len();
+    Some(rest[start..start + rest[start..].find("</string>")?].replace("&amp;", "&"))
+}
+
+/// True when the installed plist predates the direct-node launch (still goes through a login shell),
+/// or launches an Intel node on Apple Silicon while an arm64 one is now resolvable.
 fn plist_outdated(layout: &Layout) -> bool {
-    fs::read_to_string(&layout.plist).map(|c| c.contains("/bin/zsh") || !c.contains("<key>PATH</key>") || !c.contains("<key>SINAWI_PORT</key>")).unwrap_or(true)
+    let Ok(c) = fs::read_to_string(&layout.plist) else { return true };
+    if c.contains("/bin/zsh") || !c.contains("<key>PATH</key>") || !c.contains("<key>SINAWI_PORT</key>") { return true; }
+    let Some(node) = plist_node(&c) else { return true };
+    apple_silicon() && !macho_has_arm64(Path::new(&node)) && resolve_node_env().0 != node
 }
 
 fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
@@ -416,6 +463,20 @@ fn update_installed_server(layout: &Layout, version: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefers_arm64_node_on_apple_silicon() {
+        let root = temp("node");
+        let (intel, arm) = (root.join("intel"), root.join("arm"));
+        fs::write(&intel, [0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01]).unwrap();
+        fs::write(&arm, [0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01]).unwrap();
+        let candidates = [intel.to_string_lossy().to_string(), arm.to_string_lossy().to_string()];
+        assert!(!macho_has_arm64(&intel) && macho_has_arm64(&arm));
+        assert_eq!(pick_node(&candidates, true).as_deref(), Some(candidates[1].as_str()));
+        assert_eq!(pick_node(&candidates, false).as_deref(), Some(candidates[0].as_str()));
+        let plist = "<key>ProgramArguments</key>\n  <array><string>/x/node</string><string>s.cjs</string></array>";
+        assert_eq!(plist_node(plist).as_deref(), Some("/x/node"));
+    }
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sinawi-migrate-{name}-{}", std::process::id()));
