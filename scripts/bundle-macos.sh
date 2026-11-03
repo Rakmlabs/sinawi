@@ -12,8 +12,19 @@
 #     requirement is the stable "identifier dev.sinawi.app" (keeps macOS privacy grants across
 #     updates), then the updater tarball is rebuilt and re-signed from that copy.
 # Requires TAURI_SIGNING_PRIVATE_KEY (+ TAURI_SIGNING_PRIVATE_KEY_PASSWORD) in the environment.
+# A local build also reads APPLE_* from ~/.config/sinawi/release.env (or $SINAWI_RELEASE_ENV) when
+# that file exists; values already in the environment win. CI has no such file.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+RELEASE_ENV="${SINAWI_RELEASE_ENV:-$HOME/.config/sinawi/release.env}"
+if [ -f "$RELEASE_ENV" ]; then
+  while IFS='=' read -r var _; do
+    if [[ "$var" =~ ^APPLE_[A-Z_]+$ ]] && [ -z "${!var:-}" ]; then
+      eval "export $(grep -E "^$var=" "$RELEASE_ENV" | tail -1)"
+    fi
+  done < <(grep -E '^APPLE_[A-Z_]+=' "$RELEASE_ENV")
+fi
 
 TARGET="universal-apple-darwin"
 VERSION="$(node -p "require('./package.json').version")"
