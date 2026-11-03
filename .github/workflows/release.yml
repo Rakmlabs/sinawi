@@ -30,12 +30,18 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       TAG: ${{ github.ref_name }}
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     steps:
       - id: check
         run: |
           draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
-          echo "release $TAG: $draft"
-          [ "$draft" = false ] && echo "published=true" >> "$GITHUB_OUTPUT" || echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "release $TAG: $draft, updater key in secrets: $HAS_UPDATER_KEY"
+          # Without the updater key this repo's releases are built on a Mac, so there is nothing to do.
+          if [ "$draft" = false ] || [ "$HAS_UPDATER_KEY" != true ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     needs: guard
