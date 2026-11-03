@@ -4,11 +4,13 @@ Thanks for helping. Sinawi is a macOS app (Tauri + React) with a Node server tha
 
 ## How work flows
 
-1. **Issue first.** Open an issue for a bug or an idea before writing much code, or pick an open one. Issues labelled `help wanted` or `good first issue` are free to take. Say in a comment that you are on it.
-2. **Branch from `main`.** Name it after the change, such as `fix/stall-false-positive` or `feat/goal-board`. Never push to `main` directly.
-3. **Open a pull request** against `main`, early as a draft if you want feedback. Link the issue (`Fixes #12`) so it closes on merge.
-4. **CI must pass.** The check runs the typecheck, `npm test`, the web and server build, `cargo check` and `cargo test`.
-5. **Review, then squash-merge.** A maintainer reviews. The PR title becomes the commit on `main`.
+The maintainer works on `main` and cuts releases from it, so `main` is always the latest state. Everyone else works through issues and pull requests:
+
+1. **Found a problem? Open an issue.** Use the bug report form: what happened, how to reproduce it, and your Sinawi and CLI versions. Ideas go in a feature request. Issues labelled `help wanted` or `good first issue` are free to take. Say in a comment that you are on it.
+2. **Branch from the latest `main`.** Name the branch after the change, such as `fix/stall-false-positive` or `feat/goal-board`.
+3. **Open a pull request** against `main` and link the issue (`Fixes #12`) so it closes on merge. A draft is fine if you want early feedback.
+4. **CI must pass.** It runs the typecheck, `npm test`, the web and server build, `cargo check` and `cargo test`.
+5. **The maintainer reviews and squash-merges.** The PR title becomes the commit on `main`, and the fix ships in the next release.
 
 ## Set up
 
