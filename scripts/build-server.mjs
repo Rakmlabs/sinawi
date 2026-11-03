@@ -1,4 +1,5 @@
 import { build } from "esbuild";
+import { execFileSync } from "node:child_process";
 import { chmod, cp, mkdir, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -31,6 +32,16 @@ await Promise.all([
   chmod(new URL("prebuilds/darwin-arm64/spawn-helper", nodePtyTarget), 0o755),
   chmod(new URL("prebuilds/darwin-x64/spawn-helper", nodePtyTarget), 0o755),
 ]);
+// Notarization rejects unsigned Mach-O files anywhere in the bundle, and Tauri signs only the app's
+// own binaries, so a Developer ID build signs node-pty's prebuilds here, before they are bundled.
+const identity = process.env.APPLE_SIGNING_IDENTITY;
+if (identity && process.platform === "darwin") {
+  for (const arch of ["darwin-arm64", "darwin-x64"]) {
+    for (const file of ["pty.node", "spawn-helper"]) {
+      execFileSync("codesign", ["--force", "--options", "runtime", "--timestamp", "--sign", identity, fileURLToPath(new URL(`prebuilds/${arch}/${file}`, nodePtyTarget))], { stdio: "inherit" });
+    }
+  }
+}
 const erudaTarget = new URL("node_modules/eruda/", resources);
 await mkdir(erudaTarget, { recursive: true });
 await cp(new URL("../node_modules/eruda/package.json", import.meta.url), new URL("package.json", erudaTarget));

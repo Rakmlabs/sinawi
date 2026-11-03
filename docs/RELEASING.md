@@ -7,14 +7,23 @@ Sinawi는 Tauri updater 플러그인으로 스스로 업데이트한다. 앱은
 
 ## 한눈에 보기
 
+지금은 Developer ID 인증서가 메인테이너 Mac 키체인에만 있으므로, 서명·공증 릴리스는 **로컬에서** 만든다.
+
 ```
 node scripts/release.mjs minor --tag --notes notes.md   # 버전 올림 + 커밋 + 주석 태그
-git push && git push origin v1.3.0                       # 태그 push → Release 워크플로
-# GitHub에서 draft 릴리스 확인 → 설치해서 점검 → Publish
+TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/sinawi.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ~/.tauri/sinawi.key.password)" \
+  bash scripts/bundle-macos.sh                           # 서명 + 공증 → release-assets/
+node scripts/latest-json.mjs --repo Rakmlabs/sinawi --tag v1.3.0 --assets release-assets --notes notes.md
+git push && git push origin v1.3.0
+gh release create v1.3.0 --verify-tag --title "Sinawi 1.3.0" --notes-file notes.md release-assets/*
 ```
 
+태그 push 로 Release 워크플로도 돌지만, 그 태그의 릴리스가 이미 publish 돼 있으면 `guard` 잡이 빌드를 건너뛴다.
+워크플로가 먼저 시작해 버렸어도 publish 된 릴리스의 파일은 덮어쓰지 않는다.
+
+서명 없이 CI 로만 낼 때(옛 방식)는 태그만 push 하면 draft 릴리스가 생기고, 확인 후 Publish 한다.
 Publish 하기 전까지 사용자 앱은 새 버전을 보지 못한다(`releases/latest` 는 draft와 pre-release를 건너뛴다).
-그래서 draft 상태가 곧 출시 전 마지막 점검 단계다.
 
 ## 버전: 기준은 하나
 
@@ -93,9 +102,21 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD < ~/.tauri/sinawi.key.password
 키를 새로 만들어야 할 때: `npx tauri signer generate -w ~/.tauri/sinawi.key` → 새 공개키를 `tauri.conf.json` 에 넣고 → 위 두 secret 갱신.
 기존 사용자는 그 다음 버전을 수동으로 설치해야 한다.
 
-### 선택: Apple Developer ID 서명 + 공증
+### Apple Developer ID 서명 + 공증
 
-Secrets 가 있으면 `bundle-macos.sh` 가 Tauri 의 서명/공증을 그대로 쓴다. 없으면 ad-hoc 으로 빌드한다.
+**로컬 빌드**는 `~/.config/sinawi/release.env`(저장소 밖, 권한 600)에서 `APPLE_*` 값을 읽는다. 환경 변수에 이미 있는 값이 우선한다.
+
+```
+APPLE_SIGNING_IDENTITY="Developer ID Application: 이름 (TEAMID)"   # 키체인의 인증서
+APPLE_API_KEY=<Key ID>                                              # App Store Connect API 키(공증)
+APPLE_API_ISSUER=<Issuer ID>
+APPLE_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_<Key ID>.p8"
+```
+
+`APPLE_SIGNING_IDENTITY` 가 있으면 `scripts/build-server.mjs` 가 번들에 들어가는 node-pty 의 `pty.node`·`spawn-helper` 도
+같은 인증서로 서명한다(Tauri 는 앱 자체 바이너리만 서명하는데, 공증은 서명 안 된 Mach-O 가 하나라도 있으면 거절한다).
+
+**CI** 는 아래 Secrets 가 있으면 `bundle-macos.sh` 가 Tauri 의 서명/공증을 그대로 쓴다. 없으면 ad-hoc 으로 빌드한다.
 
 | Secret | 값 |
 |---|---|
@@ -113,7 +134,7 @@ Secrets 가 있으면 `bundle-macos.sh` 가 Tauri 의 서명/공증을 그대로
 - DMG 를 받아 열면 바로 실행된다. 경고 없음.
 - 지정 요구사항(designated requirement)이 팀 ID 기반이라 업데이트 후에도 화면 기록·손쉬운 사용·알림 권한이 유지된다.
 
-### Ad-hoc (Apple 계정 없음, 현재 기본)
+### Ad-hoc (인증서 없이 빌드할 때)
 
 - 브라우저로 받은 DMG 에는 quarantine 속성이 붙는다. 처음 열 때 macOS 가 **"손상되었기 때문에 열 수 없습니다"** 또는
   "확인되지 않은 개발자" 경고를 띄운다. 사용자가 직접 우회해야 한다:

@@ -12,15 +12,15 @@ Each CLI is good at different things. Having one agent delegate to the others te
 
 ## What it does
 
-- **Lead and workers.** Pick a lead and any mix of workers, or let *Auto* routing choose a team, models and skills for the request. The lead delegates with structured briefs (goal, context, done criteria, constraints, verification, report format); Sinawi fills in missing parts and sends results back to the lead.
-- **Permission modes**, like Claude Code: *Plan* (read-only, the lead proposes a plan you can run with one click), *Auto* (edits in the project folder, never stops to ask), and *Full access* (only when the workspace allows it).
+- **Lead and workers.** Pick a lead and any mix of workers, or let *Auto* routing choose a team, models and skills for the request. The lead delegates with structured briefs (goal, context, done criteria, constraints, verification, report format); Sinawi fills in missing parts, adds the user's own words so nothing is lost in the summary, and sends results back to the lead. When the lead hands work to several workers, they run at the same time; one worker's briefs run in order.
+- **Permission modes**, like Claude Code: *Plan* (read-only, the lead proposes a plan you can run with one click), *Auto* (edits in the project folder and does not stop to ask about ordinary commands; with Claude Code it uses the CLI's own auto mode), and *Full access* (only when the workspace allows it).
 - **Live view.** Messages, tool calls, commands and file changes stream in as they happen, with a clear indicator of what the team is doing right now — including when it is waiting on a CI run or deploy.
 - **Workspaces.** Keep conversations, projects and defaults apart (switch with F1 / F2). Each workspace has its own policy: which agents may run, whether computer control or full access is allowed, and which MCP tools are blocked.
 - **Quota fallback.** When one CLI is about to run out of quota, Sinawi can switch that role to the next agent you configured.
-- **Built-in browser and computer use.** Agents can drive the app's own browser tab (snapshot, click, type, screenshot) and, with your macOS permission, other native apps.
+- **Built-in browser and computer use.** Agents can drive the app's own browser (snapshot, click, type, screenshot) and, with your macOS permission, other native apps. Each session and each worker gets its own tab, and each workspace keeps its own browser windows: agents of a workspace you are not looking at keep working in it in the background, and pages never cross workspaces.
 - **Worktrees, terminal and files.** Work in git worktrees, open a terminal per session, and preview images, PDFs and Markdown the agents produce.
 - **Slash menu.** `/clear`, `/compact`, `/usage` and every installed skill, searchable by name.
-- **Skills.** Reads skills from `~/.claude/skills`, `~/.codex/skills`, `~/.codex/prompts`, `~/.grok/skills` and the project's `./skills`, and can attach them to a request automatically.
+- **Skills.** Reads skills from `~/.claude/skills`, `~/.codex/skills`, `~/.codex/prompts`, `~/.grok/skills` and the project's `./skills`. The lead sees what is installed and picks the skills that fit each brief, so you do not have to name them; a worker whose CLI lacks a skill gets its instructions attached.
 - **Bots.** Save presets (agent, model, skills, instructions) and let two bots talk for a set number of turns.
 - **Usage and updates.** Per-agent usage tracking, and signed auto-updates from GitHub Releases.
 
@@ -39,7 +39,11 @@ Sinawi finds the CLIs on your login shell's `PATH` and in common install locatio
 
 ## Install
 
-There is no prebuilt release yet, so build the app from source. You need [Rust](https://rustup.rs) and the Xcode Command Line Tools (`xcode-select --install`).
+Download `Sinawi_<version>_universal.dmg` from the [latest release](https://github.com/Rakmlabs/sinawi/releases/latest), open it and drag **Sinawi** to **Applications**. The app is signed with a Developer ID and notarized by Apple, so it opens without a Gatekeeper warning. It runs natively on Apple Silicon and Intel, and updates itself from GitHub Releases afterwards (you choose when to restart).
+
+### Build from source
+
+You need [Rust](https://rustup.rs) and the Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
 git clone https://github.com/Rakmlabs/sinawi.git
@@ -48,7 +52,9 @@ npm install
 npm run app:build
 ```
 
-The app is written to `src-tauri/target/release/bundle/macos/Sinawi.app`. Copy it to `/Applications` and open it from Finder or the Dock.
+The app is written to `src-tauri/target/release/bundle/macos/Sinawi.app`. Copy it to `/Applications` and open it from Finder or the Dock. A build you make yourself is not notarized and does not receive signed updates.
+
+### Permissions
 
 The first time an agent uses computer control, macOS asks you to allow Sinawi under **Privacy & Security → Accessibility** and **Screen Recording**. Open Sinawi from Finder or the Dock (not from a terminal) so macOS grants the permission to Sinawi itself.
 

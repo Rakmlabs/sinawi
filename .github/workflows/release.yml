@@ -19,8 +19,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  # A release published from a Developer ID build on a Mac (docs/RELEASING.md) is final: this
+  # workflow must not rebuild it ad-hoc and overwrite its files.
+  guard:
     if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.check.outputs.published }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - id: check
+        run: |
+          draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
+          echo "release $TAG: $draft"
+          [ "$draft" = false ] && echo "published=true" >> "$GITHUB_OUTPUT" || echo "published=false" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: guard
+    if: github.event_name == 'push' && needs.guard.outputs.published != 'true'
     runs-on: macos-14
     timeout-minutes: 60
     env:
@@ -80,7 +99,10 @@ jobs:
       - name: Upload draft release
         run: |
           VERSION="${TAG#v}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
+          if [ "$draft" = false ]; then
+            echo "$TAG was published while this ran; leaving its files alone."
+          elif [ "$draft" = true ]; then
             gh release upload "$TAG" release-assets/* --clobber
           else
             gh release create "$TAG" --draft --verify-tag --title "Sinawi $VERSION" --notes-file notes.md release-assets/*
