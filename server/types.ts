@@ -106,6 +106,8 @@ export interface Session {
   goal?: GoalState;
   /** This session only splits work into goal sessions and reports on them (server/goals.ts). */
   commander?: CommanderState;
+  /** The project lead: the chat the user keeps giving work to (server/steward.ts). */
+  steward?: StewardState;
   /** The commander session this goal session was started for. */
   parentId?: string;
 }
@@ -141,6 +143,12 @@ export interface CommanderGoal {
   merge?: { ok: boolean; text: string; commit?: string };
   createdAt: string;
   endedAt?: string;
+}
+
+export interface StewardState {
+  /** Lead turns on the current CLI session; at STEWARD_ROLLOVER_TURNS the app starts a fresh one. */
+  turns: number;
+  since: string;
 }
 
 export interface CommanderState {

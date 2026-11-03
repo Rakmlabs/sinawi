@@ -6,6 +6,7 @@ export function conversationText(text: string): string {
   return text.replace(/<<DELEGATE\s+to=["'][^"'<>]+["']>>[\s\S]*?<<\/DELEGATE>>/gi, "")
     // The goal panel shows the checklist; a commander's goals read as one line each.
     .replace(/<<CHECKLIST>>[\s\S]*?<<\/CHECKLIST>>/gu, "")
+    .replace(/<<NOTES>>[\s\S]*?<<\/NOTES>>/gu, "")
     .replace(/<<GOAL([^>]*)>>([\s\S]*?)<<\/GOAL>>/gu, (_match, attrs: string, body: string) => {
       const key = /id\s*=\s*"([^"]*)"/u.exec(attrs)?.[1];
       const title = /title\s*=\s*"([^"]*)"/u.exec(attrs)?.[1] || body.trim().split("\n")[0].replace(/^#+\s*/u, "");

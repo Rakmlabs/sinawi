@@ -762,6 +762,9 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
             const updated = await api<Session>(`/sessions/${id}`, { title }, "PATCH");
             setSessions((old) => old.map((session) => session.id === id ? updated : session));
           })}
+          onSetSteward={(id, enabled) => safe(async () => {
+            replaceFromServer(await api<Session>(`/sessions/${id}/steward`, { enabled }, "PATCH"));
+          })}
           onDeleteWorker={(sessionId, workerId) => safe(async () => {
             const updated = await api<Session>(`/sessions/${sessionId}/workers/${encodeURIComponent(workerId)}`, undefined, "DELETE");
             replaceFromServer(updated);

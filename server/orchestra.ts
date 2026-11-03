@@ -17,6 +17,7 @@ import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
+import { parseNotes, readNotes, rolloverContext, saveNotes, saveTranscript, STEWARD_ROLLOVER_TURNS, stewardRules, transcriptPath } from "./steward.js";
 import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 
@@ -115,6 +116,8 @@ export class Orchestra {
   private goalAutoNext = new Set<string>();
   /** Goal sessions whose running turn the app opened itself. */
   private goalAutoTurn = new Set<string>();
+  /** Where project leads keep their notes and transcripts (server/steward.ts); unset: no files. */
+  stewardDataDir?: string;
   /** Goal sessions started by a commander run at once, at most. */
   commanderParallelGoals = 3;
   /** Per-session kill switch + stall detector for the worker currently running. */
@@ -414,7 +417,8 @@ export class Orchestra {
     const split = Boolean(session.goal && !session.parentId && !planMode && this.worktreeDataDir && await gitRepo(session.cwd).catch(() => undefined));
     const board = commanderBoard(session, (id) => this.sessions.get(id));
     const goalContext = session.goal ? `\n\n${goalRules(split)}${session.goal.items.length ? `\n\n지금 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}${board ? `\n\n이 채팅이 앞서 나눠 맡긴 목표:\n${board}` : ""}` : "";
-    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
+    const stewardContext = await this.stewardContext(session);
+    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${stewardContext}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
     const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     if (first.sessionId) session.cliSessionId = first.sessionId;
@@ -545,7 +549,7 @@ export class Orchestra {
       this.event(session, session.agent, "status", round === 0 ? "총괄이 워커 결과를 검증하고 있습니다." : `총괄이 재계획 ${round}회차 결과를 검증하고 있습니다.`, { role: "orchestrator", metadata: { phase: "verify", round } });
       const roundFailed = workerResults.some((text) => CUT_REPORT.test(text));
       const strict = roundFailed && roundsLeft > 0 && session.agent === "grok";
-      const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()], Boolean(session.parentId)).catch(() => "");
+      const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()], Boolean(session.parentId || session.steward)).catch(() => "");
       const gitFacts = await repoSnapshot(session.cwd).catch(() => "");
       const goalReview = session.goal ? `\n\n${goalRules(false)}${session.goal.items.length ? `\n\n이번 턴 시작 때의 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
       const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${goalReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
@@ -608,7 +612,7 @@ export class Orchestra {
     const checkouts = await userWorktrees(session.cwd, this.worktreeDataDir).catch(() => []);
     const siblings = checkouts.length > 1 ? `\n\n## 이 저장소의 사용자 작업 폴더 (git worktree)\n같은 저장소를 사용자가 여러 폴더로 나눠 쓰고 있습니다. 세션 폴더는 \`${session.cwd}\`입니다.\n${checkouts.map((item) => `- \`${item.path}\` — ${item.branch ? `브랜치 \`${item.branch}\`` : "detached"} @ ${item.head}`).join("\n")}\n사용자가 "기존꺼", "다른 폴더/워크트리", 브랜치 이름을 말하면 이 목록에서 찾아 확인하고 쓰세요. 배포·롤백 대상이 어느 폴더·브랜치인지 원격 브랜치와 비교해 정합니다.` : "";
     return `${siblings}\n\n## 워커 작업 위치 (git worktree)
-이 세션 폴더는 git 저장소입니다. 파일을 고치는 워커는 각자 전용 git worktree와 브랜치(\`sinawi/${session.id.slice(0, 8)}/<워커 ID>\`)에서 일하고, 메인 폴더는 바뀌지 않습니다. 같은 라운드의 워커들은 서로의 변경을 보지 못하므로, 서로 의존하는 일은 한 워커에게 맡기거나 다음 라운드로 나누세요. 같은 워커는 다음 라운드에도 자기 worktree를 이어 씁니다. 워커 결과와 함께 각 worktree의 경로·브랜치·바뀐 파일을 알려 드립니다. 검토는 그 경로에서 하세요. ${session.parentId ? "이 세션은 총지휘의 목표라서, 체크리스트가 모두 끝나면 앱이 브랜치를 메인 폴더에 병합합니다." : "앱은 자동 병합하지 않습니다. 최종 답에 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요."}${dirty ? "\n메인 폴더에 커밋되지 않은 변경이 있습니다. worktree는 마지막 커밋(HEAD) 기준이라 그 변경이 들어 있지 않습니다. 워커 브리프의 맥락에 이 사실을 적으세요." : ""}`;
+이 세션 폴더는 git 저장소입니다. 파일을 고치는 워커는 각자 전용 git worktree와 브랜치(\`sinawi/${session.id.slice(0, 8)}/<워커 ID>\`)에서 일하고, 메인 폴더는 바뀌지 않습니다. 같은 라운드의 워커들은 서로의 변경을 보지 못하므로, 서로 의존하는 일은 한 워커에게 맡기거나 다음 라운드로 나누세요. 같은 워커는 다음 라운드에도 자기 worktree를 이어 씁니다. 워커 결과와 함께 각 worktree의 경로·브랜치·바뀐 파일을 알려 드립니다. 검토는 그 경로에서 하세요. ${session.steward ? "이 채팅은 프로젝트 담당이라, 턴이 끝날 때마다 앱이 워커 브랜치를 메인 폴더에 병합합니다. 워커에게 작업 브랜치에 커밋하게 하세요." : session.parentId ? "이 세션은 총지휘의 목표라서, 체크리스트가 모두 끝나면 앱이 브랜치를 메인 폴더에 병합합니다." : "앱은 자동 병합하지 않습니다. 최종 답에 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요."}${dirty ? "\n메인 폴더에 커밋되지 않은 변경이 있습니다. worktree는 마지막 커밋(HEAD) 기준이라 그 변경이 들어 있지 않습니다. 워커 브리프의 맥락에 이 사실을 적으세요." : ""}`;
   }
 
   /** Runs `task` while holding the session's worktree mutex (queued behind earlier holders). */
@@ -1016,7 +1020,7 @@ export class Orchestra {
     else this.goalAutoTurn.delete(id);
     // The user's own message restarts a goal loop that had stopped, with a fresh budget.
     // The setting decides for every message of a chat the user talks to; a goal chat always runs to the end.
-    if (settings.autoRun !== undefined && !session.parentId && !auto) {
+    if (settings.autoRun !== undefined && !session.parentId && !session.steward && !auto) {
       if (settings.autoRun) session.goal ??= freshGoal();
       else delete session.goal;
     }
@@ -1376,6 +1380,17 @@ export class Orchestra {
     const tracking = this.trackingChecklist(session);
     if (blocked && !tracking) this.event(session, session.agent, "error", "워커가 막힌 채로 끝났고 총괄이 다시 맡기지 않았습니다. 작업은 끝나지 않았습니다.");
     else this.event(session, session.agent, "status", tracking ? "이번 턴을 마쳤습니다." : "세션이 완료되었습니다.");
+    // A project lead's work goes into the main checkout before anything else starts.
+    if (session.steward) {
+      void this.stewardTurnEnded(session, "done")
+        .catch((error) => this.event(session, session.agent, "warning", error instanceof Error ? error.message : String(error)))
+        .finally(() => { if (session.status !== "running") this.afterFinish(session); });
+      return;
+    }
+    this.afterFinish(session);
+  }
+
+  private afterFinish(session: Session) {
     // A message typed during this run that no turn picked up is the user's next request, not a note for later.
     const leftover = session.pendingInstructions ?? [];
     this.afterTurn(session, "done", leftover.length > 0);
@@ -1392,6 +1407,7 @@ export class Orchestra {
     session.status = "stopped"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     this.event(session, session.agent, "status", "중지됨");
+    if (session.steward) void this.stewardTurnEnded(session, "stopped").catch(() => undefined);
     this.afterTurn(session, "stopped", false);
   }
   private fail(session: Session, error: unknown, controller?: AbortController) {
@@ -1401,7 +1417,73 @@ export class Orchestra {
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     const message = error instanceof Error ? error.message : String(error);
     this.event(session, session.agent, "error", message);
+    if (session.steward) void this.stewardTurnEnded(session, "error").catch(() => undefined);
     this.afterTurn(session, "error", false);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // The project lead (server/steward.ts)
+
+  /** Makes a chat the project lead, or an ordinary chat again. A lead always runs work to the end. */
+  setSteward(id: string, enabled: boolean): Session {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    if (session.parentId) throw new Error("나눠 맡긴 채팅은 담당이 될 수 없습니다.");
+    if (enabled && !session.steward) {
+      session.steward = { turns: 0, since: new Date().toISOString() };
+      session.goal ??= freshGoal();
+      this.event(session, session.agent, "status", "이 채팅을 프로젝트 담당으로 정했습니다. 담당 노트와 전체 기록을 이어 가며, 끝낸 작업은 메인 폴더에 병합합니다.");
+    } else if (!enabled && session.steward) {
+      delete session.steward;
+      this.event(session, session.agent, "status", "프로젝트 담당을 해제했습니다.");
+    }
+    this.broadcast(session);
+    return session;
+  }
+
+  private async stewardContext(session: Session): Promise<string> {
+    if (!session.steward || !this.stewardDataDir) return "";
+    const notes = await readNotes(this.stewardDataDir, session.id);
+    return `\n\n${stewardRules(notes, transcriptPath(this.stewardDataDir, session.id))}`;
+  }
+
+  /**
+   * After every lead turn: keep the transcript, merge the finished turn's work into the main
+   * checkout, and hand a long chat to a fresh CLI session with the notes and recent conversation.
+   */
+  private async stewardTurnEnded(session: Session, outcome: "done" | "error" | "stopped"): Promise<void> {
+    const steward = session.steward;
+    if (!steward) return;
+    steward.turns++;
+    if (this.stewardDataDir) await saveTranscript(this.stewardDataDir, session).catch(() => undefined);
+    if (outcome === "done" && !commanderActive(session) && this.permissionModeOf(session) !== "plan") await this.mergeStewardWork(session);
+    if (steward.turns < STEWARD_ROLLOVER_TURNS || session.status === "running") return;
+    const notes = this.stewardDataDir ? await readNotes(this.stewardDataDir, session.id) : "";
+    session.handoffContext = rolloverContext(notes, this.conversationSummary(session, session.agent), this.stewardDataDir ? transcriptPath(this.stewardDataDir, session.id) : "(없음)");
+    delete session.cliSessionId;
+    delete session.workerSessionIds;
+    Object.assign(steward, { turns: 0, since: new Date().toISOString() });
+    this.event(session, session.agent, "status", "대화가 길어져 다음 턴부터 새 세션으로 이어 갑니다. 담당 노트와 전체 기록은 그대로입니다.");
+  }
+
+  /** Merges every worker branch of the lead's chat that holds work; a failed merge keeps its branch for the next turn. */
+  private async mergeStewardWork(session: Session): Promise<void> {
+    if (!session.worktrees?.length) return;
+    await this.cliRunsSettled(session.id);
+    await this.withWorktreeLock(session.id, async () => {
+      const merged: string[] = [];
+      const failed: string[] = [];
+      for (const info of [...(session.worktrees ?? [])]) {
+        const result = await mergeWorktree(info, `sinawi: 담당 — ${session.title}`);
+        if (!result.ok) { failed.push(result.text); continue; }
+        if (!result.empty && result.commit) merged.push(result.commit);
+        session.worktrees = session.worktrees?.filter((item) => item !== info);
+      }
+      if (!session.worktrees?.length) delete session.worktrees;
+      if (merged.length) this.event(session, session.agent, "status", `이번 턴의 작업을 메인 폴더에 병합했습니다 (${merged.join(", ")}).`);
+      if (failed.length) this.event(session, session.agent, "warning", `메인 폴더에 병합하지 못했습니다: ${[...new Set(failed)].join(" ")} 작업 브랜치는 남겨 두었고 다음 턴이 끝날 때 다시 시도합니다.`);
+      this.broadcast(session);
+    });
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1410,6 +1492,8 @@ export class Orchestra {
   private noteChecklist(session: Session, text: string): void {
     const items = session.goal ? parseChecklist(text) : undefined;
     if (items) this.turnChecklists.set(session.id, items);
+    const notes = session.steward && this.stewardDataDir ? parseNotes(text) : undefined;
+    if (notes) void saveNotes(this.stewardDataDir!, session.id, notes).catch((error) => this.event(session, session.agent, "warning", `담당 노트를 저장하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`));
   }
 
   /** The lead keeps a checklist for this request (this turn or before), so the app runs it to the end. */

@@ -45,6 +45,7 @@ import { registerSessionFileRoutes } from "./session-files.js";
 import { registerLinkPreviewRoute } from "./link-preview.js";
 import { registerWorktreeRoutes } from "./worktree-routes.js";
 import { cleanupSessionWorktrees } from "./worktrees.js";
+import { readNotes, STEWARD_ROLLOVER_TURNS, transcriptPath } from "./steward.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -407,6 +408,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   (prompt) => routing.loadSettings().then((settings) => mediaRouteRequired(prompt, settings.rules)), options.inactivityTimeoutMs, policyFor);
   // Per-worker git worktrees (server/worktrees.ts). Opt-in so tests and embedders never create branches.
   if (options.worktrees) orchestra.worktreeDataDir = options.dataDir ?? join(homedir(), ".sinawi");
+  orchestra.stewardDataDir = options.dataDir ?? join(homedir(), ".sinawi");
   const routing = new RoutingService({ dataDir: options.dataDir, runner: routingRunner, skillLoader: options.routingSkillLoader, modelRunner: options.modelRunner, homeDir: options.modelHomeDir, authDiscovery: options.authDiscovery });
   const getAvailableAgents = async () => {
     if (Array.isArray(options.availableAgents)) return [...new Set(options.availableAgents)];
@@ -914,6 +916,22 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.patch("/api/sessions/:id", async (req, res) => {
     try {
       const session = orchestra.rename(routeParam(req.params.id), string(req.body?.title, 100));
+      await persistSessions(orchestra.list());
+      res.json(session);
+    } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }
+  });
+  app.get("/api/sessions/:id/steward", async (req, res) => {
+    try {
+      const session = orchestra.get(routeParam(req.params.id));
+      if (!session?.steward) throw new Error("담당 채팅이 아닙니다.");
+      const dir = orchestra.stewardDataDir;
+      res.json({ notes: dir ? await readNotes(dir, session.id) : "", transcript: dir ? transcriptPath(dir, session.id) : undefined, turns: session.steward.turns, rolloverAt: STEWARD_ROLLOVER_TURNS });
+    } catch (error) { errorResponse(res, error, 404); }
+  });
+  app.patch("/api/sessions/:id/steward", async (req, res) => {
+    try {
+      if (typeof req.body?.enabled !== "boolean") throw new Error("담당 설정이 올바르지 않습니다.");
+      const session = orchestra.setSteward(routeParam(req.params.id), req.body.enabled);
       await persistSessions(orchestra.list());
       res.json(session);
     } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }

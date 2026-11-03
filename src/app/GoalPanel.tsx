@@ -3,6 +3,7 @@ import type { CommanderGoalState, GoalItem, Session } from "../../server/types";
 import { activeGoal as active, settledItems as settled } from "../goal-progress";
 import { t } from "../i18n";
 import "../goals.css";
+import { StewardPanel } from "./StewardPanel";
 
 function ItemIcon({ status }: { status: GoalItem["status"] }) {
   if (status === "done") return <CheckCircle2 size={13} className="goal-done" aria-label={t("goal.done")} />;
@@ -81,8 +82,9 @@ function ChecklistPanel({ session, onStop }: { session: Session; onStop?: () => 
 export function GoalPanel({ session, lookup, onOpenSession, onStop }: { session: Session; lookup: (id: string) => Session | undefined; onOpenSession?: (id: string) => void; onStop?: () => void }) {
   const split = Boolean(session.commander?.goals.length);
   const checklist = Boolean(session.goal?.items.length);
-  if (!split && !checklist) return null;
+  if (!split && !checklist && !session.steward) return null;
   return <div className="goal-panels">
+    <StewardPanel session={session} />
     {split && <SplitBoard session={session} lookup={lookup} onOpenSession={onOpenSession} onStop={onStop} />}
     {checklist && <ChecklistPanel session={session} onStop={onStop} />}
   </div>;

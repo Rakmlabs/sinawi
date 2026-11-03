@@ -46,3 +46,6 @@
 .goal-stop { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: none; font-size: calc(12px * var(--font-scale)); }
 .goal-panel:not([open]) .goal-board, .goal-panel:not([open]) .goal-items { display: none; }
 .goal-panel[open] .goal-board, .goal-panel[open] > .goal-items { max-height: min(40vh, 360px); overflow: auto; }
+.steward-notes { padding: 0 12px 10px; max-height: min(40vh, 360px); overflow: auto; color: var(--text-secondary); }
+.steward-notes p { margin: 4px 0; }
+.steward-panel > summary svg { color: var(--accent-fg); }

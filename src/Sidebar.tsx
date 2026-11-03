@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
 import { delegationWorkers } from "./conversation";
 import type { Group, Session, SessionStatus, WorkspaceId } from "../server/types";
-import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, RotateCw, Search, Settings2, SquarePen, WandSparkles, Wrench, X } from "lucide-react";
+import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, RotateCw, Search, Settings2, SquarePen, UserCheck, WandSparkles, Wrench, X } from "lucide-react";
 import { searchWorkspace, workspaceName } from "./workspaces";
 import { useWorkspaces } from "./workspace-context";
 import { reloadApp } from "./reload";
@@ -22,7 +22,7 @@ type SidebarProps = {
   selectedWorker?: string; onSelectWorker?: (sessionId: string, workerId: string) => void;
   sessions: Session[]; groups: Group[]; busy: boolean; selected?: string; onNew: (groupId?: string) => void; onSelect: (id: string) => void; onHelp: () => void;
   onCreateGroup: (name: string) => Promise<boolean>; onRenameGroup: (id: string, name: string) => Promise<boolean>; onDeleteGroup: (id: string) => Promise<boolean>;
-  onRenameSession: (id: string, title: string) => Promise<boolean>; onDeleteSession: (id: string, removeWorktrees?: boolean) => Promise<boolean>; onAssign: (id: string, groupId: string | null) => Promise<boolean>;
+  onRenameSession: (id: string, title: string) => Promise<boolean>; onSetSteward?: (id: string, enabled: boolean) => Promise<boolean>; onDeleteSession: (id: string, removeWorktrees?: boolean) => Promise<boolean>; onAssign: (id: string, groupId: string | null) => Promise<boolean>;
   workspaceId?: WorkspaceId;
   onMoveSession?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>; onMoveGroup?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>;
   onUsage?: () => void;
@@ -81,7 +81,9 @@ export function Sidebar(props: SidebarProps) {
   // A chat's goal chats sit under it (server/goals.ts), not in the list on their own.
   const shownIds = new Set(results.sessions.map((session) => session.id));
   const subChats = (id: string) => results.sessions.filter((session) => session.parentId === id);
-  const visibleSessions = results.sessions.filter((session) => !session.parentId || !shownIds.has(session.parentId));
+  // The project lead sits first in its project.
+  const visibleSessions = results.sessions.filter((session) => !session.parentId || !shownIds.has(session.parentId))
+    .sort((a, b) => Number(Boolean(b.steward)) - Number(Boolean(a.steward)));
   const visibleGroups = results.groups;
   const searching = Boolean(query.trim());
   useEffect(() => {
@@ -198,7 +200,7 @@ export function Sidebar(props: SidebarProps) {
       onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}
       onPointerDown={(event) => startDrag(event, session)}>
       <button className={`sidebar-chat-open ${parentActive ? "active" : ""}`} aria-current={parentActive ? "page" : undefined} title={`${session.title} · ${agentNames[session.agent]} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
-        {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}<span className="sidebar-session-title">{session.title}</span>
+        {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}{session.steward && <UserCheck size={13} className="sidebar-steward" aria-label={t("steward.badge")} />}<span className="sidebar-session-title">{session.title}</span>
         {(() => { const progress = goalProgress(session); return progress && <small className="sidebar-goal-progress" title={t("goal.progressTitle", progress)}>{progress.done}/{progress.total}</small>; })()}
       </button>
       <button className={`sidebar-chat-toggle${open ? " open" : ""}`} aria-label={t(open ? "side.collapseWorkers" : "side.expandWorkers", { title: session.title })} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={14} className={`folder-chevron ${open ? "open" : ""}`} /></button>
@@ -315,6 +317,7 @@ export function Sidebar(props: SidebarProps) {
     if (!session) return [];
     return [
       { kind: "action", label: t("side.rename"), icon: <Pencil size={15} />, disabled: busy, onSelect: () => setEditor({ kind: "session", id: session.id, value: session.title }) },
+      ...(props.onSetSteward && !session.parentId ? [{ kind: "action" as const, label: t(session.steward ? "steward.unset" : "steward.set"), icon: <UserCheck size={15} />, disabled: busy, onSelect: () => void props.onSetSteward!(session.id, !session.steward) }] : []),
       { kind: "submenu", label: t("side.moveToGroup"), icon: <FolderInput size={15} />, disabled: busy, items: moveTree(session), onPick: (id) => void props.onAssign(session.id, id).then((ok) => { if (ok && id) expand(id); }) },
       ...moveItems((target) => void props.onMoveSession?.(session.id, target), Boolean(props.onMoveSession)),
       { kind: "separator" },
