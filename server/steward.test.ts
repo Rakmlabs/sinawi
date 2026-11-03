@@ -77,6 +77,32 @@ test("a project lead keeps its notes and transcript, merges each turn's work and
   assert.equal(chat.steward!.turns, 1);
 });
 
+test("a lead's review of its workers gets the notes and the transcript too", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const leadPrompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      await writeFile(join(options.cwd, "a.txt"), "a\n");
+      return { exitCode: 0, finalText: "상태: 완료" };
+    }
+    leadPrompts.push(options.prompt);
+    return { exitCode: 0, finalText: `<<CHECKLIST>>\n- [ ] a.txt 만들기\n<</CHECKLIST>>\n<<DELEGATE to="claude">>a.txt 만들기<</DELEGATE>>\n<<NOTES>>\n- 결정: 파일은 a.txt\n<</NOTES>>` };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.worktreeDataDir = dataDir;
+  orchestra.stewardDataDir = dataDir;
+  const chat = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: repo });
+  await waitFor(() => chat.status === "done");
+  orchestra.setSteward(chat.id, true);
+  await orchestra.followup(chat.id, "a.txt 만들어");
+  await waitFor(() => leadPrompts.some((prompt) => prompt.startsWith("이어받기 전 압축 요약")), 10_000);
+  const review = leadPrompts.find((prompt) => prompt.startsWith("이어받기 전 압축 요약"))!;
+  assert.match(review, /## 프로젝트 담당/u);
+  assert.match(review, /결정: 파일은 a\.txt/u, "the review sees the notes the lead just wrote");
+  assert.ok(review.includes(transcriptPath(dataDir, chat.id)), "the review knows where the transcript is");
+  await orchestra.stop(chat.id);
+});
+
 test("a lead's merge that fails keeps the branch and tries again after the next turn", async (t) => {
   const { repo, dataDir } = await setup(t);
   const runner = async (options: RunCliOptions) => {

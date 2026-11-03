@@ -552,7 +552,9 @@ export class Orchestra {
       const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()], Boolean(session.parentId || session.steward)).catch(() => "");
       const gitFacts = await repoSnapshot(session.cwd).catch(() => "");
       const goalReview = session.goal ? `\n\n${goalRules(false)}${session.goal.items.length ? `\n\n이번 턴 시작 때의 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
-      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${goalReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
+      // The review is a fresh CLI session too: a lead needs its notes and transcript here as well.
+      const stewardReview = await this.stewardContext(session);
+      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
       const reviewStart = session.events.length;
       let review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
       if (controller.signal.aborted) return this.finishStopped(session, controller);
