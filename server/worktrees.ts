@@ -1,7 +1,10 @@
 /**
  * Per-worker git worktrees. When a session folder is inside a git repository, every worker that may
  * write files runs in its own worktree on its own branch, so parallel or successive workers never
- * edit the same checkout. The app never merges: the developer reviews and merges the branches.
+ * edit the same checkout. Ordinary sessions never merge: the developer reviews and merges the
+ * branches. A goal session started by a commander (server/goals.ts) has its verified branches merged
+ * into the main checkout by mergeWorktree, which never touches the main tree when the merge would
+ * conflict.
  *
  * Worktrees live under `<data dir>/worktrees/<repo>-<hash>/`, outside the repository, so they need
  * no .gitignore entry and repo-wide tools (rg, tsc, test runners) never pick up the copies.
@@ -260,7 +263,7 @@ export async function removeWorktree(info: WorktreeInfo, options: { force?: bool
 const clip = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
 
 /** What the lead needs to review worker changes: where they are and what changed. */
-export async function worktreeReviewNote(infos: WorktreeInfo[]): Promise<string> {
+export async function worktreeReviewNote(infos: WorktreeInfo[], autoMerge = false): Promise<string> {
   if (!infos.length) return "";
   const sections = await Promise.all(infos.map(async (info) => {
     const inspected = await inspectWorktree(info).catch(() => undefined);
@@ -278,7 +281,7 @@ export async function worktreeReviewNote(infos: WorktreeInfo[]): Promise<string>
     return lines.join("\n");
   }));
   return `## 워커 변경 위치 (git worktree)
-파일을 고친 워커는 메인 작업 폴더가 아니라 각자 아래 worktree에서 일했습니다. 검토할 때는 이 경로의 파일을 읽으세요(메인 폴더에는 이 변경이 없습니다). 앱은 자동 병합하지 않습니다. 최종 답에 각 워커의 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요.
+파일을 고친 워커는 메인 작업 폴더가 아니라 각자 아래 worktree에서 일했습니다. 검토할 때는 이 경로의 파일을 읽으세요(메인 폴더에는 이 변경이 없습니다). ${autoMerge ? "이 세션은 총지휘의 목표라서, 체크리스트가 모두 끝나면 앱이 이 브랜치들을 메인 폴더에 병합합니다. 검증하지 않은 작업은 [x]로 표시하지 마세요." : "앱은 자동 병합하지 않습니다. 최종 답에 각 워커의 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요."}
 ${sections.join("\n")}`;
 }
 
@@ -334,4 +337,89 @@ export async function cleanupSessionWorktrees(infos: WorktreeInfo[]): Promise<{ 
     }
   }
   return { removed, kept };
+}
+
+const mergeLocks = new Map<string, Promise<unknown>>();
+
+/** One merge at a time per repository: two goal sessions finishing together must not race in the main checkout. */
+function withMergeLock<T>(repoRoot: string, task: () => Promise<T>): Promise<T> {
+  const run = (mergeLocks.get(repoRoot) ?? Promise.resolve()).catch(() => undefined).then(task);
+  const tail = run.catch(() => undefined);
+  mergeLocks.set(repoRoot, tail);
+  void tail.then(() => { if (mergeLocks.get(repoRoot) === tail) mergeLocks.delete(repoRoot); });
+  return run;
+}
+
+const gitError = (error: unknown) => {
+  const text = (error as { stderr?: string })?.stderr || (error instanceof Error ? error.message : String(error));
+  return text.trim().split("\n").filter(Boolean).slice(0, 4).join(" / ").slice(0, 400);
+};
+
+/** Commits made by the app carry this identity when the repository has none configured. */
+const identity = ["-c", "user.name=Sinawi", "-c", "user.email=sinawi@localhost"];
+
+async function configured(repoRoot: string): Promise<boolean> {
+  return Boolean((await tryGit(repoRoot, ["config", "user.email"]))?.trim());
+}
+
+export interface MergeResult {
+  ok: boolean;
+  /** Nothing to merge: the worktree held no change and no commit. */
+  empty?: boolean;
+  /** Merge commit (or fast result) on the main checkout. */
+  commit?: string;
+  /** Branch the main checkout was on. */
+  into?: string;
+  text: string;
+}
+
+/**
+ * Merges a worktree's work into the branch the main checkout has checked out: commits what is still
+ * uncommitted in the worktree (leaving out byte-identical copies of main-tree files), checks with
+ * `git merge-tree` that the merge is clean, then merges with --no-ff. A conflict, a detached main
+ * checkout or local changes git refuses to overwrite leave the main tree as it was and keep the
+ * worktree and branch. After a merge the worktree is removed and the merged branch deleted.
+ */
+export async function mergeWorktree(info: WorktreeInfo, message: string): Promise<MergeResult> {
+  return withMergeLock(info.repoRoot, async () => {
+    let inspected;
+    try { inspected = await inspectWorktree(info); } catch (error) { return { ok: false, text: `worktree 상태를 확인하지 못했습니다: ${gitError(error)}` }; }
+    const { status, noise } = inspected;
+    const author = await configured(info.repoRoot) ? [] : identity;
+    if (status.exists && status.uncommitted > 0) {
+      try {
+        await git(info.path, ["add", "-A", "--", ".", ...noise.map((entry) => `:(exclude)${entry}`)]);
+        await git(info.path, [...author, "commit", "-q", "--no-verify", "-m", `sinawi: ${info.workerLabel ?? info.workerId} 작업`]);
+      } catch (error) {
+        return { ok: false, text: `worktree 변경을 커밋하지 못했습니다: ${gitError(error)}` };
+      }
+    }
+    const commits = await branchExists(info.repoRoot, info.branch)
+      ? Number((await tryGit(info.repoRoot, ["rev-list", "--count", `${info.base}..${info.branch}`]))?.trim() ?? 0)
+      : 0;
+    if (!commits) {
+      await removeWorktree(info, { force: true }).catch(() => undefined);
+      return { ok: true, empty: true, text: "바뀐 내용이 없어 병합할 것이 없습니다." };
+    }
+    const into = (await tryGit(info.repoRoot, ["symbolic-ref", "--short", "-q", "HEAD"]))?.trim();
+    if (!into) return { ok: false, text: `메인 폴더가 브랜치가 아닌 커밋을 보고 있어 병합하지 않았습니다. 브랜치 \`${info.branch}\`는 남겨 두었습니다.` };
+    if (into === info.branch) return { ok: false, text: `메인 폴더가 작업 브랜치 \`${info.branch}\` 자체를 보고 있어 병합하지 않았습니다.` };
+    try {
+      await git(info.repoRoot, ["merge-tree", "--write-tree", "--no-messages", "HEAD", info.branch]);
+    } catch (error) {
+      // Exit 1 is a conflict; anything else (old git) falls through to the real merge, which refuses on its own.
+      if ((error as { code?: number }).code === 1) return { ok: false, into, text: `\`${into}\`와 충돌해 병합하지 않았습니다. 브랜치 \`${info.branch}\`에 그대로 있습니다.` };
+    }
+    try {
+      await git(info.repoRoot, [...author, "merge", "--no-ff", "--no-edit", "-m", message, info.branch], 120_000);
+    } catch (error) {
+      await tryGit(info.repoRoot, ["merge", "--abort"]);
+      return { ok: false, into, text: `병합하지 못했습니다(${gitError(error)}). 메인 폴더는 그대로이고 브랜치 \`${info.branch}\`에 남아 있습니다.` };
+    }
+    const commit = (await tryGit(info.repoRoot, ["rev-parse", "--short", "HEAD"]))?.trim();
+    if (status.exists) await tryGit(info.repoRoot, ["worktree", "remove", "--force", info.path]);
+    await tryGit(info.repoRoot, ["worktree", "prune"]);
+    await tryGit(info.repoRoot, ["branch", "-d", info.branch]);
+    return { ok: true, commit, into, text: `\`${into}\`에 병합했습니다${commit ? ` (${commit})` : ""}.` };
+  });
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Shuffle, Square, WandSparkles, X } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Flag, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Shuffle, Square, WandSparkles, X } from "lucide-react";
 import { ComposerPopover } from "../ComposerPopover";
 import { composerAction, composerLocked, continueListOnNewline, indentListLine, stopClickAllowed, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
 import type { SlashItem } from "./useComposerCompletion";
@@ -39,6 +39,9 @@ export type ComposerProps = {
   setAutoSwitch: (enabled: boolean) => void;
   permissionMode: PermissionMode;
   setPermissionMode: (mode: PermissionMode) => void;
+  /** How a new chat runs: one turn, to completion, or as a commander of goal sessions (server/goals.ts). */
+  runStyle: RunStyle;
+  setRunStyle: (style: RunStyle) => void;
   /** The workspace allows "전체 권한"; otherwise that mode is not offered. */
   fullAccessAllowed: boolean;
   agent: AgentId;
@@ -55,6 +58,10 @@ export type ComposerProps = {
   /** Team/agent picker rendered in the bottom bar (TeamBarSlot). */
   teamPicker?: ReactNode;
 };
+
+export type RunStyle = "once" | "goal" | "commander";
+
+const runStyles: RunStyle[] = ["once", "goal", "commander"];
 
 function slashDetail(item: SlashItem): string {
   if (item.kind === "skill") return item.skill.description || item.skill.source;
@@ -317,6 +324,10 @@ export function Composer(props: ComposerProps) {
           className={`permission-picker${props.permissionMode === "full" ? " danger" : ""}`}
           onChange={(value) => props.setPermissionMode(value as PermissionMode)}
           options={permissionModes(props.fullAccessAllowed).map((item) => ({ value: item.mode, label: item.label, title: item.title, icon: <ShieldCheck size={13} aria-hidden="true" /> }))} />
+        {!active && <GlassSelect label={t("comp.runStyle")} value={props.runStyle} disabled={busy}
+          className={`run-style-picker${props.runStyle === "once" ? "" : " active"}`}
+          onChange={(value) => props.setRunStyle(value as RunStyle)}
+          options={runStyles.map((style) => ({ value: style, label: t(`comp.run.${style}`), title: t(`comp.run.${style}Title`), icon: <Flag size={13} aria-hidden="true" /> }))} />}
         <span className="composer-bottom-spacer" />
         <input ref={fileInput} type="file" multiple hidden onChange={(event) => { attachFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
         <button type="button" className="icon-button" aria-label={t("comp.attachFile")} title={t("comp.attachTitle")} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>

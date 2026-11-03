@@ -102,6 +102,51 @@ export interface Session {
   worktrees?: WorktreeInfo[];
   /** Last raw CLI output of the running step, including output that renders nothing (thinking). */
   lastActivityAt?: string;
+  /** Run-to-completion: the app keeps opening turns until the lead's checklist is settled (server/goals.ts). */
+  goal?: GoalState;
+  /** This session only splits work into goal sessions and reports on them (server/goals.ts). */
+  commander?: CommanderState;
+  /** The commander session this goal session was started for. */
+  parentId?: string;
+}
+
+export interface GoalItem {
+  text: string;
+  status: "open" | "done" | "blocked";
+  note?: string;
+}
+
+export interface GoalState {
+  items: GoalItem[];
+  startedAt: string;
+  /** Turns the app opened by itself. */
+  autoTurns: number;
+  /** Auto turns in a row that settled no item. */
+  idleTurns: number;
+  /** Why the loop ended; unset while it runs. */
+  stopped?: string;
+  /** How it ended: every item settled, the user stopped it, or a limit or error cut it short. */
+  outcome?: "complete" | "stopped" | "unfinished";
+}
+
+export type CommanderGoalState = "waiting" | "running" | "done" | "merged" | "blocked" | "failed" | "stopped";
+
+export interface CommanderGoal {
+  key: string;
+  title: string;
+  brief: string;
+  after: string[];
+  state: CommanderGoalState;
+  childId?: string;
+  merge?: { ok: boolean; text: string; commit?: string };
+  createdAt: string;
+  endedAt?: string;
+}
+
+export interface CommanderState {
+  goals: CommanderGoal[];
+  /** The commander was told every goal settled; reset when goals are added. */
+  reported?: boolean;
 }
 
 /** A worker's own git worktree and branch (see server/worktrees.ts). */
@@ -231,6 +276,11 @@ export interface StartSessionInput extends ConversationSettings {
   resumeSessionId?: string;
   groupId?: string;
   workspaceId?: WorkspaceId;
+  /** Run to completion (server/goals.ts). */
+  goal?: boolean;
+  /** Commander session: splits the request into goal sessions (server/goals.ts). */
+  commander?: boolean;
+  parentId?: string;
 }
 
 export interface ConversationInput {
