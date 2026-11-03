@@ -1580,7 +1580,18 @@ export class Orchestra {
     delete session.handoffContext;
     const taken = new Set(state.goals.map((goal) => goal.key));
     const renamed = new Map<string, string>();
-    const added = parseGoals(result.finalText, taken).map((parsed) => {
+    // A goal the board already has is not added again (the commander tends to restate goals when
+    // the user asks to carry on); only a stopped or failed one may come back as a new goal.
+    const sameTitle = (title: string) => title.replace(/\s+/gu, " ").trim().toLowerCase();
+    const live = new Map(state.goals.filter((goal) => goal.state !== "stopped" && goal.state !== "failed").map((goal) => [sameTitle(goal.title), goal.key]));
+    const duplicates: string[] = [];
+    const added = parseGoals(result.finalText, taken).filter((parsed) => {
+      const existing = live.get(sameTitle(parsed.title));
+      if (!existing) return true;
+      renamed.set(parsed.key, existing);
+      duplicates.push(existing);
+      return false;
+    }).map((parsed) => {
       let key = parsed.key;
       for (let n = state.goals.length + 1; taken.has(key); n++) key = `g${n}`;
       taken.add(key);
@@ -1597,6 +1608,7 @@ export class Orchestra {
       state.reported = false;
       this.event(session, session.agent, "status", `목표 ${added.length}개를 등록했습니다: ${added.map((goal) => `[${goal.key}] ${goal.title}${goal.after.length ? ` (${goal.after.join(", ")} 다음)` : ""}`).join(", ")}`);
     }
+    if (duplicates.length) this.event(session, session.agent, "status", `이미 보드에 있는 목표는 다시 만들지 않았습니다: ${duplicates.map((key) => `[${key}]`).join(", ")}`);
     this.finish(session);
   }
 }

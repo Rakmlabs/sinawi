@@ -175,7 +175,8 @@ test("writing to the commander again retries a goal whose merge failed and the g
       return { exitCode: 0, finalText: "상태: 완료" };
     }
     if (options.prompt.includes("당신은 Sinawi의 총지휘입니다")) {
-      if (options.prompt.includes("다시 해")) return { exitCode: 0, finalText: "다시 시도합니다." };
+      // Restates a goal the board already has, as a real lead did: the app must not run it twice.
+      if (options.prompt.includes("다시 해")) return { exitCode: 0, finalText: '다시 시도합니다.\n<<GOAL id="g9" title="둘째">>FILE-two<</GOAL>>' };
       if (options.prompt.includes("모든 목표가 끝났습니다")) return { exitCode: 0, finalText: "정리" };
       return { exitCode: 0, finalText: '<<GOAL id="g1" title="첫째">>FILE-one<</GOAL>>\n<<GOAL id="g2" title="둘째" after="g1">>FILE-two<</GOAL>>' };
     }
@@ -193,6 +194,7 @@ test("writing to the commander again retries a goal whose merge failed and the g
   git(repo, "checkout", "-q", "main");
   await orchestra.followup(commander.id, "다시 해");
   await waitFor(() => commander.commander!.goals.every((goal) => goal.state === "merged"), 15_000);
+  assert.equal(commander.commander!.goals.length, 2, "the restated goal was not added again");
   assert.equal(await readFile(join(repo, "one.txt"), "utf8"), "one\n");
   assert.equal(await readFile(join(repo, "two.txt"), "utf8"), "two\n");
 });
