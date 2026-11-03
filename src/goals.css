@@ -1,0 +1,41 @@
+.goal-panel {
+  margin: 4px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  font-size: calc(13px * var(--font-scale));
+}
+.goal-panel > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  list-style: none;
+}
+.goal-panel > summary::-webkit-details-marker { display: none; }
+.goal-panel > summary span { color: var(--text-subtle); font-size: calc(12px * var(--font-scale)); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-items, .goal-board { margin: 0; padding: 0 12px 10px; list-style: none; display: grid; gap: 6px; }
+.goal-board { gap: 10px; }
+.goal-item { display: flex; align-items: flex-start; gap: 7px; min-width: 0; color: var(--text-secondary); }
+.goal-item svg { flex: none; margin-top: 2px; }
+.goal-item span { overflow-wrap: anywhere; }
+.goal-item em { color: var(--text-subtle); font-style: normal; }
+.goal-item.done span { color: var(--text-muted); }
+.goal-done { color: var(--success-fg, var(--accent-fg)); }
+.goal-blocked { color: var(--warn-fg); }
+.goal-open { color: var(--text-subtle); }
+.goal-card { border-top: 1px solid var(--border-subtle); padding-top: 10px; min-width: 0; }
+.goal-card .goal-items { padding: 6px 0 0; }
+.goal-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.goal-head code { font-size: calc(12px * var(--font-scale)); color: var(--text-subtle); }
+.goal-head strong { min-width: 0; overflow-wrap: anywhere; }
+.goal-state, .goal-progress { font-size: calc(12px * var(--font-scale)); color: var(--text-muted); }
+.goal-state { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border-subtle); }
+.goal-state.running { color: var(--accent-fg); border-color: currentColor; }
+.goal-state.merged, .goal-state.done { color: var(--success-fg, var(--accent-fg)); }
+.goal-state.blocked, .goal-state.failed, .goal-state.stopped { color: var(--warn-fg); }
+.goal-open-session { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: calc(12px * var(--font-scale)); }
+.goal-note { display: flex; align-items: center; gap: 5px; margin: 4px 0 0; color: var(--text-muted); font-size: calc(12px * var(--font-scale)); overflow-wrap: anywhere; }
+.goal-note.warn { color: var(--warn-fg); }

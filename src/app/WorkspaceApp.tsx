@@ -62,7 +62,7 @@ import { SettingsPage } from "../settings/controls";
 import { isCategory, lastCategory, rememberCategory, settingsShortcut, SETTINGS_OPEN_EVENT, type SettingsCategory } from "../settings/settings-nav";
 import { UsagePanel } from "../UsagePanel";
 import { BotsView } from "./BotsView";
-import { Composer } from "./Composer";
+import { Composer, type RunStyle } from "./Composer";
 import { MessageList } from "./MessageList";
 import { QuotaReturnBanner } from "./QuotaReturnBanner";
 import { SessionsView } from "./SessionsView";
@@ -138,6 +138,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const shownPermissionMode: PermissionMode = permissionMode === "full" && !fullAccessAllowed ? "auto" : permissionMode;
   /** The mode to go back to when a plan is executed. */
   const permissionModeBeforePlan = useRef<PermissionMode>("auto");
+  const [runStyle, setRunStyle] = useState<RunStyle>("once");
   const [quotaFallback, setQuotaFallback] = useState(defaults.quotaFallback ?? true);
   const [quotaThreshold, setQuotaThreshold] = useState(defaults.quotaThreshold ?? 3);
   const [fallbackOrder, setFallbackOrder] = useState(defaults.fallbackOrder ?? {});
@@ -532,6 +533,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
             workerConfigs: normalizeWorkerConfigs(workers, workerConfigs),
             skills: [...new Set([...skills, ...messageSkills])], groupId: groupId || undefined,
             systemPrompt, mode, autoSwitch, workspaceId, permissionMode: sendMode,
+            ...(runStyle === "commander" ? { commander: true } : runStyle === "goal" ? { goal: true } : {}),
           }, executeRecommendation ? pendingRecommendation : undefined, setRouting);
           setSessions((old) => [s, ...old.filter((x) => x.id !== s.id)]);
           setSelected(s.id);
@@ -827,6 +829,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                       <MessageList active={active} events={conversationEvents} tasksById={tasksById} latestHandoffId={latestHandoffId} latestAssistantId={latestAssistant?.id}
                         choiceOptions={choiceOptions} streamingMessageId={streamingMessageId} busy={busy} bottomRef={bottom}
                         draft={active.status === "running" ? drafts[`${active.id}:`] : undefined}
+                        lookupSession={(id) => sessions.find((item) => item.id === id)} onOpenSession={selectConversation}
                         onUndoHandoff={(eventId) => void sessionAction(`/sessions/${active.id}/handoff/undo`, { eventId })}
                         onOpenWorker={(workerId) => { selectWorker(active.id, workerId); if (!sidebarState.current.overlay) setSidebarOpen(true); }}
                         onPromote={promoteLiveMessage}
@@ -842,7 +845,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning} onOpenWorkspaceSettings={openWorkspaceSettings}
                     mode={mode} setMode={setMode} autoSwitch={active ? active.autoSwitch ?? autoSwitch : autoSwitch}
                     setAutoSwitch={(enabled) => { if (!active) setAutoSwitch(enabled); else void safe(async () => { replaceFromServer(await api<Session>(`/sessions/${active.id}/auto-switch`, { enabled }, "PATCH")); }); }}
-                    permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed}
+                    permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed} runStyle={runStyle} setRunStyle={setRunStyle}
                     setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
                     send={send} runCommand={runCommand} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}

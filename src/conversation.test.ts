@@ -206,3 +206,8 @@ test("after a quota fallback the card names the agent and model that actually ra
   assert.equal(renamed.event.workerLabel, "프론트", "a custom label stays");
   assert.equal(renamed.event.model, undefined, "the fallback's CLI default, not Codex's model");
 });
+
+test("checklists leave the chat text and commander goals read as one line", () => {
+  const text = conversationText('계획입니다.\n<<CHECKLIST>>\n- [ ] A\n<</CHECKLIST>>\n<<GOAL id="g1" title="로그인">>\n## 목표\n길게\n<</GOAL>>');
+  assert.equal(text, "계획입니다.\n\n- **[g1] 로그인**");
+});

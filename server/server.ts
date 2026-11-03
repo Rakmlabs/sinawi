@@ -217,6 +217,8 @@ function startInput(body: any, workspace: WorkspaceResolver, fallbackWorkspace: 
     systemPrompt: optionalString(body?.systemPrompt, 50_000), resumeSessionId: optionalString(body?.resumeSessionId, 500),
     groupId: optionalString(body?.groupId, 500),
     workspaceId: workspace(body?.workspaceId, fallbackWorkspace),
+    // A commander's goal sessions are started by the app (parentId), never from a request.
+    ...(body?.commander === true ? { commander: true } : body?.goal === true ? { goal: true } : {}),
   };
 }
 
@@ -859,6 +861,21 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const input = startInput(req.body, workspace, currentWorkspace());
       await assertMediaAvailable(input.prompt, input.workspaceId ?? currentWorkspace());
       if (input.groupId && !(await loadGroups(options.dataDir)).some((group) => group.id === input.groupId && group.workspaceId === input.workspaceId)) throw new Error("그룹을 찾을 수 없습니다.");
+      // A commander and its goal sessions share a sidebar folder of their own.
+      if (input.commander && !input.groupId) {
+        const workspaceId = input.workspaceId ?? currentWorkspace();
+        const base = `총지휘 · ${input.prompt.replace(/\s+/gu, " ").trim().slice(0, 40)}`;
+        const group = await mutateGroups((groups) => {
+          const taken = new Set(groups.filter((item) => item.workspaceId === workspaceId).map((item) => item.name.toLocaleLowerCase()));
+          let name = base;
+          for (let n = 2; taken.has(name.toLocaleLowerCase()); n++) name = `${base} (${n})`;
+          const created: Group = { id: randomUUID(), name, createdAt: new Date().toISOString(), workspaceId };
+          groups.push(created);
+          return created;
+        }, options.dataDir);
+        broadcastGroups(await loadGroups(options.dataDir));
+        input.groupId = group.id;
+      }
       res.status(201).json(await orchestra.create(input));
     }
     catch (error) { errorResponse(res, error); }

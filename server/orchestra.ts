@@ -7,7 +7,7 @@ import { SHOT_DIR } from "./computer-bridge.js";
 import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
 import { enabledPublicSkills, filterEnabledSkills, loadSkills, resolveSkillPrompt } from "./skills.js";
 import { skillCatalog, workerSkillSection } from "./skill-routing.js";
-import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
+import type { AgentId, AgentSelection, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
@@ -16,7 +16,8 @@ import { allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, ful
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
-import { ensureWorkerWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
+import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
+import { COMMANDER_RULES, commanderBoard, GOAL_RULES, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 
 const delegationPattern = /<<DELEGATE\s+to=["']([\w.-]{1,100})["']>>(.*?)<<\/DELEGATE>>/gis;
@@ -106,6 +107,14 @@ export class Orchestra {
   private controllers = new Map<string, AbortController>();
   private inactivityTimers = new Map<string, NodeJS.Timeout>();
   private configs = new Map<string, { skills: string[]; systemPrompt: string }>();
+  /** The checklist the lead wrote last in a goal session's running turn. */
+  private turnChecklists = new Map<string, GoalItem[]>();
+  /** Goal sessions whose next followup is a turn the app opens itself. */
+  private goalAutoNext = new Set<string>();
+  /** Goal sessions whose running turn the app opened itself. */
+  private goalAutoTurn = new Set<string>();
+  /** Goal sessions started by a commander run at once, at most. */
+  commanderParallelGoals = 3;
   /** Per-session kill switch + stall detector for the worker currently running. */
   /** One per running worker (`guardKey`): workers of a session run at the same time. */
   private workerGuards = new Map<string, { kill: AbortController; detector: StallDetector; stall?: StallSignal }>();
@@ -260,6 +269,13 @@ export class Orchestra {
       this.sessions.set(session.id, session);
       this.configs.set(session.id, { skills: session.skills ?? [], systemPrompt: session.systemPrompt ?? "" });
     }
+    // The app quit while goals ran: those goals wait again and resume in their own session on the
+    // commander's next tick (its next turn).
+    for (const session of sessions) {
+      for (const goal of session.commander?.goals ?? []) {
+        if (goal.state === "running" && this.sessions.get(goal.childId ?? "")?.status !== "running") goal.state = "waiting";
+      }
+    }
   }
 
   list(): Session[] {
@@ -341,6 +357,8 @@ export class Orchestra {
       groupId: input.groupId,
       workspaceId,
       skills: selectedSkills, systemPrompt: input.systemPrompt ?? "",
+      ...(input.commander ? { commander: { goals: [] } } : input.goal ? { goal: { items: [], startedAt: new Date().toISOString(), autoTurns: 0, idleTurns: 0 } } : {}),
+      ...(input.parentId ? { parentId: input.parentId } : {}),
     };
     this.sessions.set(session.id, session);
     this.configs.set(session.id, { skills: selectedSkills, systemPrompt: input.systemPrompt ?? "" });
@@ -356,6 +374,8 @@ export class Orchestra {
   private async execute(session: Session, userPrompt: string, skillIds: string[], systemPrompt: string, controller: AbortController, requiresGrokMedia: boolean) {
     if (!this.isCurrentRun(session, controller.signal)) return;
     const runStartedAt = Date.now();
+    this.turnChecklists.delete(session.id);
+    if (session.commander) return this.executeCommander(session, userPrompt, systemPrompt, controller);
     this.assertSessionPolicy(session);
     if (requiresGrokMedia) assertMediaAllowed(this.workspacePolicyResolver?.(session.workspaceId));
     if (requiresGrokMedia && session.agent !== "grok") {
@@ -388,11 +408,13 @@ export class Orchestra {
     const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";
     const planMode = this.permissionModeOf(session) === "plan";
     const planNotice = planMode ? `\n\n${PLAN_MODE_NOTICE}${await repoSnapshot(session.cwd).then((facts) => facts ? `\n\n${facts}` : "").catch(() => "")}` : "";
-    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
+    const goalRules = session.goal ? `\n\n${GOAL_RULES}${session.goal.items.length ? `\n\n지금 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
+    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalRules}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
     const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     if (first.sessionId) session.cliSessionId = first.sessionId;
     if (first.exitCode !== 0) throw new Error(`${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
+    this.noteChecklist(session, first.finalText);
     delete session.handoffContext;
     // Plan mode: the lead's read-only answer is the plan; nothing is handed to workers.
     if (planMode) return this.finish(session);
@@ -501,7 +523,8 @@ export class Orchestra {
       if (halt) throw new Error(halt === "denied" ? "사용자가 컴퓨터 조작을 거부해 작업을 멈췄습니다." : "사용자가 컴퓨터 조작을 중지해 작업을 멈췄습니다.");
       // Like Claude Code and Codex, a worker report that says "상태: 완료" is the answer: no second,
       // context-poor review run (it took as long as the work itself and was often cancelled).
-      if (workerResults.length && workerResults.every((text) => CLEAN_REPORT.test(text))) {
+      // A goal session needs the review: that is where the lead checks the work and updates the checklist.
+      if (!session.goal && workerResults.length && workerResults.every((text) => CLEAN_REPORT.test(text))) {
         this.event(session, session.agent, "message", workerResults.map((text) => workerResults.length === 1 ? text.replace(REPORT_HEADER, "") : text).join("\n\n"), { role: "orchestrator", metadata: { phase: "worker-report", round } });
         return this.finish(session);
       }
@@ -511,13 +534,15 @@ export class Orchestra {
       this.event(session, session.agent, "status", round === 0 ? "총괄이 워커 결과를 검증하고 있습니다." : `총괄이 재계획 ${round}회차 결과를 검증하고 있습니다.`, { role: "orchestrator", metadata: { phase: "verify", round } });
       const roundFailed = workerResults.some((text) => CUT_REPORT.test(text));
       const strict = roundFailed && roundsLeft > 0 && session.agent === "grok";
-      const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()]).catch(() => "");
+      const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()], Boolean(session.parentId)).catch(() => "");
       const gitFacts = await repoSnapshot(session.cwd).catch(() => "");
-      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
+      const goalReview = session.goal ? `\n\n${GOAL_RULES}${session.goal.items.length ? `\n\n이번 턴 시작 때의 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
+      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${goalReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
       const reviewStart = session.events.length;
       let review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
       if (controller.signal.aborted) return this.finishStopped(session, controller);
       if (review.exitCode !== 0) throw new Error(`${agentNames[session.agent]} 후속 실행이 종료 코드 ${review.exitCode}로 끝났습니다.`);
+      this.noteChecklist(session, review.finalText);
       // Exit code 0 but the CLI stopped early: hand over the workers' reports instead of a silent "완료".
       if (session.events.slice(reviewStart).some((event) => event.type === "error" && event.role === "orchestrator" && /중단되었습니다 \(/u.test(event.text))) {
         this.event(session, session.agent, "warning", "총괄 검증이 중간에 끊겼습니다. 아래는 검증하지 못한 워커 보고입니다.", { role: "orchestrator", metadata: { phase: "verify-cut", round } });
@@ -534,6 +559,7 @@ export class Orchestra {
           if (review.sessionId) session.cliSessionId = review.sessionId;
           if (controller.signal.aborted) return this.finishStopped(session, controller);
           next = review.exitCode === 0 ? resolveRequests(review.finalText) : [];
+          if (review.exitCode === 0) this.noteChecklist(session, review.finalText);
         }
       }
       // The lead gave up on a blocked worker: that is not a finished task, whatever the lead wrote.
@@ -571,7 +597,7 @@ export class Orchestra {
     const checkouts = await userWorktrees(session.cwd, this.worktreeDataDir).catch(() => []);
     const siblings = checkouts.length > 1 ? `\n\n## 이 저장소의 사용자 작업 폴더 (git worktree)\n같은 저장소를 사용자가 여러 폴더로 나눠 쓰고 있습니다. 세션 폴더는 \`${session.cwd}\`입니다.\n${checkouts.map((item) => `- \`${item.path}\` — ${item.branch ? `브랜치 \`${item.branch}\`` : "detached"} @ ${item.head}`).join("\n")}\n사용자가 "기존꺼", "다른 폴더/워크트리", 브랜치 이름을 말하면 이 목록에서 찾아 확인하고 쓰세요. 배포·롤백 대상이 어느 폴더·브랜치인지 원격 브랜치와 비교해 정합니다.` : "";
     return `${siblings}\n\n## 워커 작업 위치 (git worktree)
-이 세션 폴더는 git 저장소입니다. 파일을 고치는 워커는 각자 전용 git worktree와 브랜치(\`sinawi/${session.id.slice(0, 8)}/<워커 ID>\`)에서 일하고, 메인 폴더는 바뀌지 않습니다. 같은 라운드의 워커들은 서로의 변경을 보지 못하므로, 서로 의존하는 일은 한 워커에게 맡기거나 다음 라운드로 나누세요. 같은 워커는 다음 라운드에도 자기 worktree를 이어 씁니다. 워커 결과와 함께 각 worktree의 경로·브랜치·바뀐 파일을 알려 드립니다. 검토는 그 경로에서 하세요. 앱은 자동 병합하지 않습니다. 최종 답에 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요.${dirty ? "\n메인 폴더에 커밋되지 않은 변경이 있습니다. worktree는 마지막 커밋(HEAD) 기준이라 그 변경이 들어 있지 않습니다. 워커 브리프의 맥락에 이 사실을 적으세요." : ""}`;
+이 세션 폴더는 git 저장소입니다. 파일을 고치는 워커는 각자 전용 git worktree와 브랜치(\`sinawi/${session.id.slice(0, 8)}/<워커 ID>\`)에서 일하고, 메인 폴더는 바뀌지 않습니다. 같은 라운드의 워커들은 서로의 변경을 보지 못하므로, 서로 의존하는 일은 한 워커에게 맡기거나 다음 라운드로 나누세요. 같은 워커는 다음 라운드에도 자기 worktree를 이어 씁니다. 워커 결과와 함께 각 worktree의 경로·브랜치·바뀐 파일을 알려 드립니다. 검토는 그 경로에서 하세요. ${session.parentId ? "이 세션은 총지휘의 목표라서, 체크리스트가 모두 끝나면 앱이 브랜치를 메인 폴더에 병합합니다." : "앱은 자동 병합하지 않습니다. 최종 답에 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요."}${dirty ? "\n메인 폴더에 커밋되지 않은 변경이 있습니다. worktree는 마지막 커밋(HEAD) 기준이라 그 변경이 들어 있지 않습니다. 워커 브리프의 맥락에 이 사실을 적으세요." : ""}`;
   }
 
   /** Runs `task` while holding the session's worktree mutex (queued behind earlier holders). */
@@ -974,6 +1000,11 @@ export class Orchestra {
     this.assertPermissionMode(session.workspaceId, settings.permissionMode);
     session.status = "running";
     delete session.endedAt;
+    const auto = this.goalAutoNext.delete(id);
+    if (auto) this.goalAutoTurn.add(id);
+    else this.goalAutoTurn.delete(id);
+    // The user's own message restarts a goal loop that had stopped, with a fresh budget.
+    if (session.goal && !auto) Object.assign(session.goal, { idleTurns: 0, autoTurns: 0, startedAt: new Date().toISOString(), stopped: undefined, outcome: undefined });
     const controller = new AbortController();
     this.controllers.set(id, controller);
     if (settings.mode !== undefined) session.mode = settings.mode;
@@ -1301,10 +1332,11 @@ export class Orchestra {
     if (session.status !== "running") return;
     session.status = blocked ? "error" : "done"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
-    if (blocked) this.event(session, session.agent, "error", "워커가 막힌 채로 끝났고 총괄이 다시 맡기지 않았습니다. 작업은 끝나지 않았습니다.");
-    else this.event(session, session.agent, "status", "세션이 완료되었습니다.");
+    if (blocked && !session.goal) this.event(session, session.agent, "error", "워커가 막힌 채로 끝났고 총괄이 다시 맡기지 않았습니다. 작업은 끝나지 않았습니다.");
+    else this.event(session, session.agent, "status", session.goal ? "이번 턴을 마쳤습니다." : "세션이 완료되었습니다.");
     // A message typed during this run that no turn picked up is the user's next request, not a note for later.
     const leftover = session.pendingInstructions ?? [];
+    this.afterTurn(session, "done", leftover.length > 0);
     if (!leftover.length) return;
     delete session.pendingInstructions;
     this.event(session, session.agent, "status", "진행 중에 받은 메시지를 이어서 처리합니다.");
@@ -1318,6 +1350,7 @@ export class Orchestra {
     session.status = "stopped"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     this.event(session, session.agent, "status", "중지됨");
+    this.afterTurn(session, "stopped", false);
   }
   private fail(session: Session, error: unknown, controller?: AbortController) {
     if (controller && this.controllers.get(session.id) !== controller) return;
@@ -1326,5 +1359,210 @@ export class Orchestra {
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     const message = error instanceof Error ? error.message : String(error);
     this.event(session, session.agent, "error", message);
+    this.afterTurn(session, "error", false);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Run-to-completion and the commander (server/goals.ts)
+
+  private noteChecklist(session: Session, text: string): void {
+    const items = session.goal ? parseChecklist(text) : undefined;
+    if (items) this.turnChecklists.set(session.id, items);
+  }
+
+  /**
+   * After every turn of a goal session: take the lead's latest checklist, then open the next turn
+   * unless the checklist is settled, the user stopped the run or a limit was reached. A failed turn
+   * (CLI error, watchdog) counts as a turn without progress, so a run that keeps failing still ends.
+   */
+  private afterTurn(session: Session, outcome: "done" | "error" | "stopped", userMessageWaiting: boolean): void {
+    const items = this.turnChecklists.get(session.id);
+    this.turnChecklists.delete(session.id);
+    if (session.commander) {
+      this.commanderTick(session);
+      return;
+    }
+    const goal = session.goal;
+    if (!goal || goal.stopped) return;
+    const auto = this.goalAutoTurn.delete(session.id);
+    const before = settledCount(goal.items);
+    if (items) goal.items = items;
+    const progressed = settledCount(goal.items) > before || !before && Boolean(items) && !auto;
+    goal.idleTurns = progressed ? 0 : goal.idleTurns + 1;
+    if (outcome === "stopped") return this.endGoal(session, "사용자가 중지했습니다.", "stopped");
+    // The user's waiting message runs next (finish starts it); the loop resumes after that turn.
+    if (userMessageWaiting) return;
+    const step = nextGoalStep(session);
+    // A lead that forgot the checklist gets one more turn to write it.
+    if (!step.continue && step.reason === "no-checklist" && goal.autoTurns === 0 && outcome === "done") {
+      goal.autoTurns++;
+      this.goalAutoNext.add(session.id);
+      void this.followup(session.id, "[앱 — 끝까지 모드] 체크리스트가 없습니다. 사용자 요청 전체를 <<CHECKLIST>> 형식으로 나누고, 지금까지 한 일을 확인해 표시한 뒤 남은 항목을 위임하세요.", [], {}, true).catch(() => this.goalAutoNext.delete(session.id));
+      return;
+    }
+    if (!step.continue) return this.endGoal(session, GOAL_STOP_TEXT[step.reason], step.reason === "complete" ? "complete" : "unfinished");
+    goal.autoTurns++;
+    this.event(session, session.agent, "status", `끝까지 모드: 남은 항목 ${goal.items.filter((item) => item.status === "open").length}개, ${goal.autoTurns}번째 자동 턴을 시작합니다.`);
+    this.goalAutoNext.add(session.id);
+    void this.followup(session.id, goalTurnPrompt(goal.items, goal.autoTurns), [], {}, true).catch((error) => {
+      this.goalAutoNext.delete(session.id);
+      this.endGoal(session, `다음 턴을 시작하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, "unfinished");
+    });
+  }
+
+  private endGoal(session: Session, text: string, outcome: NonNullable<NonNullable<Session["goal"]>["outcome"]>): void {
+    const goal = session.goal;
+    if (!goal || goal.stopped) return;
+    goal.stopped = text;
+    goal.outcome = outcome;
+    const blocked = goal.items.filter((item) => item.status === "blocked");
+    this.event(session, session.agent, outcome === "complete" && !blocked.length ? "status" : "warning", `끝까지 모드 종료: ${text}${goal.items.length ? ` (${settledCount(goal.items)}/${goal.items.length} 항목)` : ""}${blocked.length ? `\n사람이 풀어야 할 것:\n${blocked.map((item) => `- ${item.text}${item.note ? ` — ${item.note}` : ""}`).join("\n")}` : ""}`);
+    if (session.parentId) void this.childSettled(session);
+  }
+
+  private commanderGoal(child: Session): { parent: Session; goal: CommanderGoal } | undefined {
+    const parent = child.parentId ? this.sessions.get(child.parentId) : undefined;
+    const goal = parent?.commander?.goals.find((item) => item.childId === child.id);
+    return parent && goal ? { parent, goal } : undefined;
+  }
+
+  /** A goal session's loop ended: merge its branches when every item is settled, then tell the commander. */
+  private async childSettled(child: Session): Promise<void> {
+    const found = this.commanderGoal(child);
+    if (!found) return;
+    const { parent, goal } = found;
+    const outcome = child.goal?.outcome;
+    const blocked = child.goal?.items.some((item) => item.status === "blocked");
+    if (outcome === "complete") {
+      const merge = await this.mergeChild(child, goal);
+      goal.merge = merge;
+      goal.state = merge.ok ? (merge.merged ? "merged" : "done") : "blocked";
+      if (merge.ok && blocked) goal.merge = { ...merge, text: `${merge.text} 일부 항목은 사람이 풀어야 합니다.` };
+    } else {
+      goal.state = outcome === "stopped" ? "stopped" : blocked ? "blocked" : "failed";
+      goal.merge = { ok: false, text: `${child.goal?.stopped ?? "끝나지 않았습니다."} 작업 브랜치는 병합하지 않고 남겨 두었습니다.` };
+    }
+    goal.endedAt = new Date().toISOString();
+    this.event(parent, parent.agent, goal.state === "merged" || goal.state === "done" ? "status" : "warning", `목표 [${goal.key}] ${goal.title}: ${goalStateLabel(goal.state)} — ${goal.merge?.text ?? ""}`);
+    this.commanderTick(parent);
+  }
+
+  private async mergeChild(child: Session, goal: CommanderGoal): Promise<{ ok: boolean; text: string; commit?: string; merged?: boolean }> {
+    if (!child.worktrees?.length) return { ok: true, text: "작업 브랜치가 없습니다(세션 폴더에서 직접 작업했거나 바뀐 파일이 없음)." };
+    await this.cliRunsSettled(child.id);
+    return this.withWorktreeLock(child.id, async () => {
+      const texts: string[] = [];
+      let commit: string | undefined;
+      let ok = true;
+      let merged = false;
+      for (const info of [...(child.worktrees ?? [])]) {
+        const result = await mergeWorktree(info, `sinawi: 목표 ${goal.key} ${goal.title}`);
+        texts.push(result.text);
+        if (!result.ok) { ok = false; continue; }
+        if (!result.empty) { merged = true; commit = result.commit ?? commit; }
+        child.worktrees = child.worktrees?.filter((item) => item !== info);
+      }
+      if (!child.worktrees?.length) delete child.worktrees;
+      this.broadcast(child);
+      return { ok, merged, commit, text: [...new Set(texts)].join(" ") };
+    });
+  }
+
+  /**
+   * Starts every waiting goal whose prerequisites merged (up to commanderParallelGoals at once),
+   * gives up on goals whose prerequisite did not finish, and once all goals are settled hands the
+   * board to the commander for its summary. Runs after every commander turn and child result.
+   */
+  private commanderTick(commander: Session): void {
+    const state = commander.commander;
+    if (!state || this.sessions.get(commander.id) !== commander) return;
+    const byKey = new Map(state.goals.map((goal) => [goal.key, goal]));
+    let running = state.goals.filter((goal) => goal.state === "running").length;
+    for (const goal of state.goals) {
+      if (goal.state !== "waiting") continue;
+      const deps = goal.after.map((key) => byKey.get(key)).filter((dep): dep is CommanderGoal => Boolean(dep));
+      const failed = deps.find((dep) => dep.state === "blocked" || dep.state === "failed" || dep.state === "stopped");
+      if (failed) {
+        goal.state = "blocked";
+        goal.merge = { ok: false, text: `선행 목표 [${failed.key}]가 끝나지 못해 시작하지 않았습니다.` };
+        goal.endedAt = new Date().toISOString();
+        this.event(commander, commander.agent, "warning", `목표 [${goal.key}] ${goal.title}: ${goal.merge.text}`);
+        continue;
+      }
+      if (deps.some((dep) => dep.state !== "merged" && dep.state !== "done") || running >= this.commanderParallelGoals) continue;
+      running++;
+      goal.state = "running";
+      void this.launchGoal(commander, goal).catch((error) => {
+        goal.state = "failed";
+        goal.merge = { ok: false, text: `세션을 시작하지 못했습니다: ${error instanceof Error ? error.message : String(error)}` };
+        goal.endedAt = new Date().toISOString();
+        this.event(commander, commander.agent, "error", `목표 [${goal.key}] ${goal.title}: ${goal.merge.text}`);
+        this.commanderTick(commander);
+      });
+    }
+    this.broadcast(commander);
+    const settled = state.goals.length > 0 && state.goals.every((goal) => goal.state !== "waiting" && goal.state !== "running");
+    if (!settled || state.reported || commander.status === "running" || commander.pendingInstructions?.length) return;
+    state.reported = true;
+    this.event(commander, commander.agent, "status", "모든 목표가 끝났습니다. 총지휘가 결과를 정리합니다.");
+    void this.followup(commander.id, `[앱] 모든 목표가 끝났습니다. 아래 보드를 보고 목표별 결과, 병합 여부, 막힌 것과 사용자가 해야 할 일을 짧게 정리하세요. 새 목표는 만들지 마세요.\n\n${commanderBoard(commander, (id) => this.sessions.get(id))}`, [], {}, true)
+      .catch((error) => this.event(commander, commander.agent, "error", error instanceof Error ? error.message : String(error)));
+  }
+
+  private async launchGoal(commander: Session, goal: CommanderGoal): Promise<void> {
+    const existing = goal.childId ? this.sessions.get(goal.childId) : undefined;
+    // Interrupted by an app restart: resume in the goal's own session, keeping its checklist and branches.
+    if (existing) {
+      if (existing.goal) Object.assign(existing.goal, { stopped: undefined, outcome: undefined });
+      await this.followup(existing.id, "[앱] 앱이 다시 시작되어 끊긴 작업을 이어 갑니다. 작업 트리의 파일·커밋으로 어디까지 했는지 확인하고 체크리스트를 이어 가세요.");
+      return;
+    }
+    const config = this.configs.get(commander.id) ?? { skills: [], systemPrompt: "" };
+    const child = await this.create({
+      prompt: `${goal.brief}\n\n(총지휘 목표 [${goal.key}] ${goal.title}. 다른 목표는 다른 세션이 맡습니다. 이 목표만 끝내세요.)`,
+      agent: commander.agent, workers: commander.workers, workerConfigs: commander.workerConfigs,
+      model: commander.model, reasoningEffort: commander.reasoningEffort, planner: commander.planner,
+      cwd: commander.cwd, workspaceId: commander.workspaceId, groupId: commander.groupId,
+      mode: commander.mode, autoSwitch: commander.autoSwitch, permissionMode: commander.permissionMode,
+      skills: config.skills, systemPrompt: config.systemPrompt,
+      goal: true, parentId: commander.id,
+    });
+    child.title = `[${goal.key}] ${goal.title}`.slice(0, 80);
+    goal.childId = child.id;
+    this.broadcast(child);
+    this.event(commander, commander.agent, "status", `목표 [${goal.key}] ${goal.title}: 세션을 시작했습니다.`);
+  }
+
+  /** A commander turn: read-only; its answer's goals join the board and the tick starts them. */
+  private async executeCommander(session: Session, userPrompt: string, systemPrompt: string, controller: AbortController) {
+    const state = session.commander!;
+    const board = commanderBoard(session, (id) => this.sessions.get(id));
+    const handoff = session.handoffContext ? `\n\n이전 대화 요약:\n${session.handoffContext}` : session.cliSessionId ? "" : `\n\n이전 대화 요약:\n${this.conversationSummary(session, session.agent)}`;
+    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${COMMANDER_RULES}\n\n${cliNotes(session.agent, "orchestrator")}${board ? `\n\n${board}` : ""}${handoff}\n\n사용자 요청:\n${userPrompt}`;
+    const result = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, true, "orchestrator");
+    if (controller.signal.aborted) return this.finishStopped(session, controller);
+    if (result.sessionId) session.cliSessionId = result.sessionId;
+    if (result.exitCode !== 0) throw new Error(`${agentNames[session.agent]} CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`);
+    delete session.handoffContext;
+    const taken = new Set(state.goals.map((goal) => goal.key));
+    const renamed = new Map<string, string>();
+    const added = parseGoals(result.finalText, taken).map((parsed) => {
+      let key = parsed.key;
+      for (let n = state.goals.length + 1; taken.has(key); n++) key = `g${n}`;
+      taken.add(key);
+      renamed.set(parsed.key, key);
+      return { ...parsed, key };
+    }).map((parsed): CommanderGoal => ({
+      key: parsed.key, title: parsed.title, brief: parsed.brief,
+      // A new goal may wait on an older goal of the board too.
+      after: parsed.after.map((key) => renamed.get(key) ?? key),
+      state: "waiting", createdAt: new Date().toISOString(),
+    }));
+    if (added.length) {
+      state.goals.push(...added);
+      state.reported = false;
+      this.event(session, session.agent, "status", `목표 ${added.length}개를 등록했습니다: ${added.map((goal) => `[${goal.key}] ${goal.title}${goal.after.length ? ` (${goal.after.join(", ")} 다음)` : ""}`).join(", ")}`);
+    }
+    this.finish(session);
   }
 }
