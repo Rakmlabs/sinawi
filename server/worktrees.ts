@@ -181,10 +181,19 @@ async function sameFile(copy: string, main: string): Promise<boolean> {
 async function mainCopies(info: Pick<WorktreeInfo, "path" | "repoRoot">, entries: { path: string; untracked: boolean }[]): Promise<Set<string>> {
   const noise = new Set<string>();
   for (const entry of entries) {
-    if (entry.untracked && await sameFile(join(info.path, entry.path), join(info.repoRoot, entry.path))) noise.add(entry.path);
+    if (!entry.untracked) continue;
+    if (agentState(entry.path) || await sameFile(join(info.path, entry.path), join(info.repoRoot, entry.path))) noise.add(entry.path);
   }
   return noise;
 }
+
+/**
+ * Folders that agent plugins keep their own state in (oh-my-claudecode writes `.omc/` into every
+ * working folder a CLI runs in). Untracked files there differ per run, so they are never the same as
+ * the main tree's copy, yet they are no one's work either.
+ */
+const AGENT_STATE_DIRS = [".omc/", ".omx/"];
+const agentState = (path: string) => AGENT_STATE_DIRS.some((dir) => path.startsWith(dir));
 
 export function mergeCommand(info: Pick<WorktreeInfo, "repoRoot" | "path" | "branch" | "workerLabel" | "workerId">, uncommitted: number, exclude: string[] = []): string {
   const merge = `git -C ${shellQuote(info.repoRoot)} merge --no-ff ${shellQuote(info.branch)}`;

@@ -152,6 +152,21 @@ test("a merge commits the worker's uncommitted files and keeps the user's own lo
   assert.equal(git(repo, "log", "-1", "--format=%b"), "merge goal");
 });
 
+test("a merge leaves out agent plugin state that differs from the main tree's own copy", async (t) => {
+  const { repo, dataDir } = await tempRepo(t);
+  const info = (await ensureWorkerWorktree({ dataDir, sessionId: "abcdef12-0003", workerId: "claude", cwd: repo }))!;
+  await mkdir(join(repo, ".omc"), { recursive: true });
+  await mkdir(join(info.path, ".omc"), { recursive: true });
+  await writeFile(join(repo, ".omc", "project-memory.json"), '{"main":true}\n');
+  await writeFile(join(info.path, ".omc", "project-memory.json"), '{"worker":true}\n');
+  await writeFile(join(info.path, "feature.txt"), "feature\n");
+  const result = await mergeWorktree(info, "merge goal");
+  assert.equal(result.ok, true, result.text);
+  assert.equal(await readFile(join(repo, "feature.txt"), "utf8"), "feature\n");
+  assert.equal(await readFile(join(repo, ".omc", "project-memory.json"), "utf8"), '{"main":true}\n', "the main tree's state file is untouched");
+  assert.equal(git(repo, "ls-files", ".omc"), "", "plugin state is not committed");
+});
+
 test("a merge goes through a repository whose commit-msg hook rejects the app's wording", async (t) => {
   const { repo, dataDir } = await tempRepo(t);
   await mkdir(join(repo, ".hooks"), { recursive: true });
