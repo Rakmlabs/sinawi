@@ -147,6 +147,10 @@ export interface CommanderState {
   goals: CommanderGoal[];
   /** The commander was told every goal settled; reset when goals are added. */
   reported?: boolean;
+  /** The app's summary turn is running. */
+  reporting?: boolean;
+  /** Started as a commander (StartSessionInput.commander) rather than split by its lead. */
+  forced?: boolean;
 }
 
 /** A worker's own git worktree and branch (see server/worktrees.ts). */
@@ -260,6 +264,8 @@ export interface ConversationSettings {
   mode?: "auto" | "manual";
   autoSwitch?: boolean;
   permissionMode?: PermissionMode;
+  /** Run multi-step requests to completion and split big ones into chats (server/goals.ts). */
+  autoRun?: boolean;
 }
 
 export interface StartSessionInput extends ConversationSettings {
@@ -276,9 +282,9 @@ export interface StartSessionInput extends ConversationSettings {
   resumeSessionId?: string;
   groupId?: string;
   workspaceId?: WorkspaceId;
-  /** Run to completion (server/goals.ts). */
+  /** A goal chat a commander started: runs to completion and never splits (server/goals.ts). */
   goal?: boolean;
-  /** Commander session: splits the request into goal sessions (server/goals.ts). */
+  /** Starts as a commander that only splits the request into goal chats (server/goals.ts). */
   commander?: boolean;
   parentId?: string;
 }

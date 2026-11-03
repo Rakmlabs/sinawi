@@ -24,6 +24,8 @@ export type MessageListProps = {
   /** Other sessions by id (a commander's goal sessions). */
   lookupSession: (id: string) => Session | undefined;
   onOpenSession?: (id: string) => void;
+  /** Stops the chat's run and the work it runs by itself (its goal chats too). */
+  onStop?: () => void;
   events: SessionEvent[];
   tasksById: Map<string, DelegationTask>;
   latestHandoffId: string | undefined;
@@ -87,10 +89,11 @@ function DelegationCard({ e, task, active, onOpenWorker }: { e: SessionEvent; ta
 }
 
 /** The main conversation of the active session: messages, handoffs and delegation cards. */
-export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan, draft, lookupSession, onOpenSession }: MessageListProps) {
+export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan, draft, lookupSession, onOpenSession, onStop }: MessageListProps) {
   const last = events.at(-1);
   const draftContinues = Boolean(draft && last && last.agent === draft.agent && last.type !== "delegation" && last.type !== "handoff" && !last.metadata?.live);
   return <div className="messages">
+    <GoalPanel session={active} lookup={lookupSession} onOpenSession={onOpenSession} onStop={onStop} />
     {events.flatMap((e, index) => [(() => {
       if (e.type === "handoff") return <div className="handoff-divider" key={e.id}>
         <span className="agent-label"><AgentMark agent={e.agent} size="small" />{e.text}</span>
@@ -125,7 +128,6 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
       </article>;
     })(), <ComputerTrail key={`cu-${e.id}`} sessionId={active.id} from={e.time} to={events[index + 1]?.time} />])}
     {draft?.text && <DraftMessage draft={draft} continued={draftContinues} />}
-    <GoalPanel session={active} lookup={lookupSession} onOpenSession={onOpenSession} />
     <WorktreePanel session={active} />
     {active.status === "running" && (
       <div className="thinking" role="status">

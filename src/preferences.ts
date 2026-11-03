@@ -13,3 +13,9 @@ export function readPreference(key: string): string | null {
 export function writePreference(key: string, value: string) {
   try { localStorage.setItem(`orchestra.${key}`, value); } catch { /* Preferences are optional. */ }
 }
+
+/** Settings › General: run multi-step requests to the end and split big ones into chats (default on). */
+export const AUTO_RUN_KEY = "autoRun";
+export function autoRunEnabled(): boolean {
+  return savedBoolean(readPreference(AUTO_RUN_KEY), true);
+}

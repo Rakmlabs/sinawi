@@ -1,5 +1,6 @@
 import { terminalOwnsKeyboardEvent } from "./terminal-events";
 import { AgentMark } from "./AgentMark";
+import { goalProgress } from "./goal-progress";
 import { useEffect, useReducer, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
@@ -77,7 +78,10 @@ export function Sidebar(props: SidebarProps) {
   // Sessions and groups arrive already scoped to the current workspace.
   const scoped = { sessions, groups };
   const results = searchWorkspace(sessions, groups, undefined, query);
-  const visibleSessions = results.sessions;
+  // A chat's goal chats sit under it (server/goals.ts), not in the list on their own.
+  const shownIds = new Set(results.sessions.map((session) => session.id));
+  const subChats = (id: string) => results.sessions.filter((session) => session.parentId === id);
+  const visibleSessions = results.sessions.filter((session) => !session.parentId || !shownIds.has(session.parentId));
   const visibleGroups = results.groups;
   const searching = Boolean(query.trim());
   useEffect(() => {
@@ -195,6 +199,7 @@ export function Sidebar(props: SidebarProps) {
       onPointerDown={(event) => startDrag(event, session)}>
       <button className={`sidebar-chat-open ${parentActive ? "active" : ""}`} aria-current={parentActive ? "page" : undefined} title={`${session.title} · ${agentNames[session.agent]} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
         {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}<span className="sidebar-session-title">{session.title}</span>
+        {(() => { const progress = goalProgress(session); return progress && <small className="sidebar-goal-progress" title={t("goal.progressTitle", progress)}>{progress.done}/{progress.total}</small>; })()}
       </button>
       <button className={`sidebar-chat-toggle${open ? " open" : ""}`} aria-label={t(open ? "side.collapseWorkers" : "side.expandWorkers", { title: session.title })} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={14} className={`folder-chevron ${open ? "open" : ""}`} /></button>
       <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: session.title })} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
@@ -215,6 +220,7 @@ export function Sidebar(props: SidebarProps) {
       })}
       {!workers.length && <li className="sidebar-empty">{session.status === "running" ? t("side.orchestratorHandling") : t("side.noWorkers")}</li>}
     </ul>
+    {subChats(session.id).length > 0 && <div className="sidebar-subchats" aria-label={t("side.subChats", { title: session.title })}>{subChats(session.id).map(sessionRow)}</div>}
   </div>;
   };
   const ungrouped = visibleSessions.filter((session) => !visibleGroups.some((group) => group.id === session.groupId));

@@ -45,23 +45,31 @@ export const openItems = (items: readonly GoalItem[] = []) => items.filter((item
 /** How many items are settled (done or blocked); the loop's measure of progress. */
 export const settledCount = (items: readonly GoalItem[] = []) => items.filter((item) => item.status !== "open").length;
 
-export const GOAL_RULES = `## 끝까지 모드 (앱이 붙임)
-이 세션은 사용자가 요청한 일을 전부 끝낼 때까지 앱이 턴을 이어 간다. 한 턴에 다 하려 하지 말고, 체크리스트로 관리한다.
+/** Rules for a lead that runs the request to completion; `split`: it may also split it into chats. */
+export function goalRules(split: boolean): string {
+  return `## 끝까지 진행 (앱이 붙임)
+질문·설명·한 번에 끝나는 작은 수정이면 평소처럼 답하고 아래 형식을 쓰지 않는다.
+여러 단계를 거쳐야 끝나는 일이면, 앱이 사용자의 요청이 끝날 때까지 턴을 이어 간다. 한 턴에 다 하려 하지 말고 체크리스트로 관리한다.
 - 응답마다 체크리스트 전체를 이 형식으로 쓴다(빠진 항목 없이, 순서 유지):
 <<CHECKLIST>>
 - [ ] 아직 안 한 항목 (완료 기준이 보이게 한 줄)
 - [x] 끝나고 검증한 항목
 - [!] 사람만 풀 수 있는 항목 — 막힌 이유와 필요한 것
 <</CHECKLIST>>
-- 첫 응답에서는 사용자 원문의 요청을 하나도 빠뜨리지 않고 항목으로 나눈다. 큰 일은 검증할 수 있는 단위로 쪼갠다.
+- 처음 쓸 때는 사용자 원문의 요청을 하나도 빠뜨리지 않고 항목으로 나눈다. 큰 일은 검증할 수 있는 단위로 쪼갠다.
 - [x]는 워커 보고와 파일·테스트로 확인한 것만 표시한다. 보고만 보고 체크하지 않는다.
 - [!]는 키·계정·결제·존재하지 않는 외부 API·사용자의 결정처럼 에이전트가 할 수 없는 것만이다. 어렵거나 실패했다는 이유로 쓰지 않는다. 막힌 항목이 있어도 나머지는 계속한다.
 - 남은 [ ] 항목이 있으면 이번 응답에서 다음 항목을 워커에게 위임한다. 앱이 다음 턴을 연다.
-- 각 항목이 끝나면 워커가 작업 브랜치에 커밋하게 한다(메시지에 무엇을 했는지).`;
+- 각 항목이 끝나면 워커가 작업 브랜치에 커밋하게 한다(메시지에 무엇을 했는지).${split ? `
+
+## 큰 일 나누기
+서로 독립적으로 끝낼 수 있는 큰 덩어리가 둘 이상이고 각각 여러 턴이 걸리면, 체크리스트와 위임 대신 덩어리를 목표로 나눈다. 앱이 목표마다 새 채팅을 열어 끝까지 실행하고, 검증된 결과를 메인 브랜치에 병합한 뒤 이 채팅으로 알려 준다. 나눌 때는 이번 응답에서 위임하지 않고, 사용자 원문의 요청을 빠짐없이 목표에 담는다. 사람만 할 수 있는 일은 목표로 만들지 말고 마지막에 따로 적는다.
+${GOAL_FORMAT}` : ""}`;
+}
 
 export function goalTurnPrompt(items: readonly GoalItem[], turn: number): string {
   const open = openItems(items);
-  return `[앱 — 끝까지 모드 ${turn}번째 이어가기] 아래는 지금 체크리스트입니다. 지난 턴의 결과를 작업 트리의 파일·커밋·테스트로 확인해 체크리스트를 고치고, 남은 항목 중 다음 것을 워커에게 위임하세요. 남은 항목 ${open.length}개.\n\n<<CHECKLIST>>\n${renderChecklist(items)}\n<</CHECKLIST>>`;
+  return `[앱 — ${turn}번째 이어가기] 아래는 지금 체크리스트입니다. 지난 턴의 결과를 작업 트리의 파일·커밋·테스트로 확인해 체크리스트를 고치고, 남은 항목 중 다음 것을 워커에게 위임하세요. 남은 항목 ${open.length}개.\n\n<<CHECKLIST>>\n${renderChecklist(items)}\n<</CHECKLIST>>`;
 }
 
 export type GoalStop = "complete" | "idle" | "turns" | "time" | "no-checklist";
@@ -78,11 +86,11 @@ export function nextGoalStep(session: Pick<Session, "goal">, now = Date.now()): 
 }
 
 export const GOAL_STOP_TEXT: Record<GoalStop, string> = {
-  complete: "체크리스트를 모두 마쳤습니다.",
+  complete: "요청한 일을 모두 마쳤습니다.",
   idle: `${GOAL_MAX_IDLE_TURNS}턴 연속 진전이 없어 멈췄습니다.`,
   turns: `자동 턴 상한(${GOAL_MAX_AUTO_TURNS}턴)에 닿아 멈췄습니다.`,
   time: `시간 상한(${GOAL_MAX_HOURS}시간)에 닿아 멈췄습니다.`,
-  "no-checklist": "총괄이 체크리스트를 쓰지 않아 이어 가지 않았습니다.",
+  "no-checklist": "체크리스트가 없어 이어 가지 않았습니다.",
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -111,9 +119,7 @@ export function parseGoals(text: string, known: Iterable<string> = []): ParsedGo
   return goals.map((goal) => ({ ...goal, after: goal.after.filter((key) => keys.has(key) && key !== goal.key) }));
 }
 
-export const COMMANDER_RULES = `당신은 Sinawi의 총지휘입니다. 직접 파일을 고치거나 워커에게 위임하지 않습니다. 사용자의 요청을 독립적으로 끝낼 수 있는 목표로 나누면, 앱이 목표마다 별도 세션을 열어 끝까지 실행하고, 검증된 결과를 메인 브랜치에 병합한 뒤 이 채팅으로 알려 줍니다.
-
-목표는 정확히 이 형식으로 씁니다(최대 ${COMMANDER_MAX_GOALS}개):
+const GOAL_FORMAT = `목표는 정확히 이 형식으로 씁니다(최대 ${COMMANDER_MAX_GOALS}개):
 <<GOAL id="g1" title="짧은 제목">>
 ## 목표
 ## 완료 기준
@@ -123,12 +129,27 @@ export const COMMANDER_RULES = `당신은 Sinawi의 총지휘입니다. 직접 �
 <<GOAL id="g2" title="..." after="g1">>...<</GOAL>>
 
 - 한 목표는 한 세션이 한 작업 브랜치에서 끝낼 수 있는 크기다. 같은 파일을 많이 고치는 일은 한 목표로 묶는다.
-- 앞 목표의 결과가 있어야 하는 목표만 after에 그 id를 쓴다. 나머지는 동시에 돈다.
+- 앞 목표의 결과가 있어야 하는 목표만 after에 그 id를 쓴다. 나머지는 동시에 돈다.`;
+
+export const COMMANDER_RULES = `당신은 Sinawi의 총지휘입니다. 이 채팅의 일은 목표별 채팅이 나눠 맡고 있으니 직접 파일을 고치거나 워커에게 위임하지 않습니다. 목표로 나누면 앱이 목표마다 별도 채팅을 열어 끝까지 실행하고, 검증된 결과를 메인 브랜치에 병합한 뒤 이 채팅으로 알려 줍니다.
+
+${GOAL_FORMAT}
 - 사용자 원문의 요청을 빠짐없이 목표에 나눠 담는다. 사람만 할 수 있는 일(키, 결제, 없는 외부 API)은 목표로 만들지 말고 마지막에 따로 적는다.
 - 먼저 저장소를 읽기 전용으로 살펴 정본 경로를 정확히 적는다. 추측한 경로를 쓰지 않는다.
 - 보드의 대기·진행 중 목표는 앱이 실행하고, 병합에 실패해 막힌 목표는 사용자가 말을 걸면 앱이 다시 시도한다. 같은 일을 새 목표로 다시 만들지 않는다.
 - 목표가 진행 중일 때 사용자가 말을 걸면, 이미 있는 목표와 겹치지 않는 새 목표만 같은 형식으로 추가한다. 상태만 묻거나 이어 가라는 말이면 아래 보드 기준으로 답한다.
 - 모든 목표가 끝났다는 앱의 알림을 받으면, 목표별 결과·병합 여부·막힌 것과 사용자가 해야 할 일을 짧게 정리한다.`;
+
+/**
+ * Whether this chat's turns belong to the commander: goals are still waiting or running, or the app
+ * asked for the summary. Before the first split and after the summary it is an ordinary chat.
+ */
+export function commanderActive(session: Pick<Session, "commander">): boolean {
+  const state = session.commander;
+  if (!state) return false;
+  if (!state.goals.length) return Boolean(state.forced);
+  return Boolean(state.reporting) || state.goals.some((goal) => goal.state === "waiting" || goal.state === "running");
+}
 
 export function commanderBoard(session: Pick<Session, "commander">, sessions: (id: string) => Session | undefined): string {
   const goals = session.commander?.goals ?? [];

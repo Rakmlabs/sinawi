@@ -1,9 +1,8 @@
-import { CheckCircle2, Circle, CircleAlert, ExternalLink, Flag, GitMerge } from "lucide-react";
+import { CheckCircle2, Circle, CircleAlert, ExternalLink, GitMerge, ListChecks, Split, Square } from "lucide-react";
 import type { CommanderGoalState, GoalItem, Session } from "../../server/types";
+import { activeGoal as active, settledItems as settled } from "../goal-progress";
 import { t } from "../i18n";
 import "../goals.css";
-
-const settled = (items: readonly GoalItem[]) => items.filter((item) => item.status !== "open").length;
 
 function ItemIcon({ status }: { status: GoalItem["status"] }) {
   if (status === "done") return <CheckCircle2 size={13} className="goal-done" aria-label={t("goal.done")} />;
@@ -19,42 +18,72 @@ function Checklist({ items }: { items: readonly GoalItem[] }) {
   </ul>;
 }
 
-/**
- * Run-to-completion progress (the lead's checklist) and, for a commander, the goal board: each
- * goal's state, its session's checklist progress and the merge result, with a link to the session.
- */
-export function GoalPanel({ session, lookup, onOpenSession }: { session: Session; lookup: (id: string) => Session | undefined; onOpenSession?: (id: string) => void }) {
-  if (session.commander) {
-    const goals = session.commander.goals;
-    if (!goals.length) return null;
-    const finished = goals.filter((goal) => goal.state !== "waiting" && goal.state !== "running").length;
-    return <details className="goal-panel" open>
-      <summary><Flag size={14} />{t("goal.board", { done: finished, total: goals.length })}</summary>
-      <ul className="goal-board">
-        {goals.map((goal) => {
-          const child = goal.childId ? lookup(goal.childId) : undefined;
-          const items = child?.goal?.items ?? [];
-          return <li key={goal.key} className={`goal-card ${goal.state}`}>
-            <div className="goal-head">
-              <code>{goal.key}</code>
-              <strong>{goal.title}</strong>
-              <span className={`goal-state ${goal.state}`}>{t(`goal.state.${goal.state satisfies CommanderGoalState}`)}</span>
-              {items.length > 0 && <span className="goal-progress">{settled(items)}/{items.length}</span>}
-              {child && onOpenSession && <button type="button" className="button light goal-open-session" onClick={() => onOpenSession(child.id)}><ExternalLink size={12} />{t("goal.openSession")}</button>}
-            </div>
-            {goal.after.length > 0 && goal.state === "waiting" && <p className="goal-note">{t("goal.after", { keys: goal.after.join(", ") })}</p>}
-            {goal.merge && <p className={`goal-note${goal.merge.ok ? "" : " warn"}`}>{goal.state === "merged" && <GitMerge size={12} />}{goal.merge.text.replace(/`/gu, "")}</p>}
-            {items.some((item) => item.status === "blocked") && <Checklist items={items.filter((item) => item.status === "blocked")} />}
-          </li>;
-        })}
-      </ul>
-    </details>;
-  }
-  const goal = session.goal;
-  if (!goal?.items.length) return null;
-  return <details className="goal-panel" open={session.status === "running" || !goal.stopped}>
-    <summary><Flag size={14} />{t("goal.checklist", { done: settled(goal.items), total: goal.items.length })}
-      <span>{goal.stopped ?? t("goal.turns", { count: goal.autoTurns })}</span></summary>
+function StopButton({ onStop }: { onStop?: () => void }) {
+  if (!onStop) return null;
+  return <button type="button" className="button light goal-stop" onClick={(event) => { event.preventDefault(); onStop(); }}>
+    <Square size={11} aria-hidden="true" />{t("goal.stop")}
+  </button>;
+}
+
+/** The goal chats a chat split its request into: state, checklist progress, merge result, a link. */
+function SplitBoard({ session, lookup, onOpenSession, onStop }: { session: Session; lookup: (id: string) => Session | undefined; onOpenSession?: (id: string) => void; onStop?: () => void }) {
+  const goals = session.commander!.goals;
+  const running = goals.some(active);
+  const merged = goals.filter((goal) => goal.state === "merged" || goal.state === "done").length;
+  return <details className={`goal-panel${running ? " running" : ""}`} open={running}>
+    <summary>
+      <Split size={14} aria-hidden="true" />
+      <strong>{running ? t("goal.splitRunning", { total: goals.length }) : t("goal.splitDone", { total: goals.length, merged })}</strong>
+      <span>{t("goal.board", { done: goals.filter((goal) => !active(goal)).length, total: goals.length })}</span>
+      {running && <StopButton onStop={onStop} />}
+    </summary>
+    <ul className="goal-board">
+      {goals.map((goal) => {
+        const child = goal.childId ? lookup(goal.childId) : undefined;
+        const items = child?.goal?.items ?? [];
+        return <li key={goal.key} className={`goal-card ${goal.state}`}>
+          <div className="goal-head">
+            <strong>{goal.title}</strong>
+            <span className={`goal-state ${goal.state}`}>{t(`goal.state.${goal.state satisfies CommanderGoalState}`)}</span>
+            {items.length > 0 && <span className="goal-progress">{settled(items)}/{items.length}</span>}
+            {child && onOpenSession && <button type="button" className="button light goal-open-session" onClick={() => onOpenSession(child.id)}><ExternalLink size={12} />{t("goal.openSession")}</button>}
+          </div>
+          {goal.after.length > 0 && goal.state === "waiting" && <p className="goal-note">{t("goal.after", { keys: goal.after.map((key) => goals.find((item) => item.key === key)?.title ?? key).join(", ") })}</p>}
+          {goal.merge && <p className={`goal-note${goal.merge.ok ? "" : " warn"}`}>{goal.state === "merged" && <GitMerge size={12} />}{goal.merge.text.replace(/`/gu, "")}</p>}
+          {items.some((item) => item.status === "blocked") && <Checklist items={items.filter((item) => item.status === "blocked")} />}
+        </li>;
+      })}
+    </ul>
+  </details>;
+}
+
+/** The lead's checklist while the app runs the request to the end, then how it ended. */
+function ChecklistPanel({ session, onStop }: { session: Session; onStop?: () => void }) {
+  const goal = session.goal!;
+  const running = !goal.stopped;
+  const blocked = goal.items.filter((item) => item.status === "blocked").length;
+  const end = goal.outcome === "complete" ? (blocked ? t("goal.endBlocked", { count: blocked }) : t("goal.endDone")) : goal.stopped;
+  return <details className={`goal-panel${running ? " running" : ""}${goal.outcome && goal.outcome !== "complete" ? " ended-warn" : ""}`} open={running || blocked > 0}>
+    <summary>
+      <ListChecks size={14} aria-hidden="true" />
+      <strong>{t("goal.checklist", { done: settled(goal.items), total: goal.items.length })}</strong>
+      <span>{running ? t("goal.turns", { count: goal.autoTurns }) : end}</span>
+      {running && <StopButton onStop={onStop} />}
+    </summary>
     <Checklist items={goal.items} />
   </details>;
+}
+
+/**
+ * Shown at the top of a chat whose request the app runs by itself: the goal chats it split into
+ * and/or the lead's checklist, each with a stop button while it runs and its end once done.
+ */
+export function GoalPanel({ session, lookup, onOpenSession, onStop }: { session: Session; lookup: (id: string) => Session | undefined; onOpenSession?: (id: string) => void; onStop?: () => void }) {
+  const split = Boolean(session.commander?.goals.length);
+  const checklist = Boolean(session.goal?.items.length);
+  if (!split && !checklist) return null;
+  return <div className="goal-panels">
+    {split && <SplitBoard session={session} lookup={lookup} onOpenSession={onOpenSession} onStop={onStop} />}
+    {checklist && <ChecklistPanel session={session} onStop={onStop} />}
+  </div>;
 }

@@ -51,6 +51,7 @@ export type SettingEntry = { id: string; category: SettingsCategory; section: Me
 
 export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "language", category: "general", section: "set.general.basics", label: "set.general.language", description: "set.general.languageDesc", keywords: "language lang 언어 한국어 english" },
+  { id: "autoRun", category: "general", section: "set.general.work", label: "set.general.autoRun", description: "set.general.autoRunDesc", keywords: "auto run split goal commander 끝까지 나누기 총지휘 자동 진행 체크리스트" },
   { id: "reset", category: "general", section: "set.danger", label: "set.general.reset", description: "set.general.resetDesc", keywords: "reset default 초기화 기본값" },
   { id: "theme", category: "appearance", section: "set.appearance.look", label: "appearance.theme", description: "set.appearance.themeDesc", keywords: "theme dark light 테마 다크 라이트 모드" },
   { id: "uiFont", category: "appearance", section: "set.appearance.type", label: "appearance.uiFont.legend", description: "set.appearance.uiFontDesc", keywords: "font 글꼴 폰트 pretendard" },

@@ -10,6 +10,7 @@ import { APPEARANCE_DEFAULTS } from "../app/AppearanceSettings";
 import { ConfirmDialog, SettingRow, SettingsPage, SettingsSection, StatusBadge, SwitchRow, useSaveStatus } from "./controls";
 import { NOTIFICATION_TYPES, resetToastTypes, setToastType, TOAST_PREFS_EVENT, toastTypes } from "./notification-prefs";
 import { translatedMap } from "../i18n";
+import { AUTO_RUN_KEY, autoRunEnabled, writePreference } from "../preferences";
 import type { NotificationType } from "../../server/notification-types";
 
 const typeLabels = translatedMap<NotificationType>({ auth: "noti.auth", quota: "noti.quota", permission: "noti.permission", "run-finished": "noti.runFinished", error: "noti.error", info: "noti.info" });
@@ -19,6 +20,8 @@ export function GeneralPage() {
   const appearance = useAppearance();
   const { track } = useSaveStatus();
   const [confirm, setConfirm] = useState(false);
+  const [autoRun, setAutoRun] = useState(autoRunEnabled);
+  const saveAutoRun = (next: boolean) => { writePreference(AUTO_RUN_KEY, String(next)); setAutoRun(next); };
   return <SettingsPage>
     <SettingsSection title={t("set.general.basics")}>
       <SettingRow id="language" label={t("set.general.language")} description={t("set.general.languageDesc")}>
@@ -27,6 +30,9 @@ export function GeneralPage() {
           options={[{ value: "ko", label: "한국어" }, { value: "en", label: "English" }]} />
       </SettingRow>
     </SettingsSection>
+    <SettingsSection title={t("set.general.work")}>
+      <SwitchRow id="autoRun" label={t("set.general.autoRun")} description={t("set.general.autoRunDesc")} value={autoRun} save={saveAutoRun} />
+    </SettingsSection>
     <SettingsSection title={t("set.danger")} danger>
       <SettingRow id="reset" label={t("set.general.reset")} description={t("set.general.resetDesc")}>
         <button type="button" className="settings-button danger-outline" onClick={() => setConfirm(true)}>{t("set.general.resetAction")}</button>
@@ -34,7 +40,7 @@ export function GeneralPage() {
     </SettingsSection>
     {confirm && <ConfirmDialog title={t("set.general.resetConfirm")} body={t("set.general.resetConfirmBody")} confirmLabel={t("set.general.resetAction")}
       onCancel={() => setConfirm(false)}
-      onConfirm={() => { setConfirm(false); void track(async () => { updateAppearance({ ...APPEARANCE_DEFAULTS }); resetToastTypes(); }); }} />}
+      onConfirm={() => { setConfirm(false); void track(async () => { updateAppearance({ ...APPEARANCE_DEFAULTS }); resetToastTypes(); saveAutoRun(true); }); }} />}
   </SettingsPage>;
 }
 

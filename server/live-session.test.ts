@@ -70,7 +70,9 @@ test("a running session answers status from the log and delivers a directive on 
   }
 
   releaseWorker();
-  await waitFor(() => session.status !== "running");
+  // The directive no turn took starts the next turn (finish → followup): wait for that one too,
+  // not the moment between the two turns.
+  await waitFor(() => session.status !== "running" && calls.some((call) => call.usageContext?.workerId === "claude-2" && /A부터 보라고 해/.test(call.prompt)));
   assert.equal(session.status, "done");
   // A and B run at the same time, so B was already working when the directive came. No turn took
   // it, so it became the user's next request (finish → followup) and reached B there; the lead's

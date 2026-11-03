@@ -203,7 +203,8 @@ function conversationSettings(body: any): ConversationSettings {
   if (body?.mode !== undefined && body.mode !== "auto" && body.mode !== "manual") throw new Error("배정 방식이 올바르지 않습니다.");
   if (body?.autoSwitch !== undefined && typeof body.autoSwitch !== "boolean") throw new Error("자동 전환 설정이 올바르지 않습니다.");
   if (body?.permissionMode !== undefined && !["plan", "auto", "full"].includes(body.permissionMode)) throw new Error("권한 모드가 올바르지 않습니다.");
-  return { mode: body?.mode, autoSwitch: body?.autoSwitch, permissionMode: body?.permissionMode };
+  if (body?.autoRun !== undefined && typeof body.autoRun !== "boolean") throw new Error("끝까지 진행 설정이 올바르지 않습니다.");
+  return { mode: body?.mode, autoSwitch: body?.autoSwitch, permissionMode: body?.permissionMode, autoRun: body?.autoRun };
 }
 
 function startInput(body: any, workspace: WorkspaceResolver, fallbackWorkspace: WorkspaceId): StartSessionInput {
@@ -861,21 +862,6 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const input = startInput(req.body, workspace, currentWorkspace());
       await assertMediaAvailable(input.prompt, input.workspaceId ?? currentWorkspace());
       if (input.groupId && !(await loadGroups(options.dataDir)).some((group) => group.id === input.groupId && group.workspaceId === input.workspaceId)) throw new Error("그룹을 찾을 수 없습니다.");
-      // A commander and its goal sessions share a sidebar folder of their own.
-      if (input.commander && !input.groupId) {
-        const workspaceId = input.workspaceId ?? currentWorkspace();
-        const base = `총지휘 · ${input.prompt.replace(/\s+/gu, " ").trim().slice(0, 40)}`;
-        const group = await mutateGroups((groups) => {
-          const taken = new Set(groups.filter((item) => item.workspaceId === workspaceId).map((item) => item.name.toLocaleLowerCase()));
-          let name = base;
-          for (let n = 2; taken.has(name.toLocaleLowerCase()); n++) name = `${base} (${n})`;
-          const created: Group = { id: randomUUID(), name, createdAt: new Date().toISOString(), workspaceId };
-          groups.push(created);
-          return created;
-        }, options.dataDir);
-        broadcastGroups(await loadGroups(options.dataDir));
-        input.groupId = group.id;
-      }
       res.status(201).json(await orchestra.create(input));
     }
     catch (error) { errorResponse(res, error); }

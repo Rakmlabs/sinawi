@@ -77,7 +77,7 @@ test("a goal session opens turns by itself until its checklist is done", async (
   assert.equal(session.goal!.outcome, "complete");
   assert.equal(session.goal!.autoTurns, 1);
   assert.deepEqual(session.goal!.items.map((item) => item.status), ["done", "done"]);
-  assert.ok(prompts.some((prompt) => prompt.includes("끝까지 모드 1번째 이어가기")), "the app wrote the next turn's prompt");
+  assert.ok(prompts.some((prompt) => prompt.includes("[앱 — 1번째 이어가기]")), "the app wrote the next turn's prompt");
   assert.ok(prompts[0].includes("<<CHECKLIST>>"), "the lead is told to keep a checklist");
 });
 
@@ -197,4 +197,75 @@ test("writing to the commander again retries a goal whose merge failed and the g
   assert.equal(commander.commander!.goals.length, 2, "the restated goal was not added again");
   assert.equal(await readFile(join(repo, "one.txt"), "utf8"), "one\n");
   assert.equal(await readFile(join(repo, "two.txt"), "utf8"), "two\n");
+});
+
+test("an ordinary answer in a chat that runs to completion ends after one turn", async () => {
+  const prompts: string[] = [];
+  const runner = async (options: RunCliOptions) => { prompts.push(options.prompt); return { exitCode: 0, finalText: "답입니다." }; };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "이게 뭐야?", agent: "codex", workers: ["claude"], cwd: process.cwd(), autoRun: true });
+  await waitFor(() => session.status === "done");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(prompts.length, 1, "no turn of its own followed");
+  assert.equal(session.events.filter((event) => event.type === "warning").length, 0);
+  assert.ok(session.events.some((event) => event.text === "세션이 완료되었습니다."));
+});
+
+test("a chat splits a big request into goal chats, merges them, reports and is an ordinary chat again", async (t) => {
+  const { repo, dataDir } = await tempRepo(t);
+  const leadPrompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      const file = /FILE-(\w+)/u.exec(options.prompt)?.[1] ?? "x";
+      await writeFile(join(options.cwd, `${file}.txt`), `${file}\n`);
+      return { exitCode: 0, finalText: "상태: 완료" };
+    }
+    if (options.prompt.includes("당신은 Sinawi의 총지휘입니다")) return { exitCode: 0, finalText: "정리: 둘 다 병합됨" };
+    if (options.prompt.includes("## 큰 일 나누기")) {
+      leadPrompts.push(options.prompt);
+      return { exitCode: 0, finalText: leadPrompts.length === 1 ? '둘로 나눕니다.\n<<GOAL id="g1" title="첫째">>FILE-one<</GOAL>>\n<<GOAL id="g2" title="둘째">>FILE-two<</GOAL>>' : "고맙습니다." };
+    }
+    if (options.readOnly) return { exitCode: 0, finalText: checklist("- [x] 파일") };
+    const file = /FILE-(\w+)/u.exec(options.prompt)?.[1];
+    return { exitCode: 0, finalText: `${checklist("- [ ] 파일")}\n<<DELEGATE to="claude">>FILE-${file}<</DELEGATE>>` };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.worktreeDataDir = dataDir;
+  const chat = await orchestra.create({ prompt: "둘 다 해", agent: "codex", workers: ["claude"], cwd: repo, autoRun: true });
+  await waitFor(() => chat.commander?.goals.length === 2 && chat.commander.goals.every((goal) => goal.state === "merged") && chat.status === "done" && chat.commander.reported === true && !chat.commander.reporting, 15_000);
+  assert.equal(await readFile(join(repo, "one.txt"), "utf8"), "one\n");
+  assert.equal(await readFile(join(repo, "two.txt"), "utf8"), "two\n");
+  for (const goal of chat.commander!.goals) {
+    const child = orchestra.get(goal.childId!)!;
+    assert.equal(child.parentId, chat.id);
+    assert.ok(!child.events.some((event) => event.text.includes("큰 일 나누기")), "a goal chat does not split again");
+  }
+  await orchestra.followup(chat.id, "고마워", [], { autoRun: true });
+  await waitFor(() => chat.status === "done" && leadPrompts.length === 2, 5_000);
+  assert.ok(leadPrompts[1].includes("이 채팅이 앞서 나눠 맡긴 목표"), "the ordinary turn sees the earlier board");
+});
+
+test("stopping a chat that split its work stops its goal chats and starts no more", async (t) => {
+  const { repo, dataDir } = await tempRepo(t);
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      await new Promise((resolve) => options.signal?.addEventListener("abort", resolve, { once: true }));
+      return { exitCode: 130, finalText: "" };
+    }
+    if (options.prompt.includes("당신은 Sinawi의 총지휘입니다")) return { exitCode: 0, finalText: "정리" };
+    if (options.prompt.includes("## 큰 일 나누기")) return { exitCode: 0, finalText: '<<GOAL id="g1" title="첫째">>FILE-one<</GOAL>>\n<<GOAL id="g2" title="둘째" after="g1">>FILE-two<</GOAL>>' };
+    return { exitCode: 0, finalText: `${checklist("- [ ] 파일")}\n<<DELEGATE to="claude">>FILE-one<</DELEGATE>>` };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.worktreeDataDir = dataDir;
+  const chat = await orchestra.create({ prompt: "둘 다 해", agent: "codex", workers: ["claude"], cwd: repo, autoRun: true });
+  await waitFor(() => chat.commander?.goals[0]?.state === "running" && orchestra.get(chat.commander.goals[0].childId ?? "")?.events.some((event) => event.type === "delegation") === true, 10_000);
+  orchestra.stop(chat.id);
+  const child = orchestra.get(chat.commander!.goals[0].childId!)!;
+  await waitFor(() => child.status === "stopped");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(chat.commander!.goals.map((goal) => goal.state), ["stopped", "stopped"]);
+  assert.equal(chat.commander!.goals[1].childId, undefined, "the waiting goal never started");
+  assert.equal(child.goal?.outcome, "stopped");
+  assert.ok(!chat.events.some((event) => event.text.includes("결과를 정리합니다")), "no summary turn after a stop");
 });

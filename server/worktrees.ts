@@ -12,6 +12,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
 import { promisify } from "node:util";
 import type { WorktreeInfo, WorktreeStatus } from "./types.js";
@@ -54,9 +55,17 @@ export function worktreeBranch(sessionId: string, workerId: string): string {
   return `sinawi/${sessionId.slice(0, 8)}/${workerId.replace(/[^A-Za-z0-9_-]+/gu, "-") || "worker"}`;
 }
 
+/**
+ * Where Sinawi keeps worktrees. Not under a data folder with a space in its path (macOS's
+ * "Application Support"): repository hooks such as lint-staged split such paths and fail.
+ */
+export function worktreesRoot(dataDir: string, home = homedir()): string {
+  return /\s/u.test(dataDir) ? join(home, ".sinawi", "worktrees") : join(dataDir, "worktrees");
+}
+
 export function worktreesDir(dataDir: string, repoRoot: string): string {
   const hash = createHash("sha1").update(repoRoot).digest("hex").slice(0, 8);
-  return join(dataDir, "worktrees", `${basename(repoRoot).replace(/[^\w.-]+/gu, "_")}-${hash}`);
+  return join(worktreesRoot(dataDir), `${basename(repoRoot).replace(/[^\w.-]+/gu, "_")}-${hash}`);
 }
 
 async function branchExists(repoRoot: string, branch: string): Promise<boolean> {
@@ -73,11 +82,12 @@ async function registeredWorktrees(repoRoot: string): Promise<Set<string>> {
 /** The repository's own worktrees (the user's checkouts), leaving out the ones Sinawi made under `dataDir`. */
 export async function userWorktrees(cwd: string, dataDir: string): Promise<{ path: string; branch?: string; head: string }[]> {
   const list = (await tryGit(cwd, ["worktree", "list", "--porcelain"])) ?? "";
-  const ours = join(dataDir, "worktrees") + "/";
+  // Older worktrees stay under the data folder even when new ones go to worktreesRoot.
+  const ours = [join(dataDir, "worktrees") + "/", worktreesRoot(dataDir) + "/"];
   return list.split("\n\n").flatMap((block) => {
     const fields = new Map(block.split("\n").map((line) => [line.split(" ", 1)[0], line.slice(line.indexOf(" ") + 1)] as const));
     const path = fields.get("worktree");
-    if (!path || (path + "/").startsWith(ours) || fields.has("bare")) return [];
+    if (!path || ours.some((root) => (path + "/").startsWith(root)) || fields.has("bare")) return [];
     return [{ path, branch: fields.get("branch")?.replace(/^refs\/heads\//u, ""), head: (fields.get("HEAD") ?? "").slice(0, 7) }];
   });
 }

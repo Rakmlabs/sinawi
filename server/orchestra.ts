@@ -17,7 +17,7 @@ import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
-import { COMMANDER_RULES, commanderBoard, GOAL_RULES, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
+import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 
 const delegationPattern = /<<DELEGATE\s+to=["']([\w.-]{1,100})["']>>(.*?)<<\/DELEGATE>>/gis;
@@ -97,6 +97,8 @@ const PLAN_MODE_NOTICE = `## 계획 모드
 사용자가 "이대로 실행"을 누르면 다음 턴에 이 계획대로 실행합니다.`;
 
 /** A finished run whose CLI reported a quota or rate limit. */
+const freshGoal = (): NonNullable<Session["goal"]> => ({ items: [], startedAt: new Date().toISOString(), autoTurns: 0, idleTurns: 0 });
+
 function runExhausted(run: { exitCode: number; cliText: string; quotaErrorEvidence: boolean; stoppedByApp: boolean }): boolean {
   if (run.stoppedByApp) return false;
   return run.quotaErrorEvidence || run.exitCode !== 0 && isQuotaExhaustion(run.cliText);
@@ -357,7 +359,7 @@ export class Orchestra {
       groupId: input.groupId,
       workspaceId,
       skills: selectedSkills, systemPrompt: input.systemPrompt ?? "",
-      ...(input.commander ? { commander: { goals: [] } } : input.goal ? { goal: { items: [], startedAt: new Date().toISOString(), autoTurns: 0, idleTurns: 0 } } : {}),
+      ...(input.commander ? { commander: { goals: [], forced: true } } : input.goal || input.autoRun ? { goal: freshGoal() } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
     };
     this.sessions.set(session.id, session);
@@ -375,7 +377,7 @@ export class Orchestra {
     if (!this.isCurrentRun(session, controller.signal)) return;
     const runStartedAt = Date.now();
     this.turnChecklists.delete(session.id);
-    if (session.commander) return this.executeCommander(session, userPrompt, systemPrompt, controller);
+    if (commanderActive(session)) return this.executeCommander(session, userPrompt, systemPrompt, controller);
     this.assertSessionPolicy(session);
     if (requiresGrokMedia) assertMediaAllowed(this.workspacePolicyResolver?.(session.workspaceId));
     if (requiresGrokMedia && session.agent !== "grok") {
@@ -408,8 +410,11 @@ export class Orchestra {
     const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";
     const planMode = this.permissionModeOf(session) === "plan";
     const planNotice = planMode ? `\n\n${PLAN_MODE_NOTICE}${await repoSnapshot(session.cwd).then((facts) => facts ? `\n\n${facts}` : "").catch(() => "")}` : "";
-    const goalRules = session.goal ? `\n\n${GOAL_RULES}${session.goal.items.length ? `\n\n지금 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
-    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalRules}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
+    // A chat the user talks to may split a big request into goal chats; a goal chat never splits again.
+    const split = Boolean(session.goal && !session.parentId && !planMode && this.worktreeDataDir && await gitRepo(session.cwd).catch(() => undefined));
+    const board = commanderBoard(session, (id) => this.sessions.get(id));
+    const goalContext = session.goal ? `\n\n${goalRules(split)}${session.goal.items.length ? `\n\n지금 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}${board ? `\n\n이 채팅이 앞서 나눠 맡긴 목표:\n${board}` : ""}` : "";
+    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
     const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     if (first.sessionId) session.cliSessionId = first.sessionId;
@@ -418,6 +423,12 @@ export class Orchestra {
     delete session.handoffContext;
     // Plan mode: the lead's read-only answer is the plan; nothing is handed to workers.
     if (planMode) return this.finish(session);
+    // The lead split the request: this chat now runs the goal chats instead of its own workers.
+    if (split && this.addGoals(session, first.finalText)) {
+      this.turnChecklists.delete(session.id);
+      if (session.goal) session.goal.items = [];
+      return this.finish(session);
+    }
 
     const resolveRequests = (text: string) => parseDelegations(text).flatMap((request) => {
       const exact = workers.find((candidate) => candidate.id === request.target);
@@ -524,7 +535,7 @@ export class Orchestra {
       // Like Claude Code and Codex, a worker report that says "상태: 완료" is the answer: no second,
       // context-poor review run (it took as long as the work itself and was often cancelled).
       // A goal session needs the review: that is where the lead checks the work and updates the checklist.
-      if (!session.goal && workerResults.length && workerResults.every((text) => CLEAN_REPORT.test(text))) {
+      if (!this.trackingChecklist(session) && workerResults.length && workerResults.every((text) => CLEAN_REPORT.test(text))) {
         this.event(session, session.agent, "message", workerResults.map((text) => workerResults.length === 1 ? text.replace(REPORT_HEADER, "") : text).join("\n\n"), { role: "orchestrator", metadata: { phase: "worker-report", round } });
         return this.finish(session);
       }
@@ -536,7 +547,7 @@ export class Orchestra {
       const strict = roundFailed && roundsLeft > 0 && session.agent === "grok";
       const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()], Boolean(session.parentId)).catch(() => "");
       const gitFacts = await repoSnapshot(session.cwd).catch(() => "");
-      const goalReview = session.goal ? `\n\n${GOAL_RULES}${session.goal.items.length ? `\n\n이번 턴 시작 때의 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
+      const goalReview = session.goal ? `\n\n${goalRules(false)}${session.goal.items.length ? `\n\n이번 턴 시작 때의 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
       const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${goalReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
       const reviewStart = session.events.length;
       let review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
@@ -1004,6 +1015,11 @@ export class Orchestra {
     if (auto) this.goalAutoTurn.add(id);
     else this.goalAutoTurn.delete(id);
     // The user's own message restarts a goal loop that had stopped, with a fresh budget.
+    // The setting decides for every message of a chat the user talks to; a goal chat always runs to the end.
+    if (settings.autoRun !== undefined && !session.parentId && !auto) {
+      if (settings.autoRun) session.goal ??= freshGoal();
+      else delete session.goal;
+    }
     if (session.goal && !auto) Object.assign(session.goal, { idleTurns: 0, autoTurns: 0, startedAt: new Date().toISOString(), stopped: undefined, outcome: undefined });
     if (session.commander && !alreadyLogged) this.retryGoals(session);
     const controller = new AbortController();
@@ -1288,11 +1304,35 @@ export class Orchestra {
     return session;
   }
 
+  /**
+   * Stops the chat's run and its loop: no further turn opens by itself. A chat that split its work
+   * also stops every goal chat still running and leaves the waiting ones unstarted.
+   */
   stop(id: string): Session {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    // Settle the board first, so the tick that the stopped turns run starts nothing and reports nothing.
+    const goals = session.commander?.goals.filter((goal) => goal.state === "waiting" || goal.state === "running") ?? [];
+    const children: Session[] = [];
+    if (goals.length) {
+      session.commander!.reported = true;
+      for (const goal of goals) {
+        const child = goal.childId ? this.sessions.get(goal.childId) : undefined;
+        if (child) children.push(child);
+        goal.state = "stopped";
+        goal.merge = { ok: false, text: child ? "사용자가 중지했습니다. 작업 브랜치는 병합하지 않고 남겨 두었습니다." : "사용자가 중지해 시작하지 않았습니다." };
+        goal.endedAt ??= new Date().toISOString();
+      }
+    }
+    this.goalAutoNext.delete(id);
     this.controllers.get(id)?.abort();
     this.finishStopped(session);
+    if (session.goal && !session.goal.stopped && session.goal.items.length) this.endGoal(session, "사용자가 중지했습니다.", "stopped");
+    for (const child of children) this.stop(child.id);
+    if (goals.length) {
+      this.event(session, session.agent, "warning", `나눠 맡긴 일 ${goals.length}개를 멈췄습니다.`);
+      this.broadcast(session);
+    }
     return session;
   }
 
@@ -1333,8 +1373,9 @@ export class Orchestra {
     if (session.status !== "running") return;
     session.status = blocked ? "error" : "done"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
-    if (blocked && !session.goal) this.event(session, session.agent, "error", "워커가 막힌 채로 끝났고 총괄이 다시 맡기지 않았습니다. 작업은 끝나지 않았습니다.");
-    else this.event(session, session.agent, "status", session.goal ? "이번 턴을 마쳤습니다." : "세션이 완료되었습니다.");
+    const tracking = this.trackingChecklist(session);
+    if (blocked && !tracking) this.event(session, session.agent, "error", "워커가 막힌 채로 끝났고 총괄이 다시 맡기지 않았습니다. 작업은 끝나지 않았습니다.");
+    else this.event(session, session.agent, "status", tracking ? "이번 턴을 마쳤습니다." : "세션이 완료되었습니다.");
     // A message typed during this run that no turn picked up is the user's next request, not a note for later.
     const leftover = session.pendingInstructions ?? [];
     this.afterTurn(session, "done", leftover.length > 0);
@@ -1371,6 +1412,11 @@ export class Orchestra {
     if (items) this.turnChecklists.set(session.id, items);
   }
 
+  /** The lead keeps a checklist for this request (this turn or before), so the app runs it to the end. */
+  private trackingChecklist(session: Session): boolean {
+    return Boolean(session.goal && (this.turnChecklists.get(session.id)?.length || session.goal.items.length));
+  }
+
   /**
    * After every turn of a goal session: take the lead's latest checklist, then open the next turn
    * unless the checklist is settled, the user stopped the run or a limit was reached. A failed turn
@@ -1381,7 +1427,7 @@ export class Orchestra {
     this.turnChecklists.delete(session.id);
     if (session.commander) {
       this.commanderTick(session);
-      return;
+      if (commanderActive(session)) return;
     }
     const goal = session.goal;
     if (!goal || goal.stopped) return;
@@ -1394,16 +1440,17 @@ export class Orchestra {
     // The user's waiting message runs next (finish starts it); the loop resumes after that turn.
     if (userMessageWaiting) return;
     const step = nextGoalStep(session);
-    // A lead that forgot the checklist gets one more turn to write it.
+    // No checklist: an ordinary answer. Only a goal chat must keep one, and gets one more turn to write it.
+    if (!step.continue && step.reason === "no-checklist" && !session.parentId) return;
     if (!step.continue && step.reason === "no-checklist" && goal.autoTurns === 0 && outcome === "done") {
       goal.autoTurns++;
       this.goalAutoNext.add(session.id);
-      void this.followup(session.id, "[앱 — 끝까지 모드] 체크리스트가 없습니다. 사용자 요청 전체를 <<CHECKLIST>> 형식으로 나누고, 지금까지 한 일을 확인해 표시한 뒤 남은 항목을 위임하세요.", [], {}, true).catch(() => this.goalAutoNext.delete(session.id));
+      void this.followup(session.id, "[앱] 체크리스트가 없습니다. 사용자 요청 전체를 <<CHECKLIST>> 형식으로 나누고, 지금까지 한 일을 확인해 표시한 뒤 남은 항목을 위임하세요.", [], {}, true).catch(() => this.goalAutoNext.delete(session.id));
       return;
     }
     if (!step.continue) return this.endGoal(session, GOAL_STOP_TEXT[step.reason], step.reason === "complete" ? "complete" : "unfinished");
     goal.autoTurns++;
-    this.event(session, session.agent, "status", `끝까지 모드: 남은 항목 ${goal.items.filter((item) => item.status === "open").length}개, ${goal.autoTurns}번째 자동 턴을 시작합니다.`);
+    this.event(session, session.agent, "status", `남은 항목 ${goal.items.filter((item) => item.status === "open").length}개 — 이어서 진행합니다 (${goal.autoTurns}번째).`);
     this.goalAutoNext.add(session.id);
     void this.followup(session.id, goalTurnPrompt(goal.items, goal.autoTurns), [], {}, true).catch((error) => {
       this.goalAutoNext.delete(session.id);
@@ -1417,7 +1464,7 @@ export class Orchestra {
     goal.stopped = text;
     goal.outcome = outcome;
     const blocked = goal.items.filter((item) => item.status === "blocked");
-    this.event(session, session.agent, outcome === "complete" && !blocked.length ? "status" : "warning", `끝까지 모드 종료: ${text}${goal.items.length ? ` (${settledCount(goal.items)}/${goal.items.length} 항목)` : ""}${blocked.length ? `\n사람이 풀어야 할 것:\n${blocked.map((item) => `- ${item.text}${item.note ? ` — ${item.note}` : ""}`).join("\n")}` : ""}`);
+    this.event(session, session.agent, outcome === "complete" && !blocked.length ? "status" : "warning", `${text}${goal.items.length ? ` (${settledCount(goal.items)}/${goal.items.length} 항목)` : ""}${blocked.length ? `\n사람이 풀어야 할 것:\n${blocked.map((item) => `- ${item.text}${item.note ? ` — ${item.note}` : ""}`).join("\n")}` : ""}`);
     if (session.parentId) void this.childSettled(session);
   }
 
@@ -1505,7 +1552,8 @@ export class Orchestra {
     const settled = state.goals.length > 0 && state.goals.every((goal) => goal.state !== "waiting" && goal.state !== "running");
     if (!settled || state.reported || commander.status === "running" || commander.pendingInstructions?.length) return;
     state.reported = true;
-    this.event(commander, commander.agent, "status", "모든 목표가 끝났습니다. 총지휘가 결과를 정리합니다.");
+    state.reporting = true;
+    this.event(commander, commander.agent, "status", "나눠 맡긴 일이 모두 끝났습니다. 결과를 정리합니다.");
     void this.followup(commander.id, `[앱] 모든 목표가 끝났습니다. 아래 보드를 보고 목표별 결과, 병합 여부, 막힌 것과 사용자가 해야 할 일을 짧게 정리하세요. 새 목표는 만들지 마세요.\n\n${commanderBoard(commander, (id) => this.sessions.get(id))}`, [], {}, true)
       .catch((error) => this.event(commander, commander.agent, "error", error instanceof Error ? error.message : String(error)));
   }
@@ -1578,6 +1626,14 @@ export class Orchestra {
     if (result.sessionId) session.cliSessionId = result.sessionId;
     if (result.exitCode !== 0) throw new Error(`${agentNames[session.agent]} CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`);
     delete session.handoffContext;
+    state.reporting = false;
+    this.addGoals(session, result.finalText);
+    this.finish(session);
+  }
+
+  /** Puts the goals of a lead's answer on the chat's board (the tick starts them); returns how many. */
+  private addGoals(session: Session, text: string): number {
+    const state = session.commander ??= { goals: [] };
     const taken = new Set(state.goals.map((goal) => goal.key));
     const renamed = new Map<string, string>();
     // A goal the board already has is not added again (the commander tends to restate goals when
@@ -1585,7 +1641,7 @@ export class Orchestra {
     const sameTitle = (title: string) => title.replace(/\s+/gu, " ").trim().toLowerCase();
     const live = new Map(state.goals.filter((goal) => goal.state !== "stopped" && goal.state !== "failed").map((goal) => [sameTitle(goal.title), goal.key]));
     const duplicates: string[] = [];
-    const added = parseGoals(result.finalText, taken).filter((parsed) => {
+    const added = parseGoals(text, taken).filter((parsed) => {
       const existing = live.get(sameTitle(parsed.title));
       if (!existing) return true;
       renamed.set(parsed.key, existing);
@@ -1609,6 +1665,6 @@ export class Orchestra {
       this.event(session, session.agent, "status", `목표 ${added.length}개를 등록했습니다: ${added.map((goal) => `[${goal.key}] ${goal.title}${goal.after.length ? ` (${goal.after.join(", ")} 다음)` : ""}`).join(", ")}`);
     }
     if (duplicates.length) this.event(session, session.agent, "status", `이미 보드에 있는 목표는 다시 만들지 않았습니다: ${duplicates.map((key) => `[${key}]`).join(", ")}`);
-    this.finish(session);
+    return added.length;
   }
 }

@@ -9,7 +9,7 @@ import type { RunCliOptions } from "./cli.js";
 import { SHOT_DIR } from "./computer-bridge.js";
 import { Orchestra } from "./orchestra.js";
 import type { Session } from "./types.js";
-import { cleanupSessionWorktrees, ensureWorkerWorktree, pruneEmptyWorktrees, removeWorktree, userWorktrees, worktreeReviewNote, worktreeStatus, WorktreeDirtyError } from "./worktrees.js";
+import { cleanupSessionWorktrees, ensureWorkerWorktree, pruneEmptyWorktrees, removeWorktree, userWorktrees, worktreeReviewNote, worktreesRoot, worktreeStatus, WorktreeDirtyError } from "./worktrees.js";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
 
@@ -315,4 +315,9 @@ test("the user's own worktrees are listed for the lead; Sinawi's are not", async
   assert.match(prompts[0], /이 저장소의 사용자 작업 폴더/);
   assert.ok(prompts[0].includes(`\`${repo}\` — 브랜치 \`main\``));
   assert.doesNotMatch(prompts[0].split("## 워커 작업 위치")[0], /sinawi\/abcdef12/);
+});
+
+test("worktrees go outside a data folder whose path has a space", () => {
+  assert.equal(worktreesRoot("/Users/a/Library/Application Support/dev.sinawi.app/.data", "/Users/a"), "/Users/a/.sinawi/worktrees");
+  assert.equal(worktreesRoot("/tmp/data", "/Users/a"), "/tmp/data/worktrees");
 });
