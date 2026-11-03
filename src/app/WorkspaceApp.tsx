@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MotionConfig } from "framer-motion";
 import { ArrowDown, ArrowLeft, ChevronDown, Folder, MessageSquare, PanelRightClose, PanelRightOpen, Square } from "lucide-react";
 import { MarkdownSessionContext } from "../markdown-images";
@@ -12,7 +12,7 @@ import { submitSession } from "../submit";
 import { WorkerThread } from "../WorkerThread";
 import { workerLogRows } from "../worker-log";
 import { Sidebar } from "../Sidebar";
-import { inWorkspace, runningByWorkspace, workspaceTeamDefaults, workspaceName } from "../workspaces";
+import { inWorkspace, runningByWorkspace, workspaceTeamDefaults } from "../workspaces";
 import { useWorkspaces, WorkspacesContext } from "../workspace-context";
 import { WorkspaceSwitcher } from "../WorkspaceSwitcher";
 import { WorkspaceSettings } from "./WorkspaceSettings";
@@ -20,10 +20,11 @@ import { readPreference, writePreference, savedBoolean } from "../preferences";
 import { TerminalPanel } from "../TerminalPanel";
 import { NotificationsCenter } from "../NotificationsCenter";
 import { toggleTerminal, terminalOwnsKeyboardEvent, TERMINAL_AUTH_REFRESH_EVENT, TERMINAL_NOTICE_EVENT, type TerminalNotice } from "../terminal-events";
-import { BrowserDesktop, type DesktopRequest } from "../BrowserDesktop";
+import type { DesktopRequest } from "../BrowserDesktop";
+import { setDesktopHost } from "../desktop-host";
 import { SIM_DEVICE_STORE, SIM_OPEN_EVENT } from "../sim-panel";
 import type { DesktopMode } from "../desktop-windows";
-import { claimCommand, commandForThisWorkspace, holdCommand, setBrowserWorkspace } from "../browser-agent";
+import { commandForThisWorkspace, holdCommand, setBrowserWorkspace } from "../browser-agent";
 import { browserRegistry } from "../browser-registry";
 import { APP_ERROR_EVENT, holdUrl, OPEN_URL_EVENT } from "../link-open";
 import { chatShortcut, globalBrowserShortcut, browserOwnsFocus } from "../browser-shortcuts";
@@ -222,11 +223,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     const onCommand = (event: Event) => {
       const detail = (event as CustomEvent<Parameters<typeof holdCommand>[0]>).detail;
       if (!detail?.id) return;
-      // Another workspace's agent: its pages must not open here. Answer at once instead of a timeout.
-      if (!commandForThisWorkspace(detail)) {
-        if (claimCommand(detail.id)) void fetch("/api/browser/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: detail.id, ok: false, error: t("ws.browserOtherWorkspace", { name: workspaceName(workspacesApi.workspaces, detail.workspaceId), current: workspaceName(workspacesApi.workspaces, workspaceId) }) }) }).catch(() => undefined);
-        return;
-      }
+      // Another workspace's agent: that workspace's own (off-screen) browser takes it (WorkspaceDesktops).
+      if (!commandForThisWorkspace(detail)) return;
       if (browserRegistry.count() > 0) return;
       holdCommand(detail);
       showBrowser(false);
@@ -284,6 +282,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const { setSlash, setFileCompletion, historyIndex, historyDraft, composerInput } = completion;
   const attachmentState = useAttachments(composerInput, setChatError);
   const { attachments, setAttachments, attachmentsReady, addAttachments, dragging, dropHandlers } = attachmentState;
+  // The browser windows live above this component (see WorkspaceDesktops); hand them this workspace's part.
+  const attachRef = useRef(addAttachments); attachRef.current = addAttachments;
+  const attachToComposer = useCallback((items: Parameters<typeof addAttachments>[0]) => attachRef.current(items), []);
+  useLayoutEffect(() => { setDesktopHost({ workspaceId, onAttach: attachToComposer, request: desktopRequest, simRequest, onModeChange: setDesktopMode }); }, [workspaceId, attachToComposer, desktopRequest, simRequest]);
+  useLayoutEffect(() => () => setDesktopHost(undefined), []);
   useEffect(() => {
     if (selected && allSessions.some((session) => session.id === selected && session.workspaceId !== workspaceId)) {
       setSelected(undefined); setWorkerSelection(undefined); setGroupId(""); setPrompt(""); setRecommendation(undefined);
@@ -777,7 +780,6 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         >
           {lastAnnouncement}
         </div>
-        <BrowserDesktop onAttach={addAttachments} workspaceId={workspaceId} firstWorkspace={workspaceId === defaultWorkspaceId} request={desktopRequest} simRequest={simRequest} onModeChange={setDesktopMode} />
         {chatCollapsed && desktopMode !== "max" && <aside className="chat-rail" aria-label={t("ws.collapsedChat")}>
           <button type="button" onClick={() => setChatCollapsed(false)} aria-label={t("ws.expandChat")} title={t("ws.expandChat")}><PanelRightOpen size={18} /><MessageSquare size={18} /><span>{t("ws.chat")}</span></button>
         </aside>}

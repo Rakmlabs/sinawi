@@ -48,11 +48,19 @@ export type BrowserPanelProps = {
   onSnap?: (snap: "left" | "right" | "max") => void;
   onAttach: (items: ComposerAttachment[]) => void;
   onNotice?: (text: string) => void;
+  /** The workspace this browser belongs to: it runs that workspace's agents' commands. */
+  workspaceId?: string;
+  /** The workspace is not on screen: pages stay laid out behind the app so its agents keep working. */
+  background?: boolean;
 };
 
-export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAttach, onNotice, instanceId = "main" }: BrowserPanelProps) {
+export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAttach, onNotice, instanceId = "main", workspaceId, background = false }: BrowserPanelProps) {
   const STORE = instanceId === "main" ? BASE_STORE : `${BASE_STORE}.${instanceId}`;
-  useLayoutEffect(() => browserRegistry.mount(instanceId), [instanceId]);
+  useLayoutEffect(() => browserRegistry.mount(instanceId, workspaceId), [instanceId, workspaceId]);
+  const workspaceRef = useRef(workspaceId); workspaceRef.current = workspaceId;
+  const backgroundRef = useRef(background); backgroundRef.current = background;
+  /** Native tabs laid out right now (on top, or behind the app): snapshots and real input work. */
+  const laidOut = useRef(new Set<string>());
   const isActive = () => browserRegistry.isActive(instanceId);
   // ⌘W etc. apply when focus is in this browser, or its desktop window was the last thing clicked.
   const ownsNativeFocus = () => { const id = nativeFocusedTab(); return Boolean(id && tabsRef.current.some((tab) => tab.id === id)); };
@@ -555,7 +563,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     }
     if (tab.native && command.action === "screenshot" && command.args.full) {
       const until = Date.now() + 2000;
-      while (shownTab.current !== tab.id && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+      while (!laidOut.current.has(tab.id) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
       const page = await callFrame(tab.id, "fullpage", {}, 6000);
       if (!page.ok) return page;
       const info = page.result as { width: number; height: number; scrollX: number; scrollY: number; url?: string };
@@ -569,7 +577,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     if (tab.native && command.action === "screenshot") {
       // Real pixels from WebKit (canvas, video, WebGL, cross-origin images included).
       const until = Date.now() + 2000;
-      while (shownTab.current !== tab.id && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+      while (!laidOut.current.has(tab.id) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
       const box = await callFrame(tab.id, "rect", command.args, 9000);
       if (!box.ok) return box;
       const info = box.result as { rect: NativeRect; url?: string; innerWidth?: number; innerHeight?: number };
@@ -624,10 +632,18 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   runAgentRef.current = runAgentCommand;
   const instanceRef = useRef(instanceId);
   instanceRef.current = instanceId;
+  // Commands for this panel: its workspace's (on screen or not), and on screen also those naming no workspace.
+  const ownsCommand = (command: AgentCommand) => {
+    const own = workspaceRef.current;
+    if (!own) return commandForThisWorkspace(command) && browserRegistry.isActive(instanceRef.current);
+    const target = command.workspaceId ?? (backgroundRef.current ? undefined : own);
+    return target === own && browserRegistry.isPrimary(instanceRef.current, own);
+  };
+  const ownsCommandRef = useRef(ownsCommand); ownsCommandRef.current = ownsCommand;
   useLayoutEffect(() => {
-    const command = takeHeldCommand();
+    const command = takeHeldCommand(workspaceRef.current, !backgroundRef.current);
     if (!command?.id) return;
-    if (!browserRegistry.isActive(instanceRef.current)) { holdCommand(command); return; }
+    if (!ownsCommandRef.current(command)) { holdCommand(command); return; }
     if (!claimCommand(command.id)) return;
     void runAgentRef.current(command).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) })).then((result) =>
       fetch("/api/browser/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: command.id, ...result }) }).catch(() => undefined));
@@ -635,7 +651,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   useEffect(() => {
     const handle = (event: Event) => {
       const command = (event as CustomEvent<AgentCommand & { surface?: string }>).detail;
-      if (!command?.id || !commandForThisWorkspace(command) || !browserRegistry.isActive(instanceRef.current) || !claimCommand(command.id)) return;
+      if (!command?.id || !ownsCommandRef.current(command) || !claimCommand(command.id)) return;
       void runAgentRef.current(command).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) })).then((result) =>
         fetch("/api/browser/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: command.id, ...result }) }).catch(() => undefined));
     };
@@ -714,9 +730,9 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
     const shown = new Set<string>();
     const reopening = new Set<string>();
     let freezing = false;
-    const apply = (id: string, rect: NativeRect | undefined, show: boolean, zoom: number) => {
-      if (show) shown.add(id); else shown.delete(id);
-      void nativeBrowser.layout(id, rect, show, zoom).then((exists) => {
+    const apply = (id: string, rect: NativeRect | undefined, show: boolean, zoom: number, behind = false) => {
+      if (show) { shown.add(id); laidOut.current.add(id); } else { shown.delete(id); laidOut.current.delete(id); }
+      void nativeBrowser.layout(id, rect, show, zoom, behind).then((exists) => {
         const tab = tabsRef.current.find((item) => item.id === id);
         // The view is gone (app reload, StrictMode remount): load the tab's page again.
         if (!exists && show && tab?.url && !reopening.has(id)) { reopening.add(id); void navigate(id, tab.url).catch(() => undefined).finally(() => reopening.delete(id)); lastKey = ""; }
@@ -728,27 +744,32 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       const tab = list.find((item) => item.id === activeRef.current);
       const el = slot.current;
       // No document.hidden check: an occluded window reports hidden, and agents still need the view laid out.
-      const box = openRef.current && tab?.native && el?.isConnected ? el.getBoundingClientRect() : undefined;
+      const background = backgroundRef.current;
+      const box = openRef.current && el?.isConnected ? el.getBoundingClientRect() : undefined;
       const rect = box ? slotBounds(box, window.innerWidth, window.innerHeight) : undefined;
-      const covered = Boolean(rect && isCovered(rect, (x, y) => document.elementFromPoint(x, y), el));
-      const visible = Boolean(rect && !covered);
+      // Only the tab on screen goes on top; in a workspace the user is not in, nothing does.
+      const front = !background && tab?.native ? rect : undefined;
+      const covered = Boolean(front && isCovered(front, (x, y) => document.elementFromPoint(x, y), el));
+      const visible = Boolean(front && !covered);
       const choice = viewportRef.current;
       const zoom = choice.mode === "device" && box ? box.width / choice.width : 1;
-      const key = `${layoutKey(tab?.id, rect, visible, zoom)}|${list.filter((item) => item.native).map((item) => item.id).join(",")}`;
+      const key = `${layoutKey(tab?.id, rect, visible, zoom)}|${background ? "bg" : ""}|${list.filter((item) => item.native).map((item) => item.id).join(",")}`;
       if (key === lastKey) return;
       lastKey = key;
       if (covered && tab && shown.has(tab.id)) {
         // Keep a still frame under the menu/dialog instead of a blank hole.
         freezing = true;
         const id = tab.id;
-        void nativeBrowser.screenshot(id).then((image) => setFrozen({ id, image })).catch(() => undefined).finally(() => { freezing = false; apply(id, undefined, false, zoom); shownTab.current = undefined; lastKey = ""; });
+        void nativeBrowser.screenshot(id).then((image) => setFrozen({ id, image })).catch(() => undefined).finally(() => { freezing = false; apply(id, rect, Boolean(rect), zoom, true); shownTab.current = undefined; lastKey = ""; });
         return;
       }
       for (const item of list) {
         if (!item.native) continue;
-        const show = visible && item.id === tab?.id;
-        if (!show && !shown.has(item.id)) continue;
-        apply(item.id, show ? rect : undefined, show, zoom);
+        const onTop = visible && item.id === tab?.id;
+        // Every other tab stays laid out behind the app: an agent working in a tab the user is not
+        // looking at (or in a workspace the user is not in) still gets screenshots and real clicks.
+        if (!rect && !shown.has(item.id)) continue;
+        apply(item.id, rect, Boolean(rect), zoom, !onTop);
       }
       shownTab.current = visible ? tab?.id : undefined;
       if (visible) setFrozen((old) => (old ? undefined : old));

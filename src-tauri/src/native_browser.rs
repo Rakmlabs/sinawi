@@ -218,7 +218,7 @@ mod mac {
     use base64::Engine;
     use block2::{DynBlock, RcBlock};
     use objc2::{define_class, msg_send, rc::Retained, runtime::{AnyObject, Bool, ProtocolObject}, sel, Message, MainThreadMarker, MainThreadOnly};
-    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventModifierFlags, NSEventType, NSImage, NSOpenPanel, NSView};
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventModifierFlags, NSEventType, NSImage, NSOpenPanel, NSView, NSWindowOrderingMode};
     use objc2_foundation::{NSArray, NSData, NSDictionary, NSError, NSHTTPURLResponse, NSNotFound, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSProcessInfo, NSProgressReporting, NSRange, NSRect, NSSize, NSString, NSURLRequest, NSURLResponse, NSURL};
     use objc2_web_kit::{
         WKContentWorld, WKDownload, WKDownloadDelegate, WKFrameInfo, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationResponse, WKNavigationResponsePolicy,
@@ -241,6 +241,10 @@ mod mac {
     thread_local! {
         /// Main-thread only: AppKit objects never leave the main thread.
         static TABS: RefCell<HashMap<String, Retained<WKWebView>>> = RefCell::new(HashMap::new());
+        /// Tabs laid out behind the app's own webview: not on screen, but not hidden either, so
+        /// WebKit keeps painting them and snapshots and real input work (an agent's tab the user
+        /// is not looking at, or a workspace the user is not in).
+        static BEHIND: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
         static DELEGATE: RefCell<Option<Retained<Delegate>>> = const { RefCell::new(None) };
         static DIALOGS: RefCell<HashMap<String, PendingDialog>> = RefCell::new(HashMap::new());
         static ARMED: RefCell<HashMap<String, ArmedDialog>> = RefCell::new(HashMap::new());
@@ -581,6 +585,7 @@ mod mac {
         if let Some(pending) = DIALOGS.with(|dialogs| dialogs.borrow_mut().remove(tab)) { answer_dialog(pending, false, None, "closed"); }
         ARMED.with(|armed| armed.borrow_mut().remove(tab));
         LAST_DIALOG.with(|last| last.borrow_mut().remove(tab));
+        BEHIND.with(|behind| behind.borrow_mut().remove(tab));
         if let Some(view) = TABS.with(|tabs| tabs.borrow_mut().remove(tab)) {
             unsafe { view.stopLoading(); view.removeFromSuperview(); }
         }
@@ -603,7 +608,7 @@ mod mac {
         }).await
     }
 
-    pub async fn layout(main: &Webview, tab: String, rect: Option<Rect>, visible: bool, zoom: f64) -> Result<bool, String> {
+    pub async fn layout(main: &Webview, tab: String, rect: Option<Rect>, visible: bool, zoom: f64, behind: bool) -> Result<bool, String> {
         on_main(main, QUICK, move |_mtm, host, reply| unsafe {
             let Some(view) = tab_view(&tab) else { reply.send(Ok(false)); return };
             match rect.filter(|_| visible) {
@@ -613,6 +618,12 @@ mod mac {
                     view.setFrame(ns_rect(frame));
                     let zoom = clamp_zoom(zoom);
                     if (view.pageZoom() - zoom).abs() > 0.001 { view.setPageZoom(zoom); }
+                    let was_behind = BEHIND.with(|set| set.borrow().contains(&tab));
+                    if was_behind != behind {
+                        // Re-adding an existing subview moves it in the sibling order.
+                        parent.addSubview_positioned_relativeTo(&view, if behind { NSWindowOrderingMode::Below } else { NSWindowOrderingMode::Above }, Some(host));
+                        BEHIND.with(|set| { let mut set = set.borrow_mut(); if behind { set.insert(tab.clone()); } else { set.remove(&tab); } });
+                    }
                     view.setHidden(false);
                 }
                 None => view.setHidden(true),
@@ -911,7 +922,7 @@ mod mac {
     use tauri::Webview;
     const UNSUPPORTED: &str = "native browser is only available on macOS";
     pub async fn open(_: &Webview, _: String, _: String, _: String, _: Option<String>, _: Option<String>) -> Result<(), String> { Err(UNSUPPORTED.into()) }
-    pub async fn layout(_: &Webview, _: String, _: Option<Rect>, _: bool, _: f64) -> Result<bool, String> { Ok(false) }
+    pub async fn layout(_: &Webview, _: String, _: Option<Rect>, _: bool, _: f64, _: bool) -> Result<bool, String> { Ok(false) }
     pub async fn close(_: &Webview, _: String) -> Result<(), String> { Ok(()) }
     pub async fn history(_: &Webview, _: String, _: String) -> Result<bool, String> { Err(UNSUPPORTED.into()) }
     pub async fn emulate(_: &Webview, _: String, _: Option<String>) -> Result<bool, String> { Ok(false) }
@@ -946,11 +957,12 @@ pub async fn native_browser_open(webview: tauri::Webview, tab: String, url: Stri
     mac::open(&webview, tab, url, script, page_script, user_agent).await
 }
 
-/// Positions (or hides) a tab's view. Returns false when the tab has no native view (anymore).
+/// Positions (or hides) a tab's view; `behind` keeps it laid out under the app's webview.
+/// Returns false when the tab has no native view (anymore).
 #[tauri::command]
-pub async fn native_browser_layout(webview: tauri::Webview, tab: String, rect: Option<Rect>, visible: bool, zoom: Option<f64>) -> Result<bool, String> {
+pub async fn native_browser_layout(webview: tauri::Webview, tab: String, rect: Option<Rect>, visible: bool, zoom: Option<f64>, behind: Option<bool>) -> Result<bool, String> {
     check_caller(&webview, &tab)?;
-    mac::layout(&webview, tab, rect, visible, zoom.unwrap_or(1.0)).await
+    mac::layout(&webview, tab, rect, visible, zoom.unwrap_or(1.0), behind.unwrap_or(false)).await
 }
 
 #[tauri::command]

@@ -200,7 +200,8 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 
 export const nativeBrowser = {
   async open(tab: string, url: string, userAgent?: string) { const scripts = await pageScripts(); await call("native_browser_open", { tab, url, script: scripts.script, pageScript: scripts.pageScript, userAgent: userAgent || null }); },
-  layout: (tab: string, rect: NativeRect | undefined, visible: boolean, zoom = 1) => call<boolean>("native_browser_layout", { tab, rect: rect ?? null, visible, zoom }),
+  /** `behind`: laid out under the app's own webview (off screen, but painting and scriptable). */
+  layout: (tab: string, rect: NativeRect | undefined, visible: boolean, zoom = 1, behind = false) => call<boolean>("native_browser_layout", { tab, rect: rect ?? null, visible, zoom, behind }),
   close: (tab: string) => call<void>("native_browser_close", { tab }),
   history: (tab: string, op: "back" | "forward" | "reload" | "stop" | "focus") => call<boolean>("native_browser_history", { tab, op }),
   emulate: (tab: string, userAgent: string) => call<boolean>("native_browser_emulate", { tab, userAgent: userAgent || null }),

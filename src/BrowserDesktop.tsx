@@ -12,10 +12,14 @@ const EDGES: Edge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 const newId = () => Math.random().toString(36).slice(2, 10);
 
 export type DesktopRequest = { n: number; toggle?: boolean };
-type Props = { workspaceId: string; firstWorkspace: boolean; onAttach: (items: ComposerAttachment[]) => void; request: DesktopRequest; simRequest: DesktopRequest; onModeChange: (mode: DesktopMode) => void };
+type Props = {
+  workspaceId: string; firstWorkspace: boolean; onAttach: (items: ComposerAttachment[]) => void; request: DesktopRequest; simRequest: DesktopRequest; onModeChange: (mode: DesktopMode) => void;
+  /** The user is in another workspace: the windows stay alive, out of sight, for this workspace's agents. */
+  background?: boolean;
+};
 
 /** Browser windows (and the one simulator window) floating over the workspace (the only browser layout). */
-export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request, simRequest, onModeChange }: Props) {
+export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request, simRequest, onModeChange, background = false }: Props) {
   const area = useRef<HTMLDivElement>(null);
   const [windows, setWindows] = useState<DesktopWindow[]>(() => loadWorkspaceWindows((key) => localStorage.getItem(key), workspaceId, firstWorkspace));
   const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -23,7 +27,11 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
   useEffect(() => browserRegistry.subscribe(() => force((n) => n + 1)), []);
   useEffect(() => { localStorage.setItem(desktopStoreKey(workspaceId), JSON.stringify(windows)); }, [windows, workspaceId]);
   const mode = desktopMode(windows);
-  useEffect(() => { onModeChange(mode); }, [mode, onModeChange]);
+  useEffect(() => { if (!background) onModeChange(mode); }, [mode, onModeChange, background]);
+  // Requests come from whichever source drives this desktop now (the workspace on screen, or an
+  // agent while it is off screen): each request object is acted on once, so switching sources
+  // never replays an old one.
+  const handled = useRef(new WeakSet<DesktopRequest>());
   useEffect(() => {
     const measure = () => { if (area.current) setSize({ width: area.current.clientWidth, height: area.current.clientHeight }); };
     measure();
@@ -54,6 +62,8 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
   // Layout, not a timer: a background WKWebView does not run requestAnimationFrame.
   useLayoutEffect(() => {
     if (!request.n) return;
+    if (handled.current.has(request)) return;
+    handled.current.add(request);
     setWindows((old) => {
       const browsers = old.filter((w) => w.kind !== "simulator");
       if (!browsers.length) { const id = `w${newId()}`; browserRegistry.activate(id); return [...old, newWindow(old, size, id)]; }
@@ -67,6 +77,8 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
   // The header's simulator button, or an agent's `ao-sim launch`: one simulator window, shown on top.
   useLayoutEffect(() => {
     if (!simRequest.n) return;
+    if (handled.current.has(simRequest)) return;
+    handled.current.add(simRequest);
     setWindows((old) => {
       const sim = old.find((w) => w.kind === "simulator");
       if (!sim) return [...old, simulatorWindow(old, size, `sim${newId()}`)];
@@ -119,7 +131,7 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
   const label = (win: DesktopWindow) => win.kind === "simulator" ? t("sim.window") : t("desk.windowN", { n: browsers.indexOf(win) + 1 });
 
   return (
-    <div ref={area} className={`browser-desktop desk-${mode}`} aria-label={t("desk.label")}>
+    <div ref={area} className={`browser-desktop desk-${mode}${background ? " background" : ""}`} aria-label={t("desk.label")} aria-hidden={background || undefined}>
       {windows.map((win) => {
         const frame = frameOf(win, size);
         const fixed = Boolean(win.maximized || win.snap);
@@ -142,8 +154,8 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
               </div>
             </header>
             <div className="desktop-body">
-              {win.kind === "simulator" ? <SimulatorPanel open={!win.minimized} onAttach={onAttach} /> : (
-                <BrowserPanel instanceId={win.id} open={!win.minimized} onOpenChange={(next) => { update(win.id, (w) => ({ ...w, minimized: !next })); if (next) focus(win.id); }}
+              {win.kind === "simulator" ? (background ? null : <SimulatorPanel open={!win.minimized} onAttach={onAttach} />) : (
+                <BrowserPanel instanceId={win.id} workspaceId={workspaceId} background={background} open={!win.minimized} onOpenChange={(next) => { update(win.id, (w) => ({ ...w, minimized: !next })); if (next) focus(win.id); }}
                   onLastTabClosed={() => close(win.id)} onSnap={(to) => snap(win.id, to)} onAttach={onAttach} />
               )}
             </div>

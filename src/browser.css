@@ -125,6 +125,8 @@
 
 /* ---- 바탕화면 브라우저 창 ---- */
 .browser-desktop { position: fixed; top: var(--window-header-height, 48px); right: 0; bottom: 0; left: 0; pointer-events: none; z-index: 40; overflow: hidden; }
+/* Another workspace's windows: laid out (their pages sit behind the app for its agents) but never seen or hit. */
+.browser-desktop.background { visibility: hidden; }
 .desktop-window { position: absolute; display: flex; flex-direction: column; pointer-events: auto; border-radius: var(--radius-composer); overflow: hidden; background: var(--bg-surface); box-shadow: 0 18px 50px var(--shadow-color), 0 0 0 1px var(--highlight); }
 .desktop-window[hidden] { display: none; }
 .desktop-window.focused { box-shadow: 0 22px 60px var(--shadow-color), 0 0 0 1px var(--selection); }

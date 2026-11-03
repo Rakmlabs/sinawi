@@ -30,7 +30,7 @@ test("shell commands can be resent and every other command id runs once", () => 
   assert.match(panel, /claimCommand\(command\.id\)/);
   assert.match(panel, /commandTargetsOwnApp/);
   assert.match(panel, /runAgentRef/);
-  assert.match(panel, /takeHeldCommand\(\)/);
+  assert.match(panel, /takeHeldCommand\(workspaceRef\.current/);
   const main = readFileSync(new URL("./app/WorkspaceApp.tsx", import.meta.url), "utf8");
   assert.match(main, /holdCommand\(detail\)/);
   assert.doesNotMatch(main, /__retry/);
@@ -84,4 +84,15 @@ test("each agent keeps its own browser tab; a second session gets a new one", ()
   // A closed current tab falls back to the rules above; no owner keeps the old behaviour.
   assert.deepEqual(agentTabFor(two, "t1", "s1:orchestrator", "gone"), { id: "t1" });
   assert.deepEqual(agentTabFor(two, "t3", undefined), { id: "t3" });
+});
+
+test("a parked command waits for its own workspace's browser", () => {
+  const company = { type: "browser-command" as const, id: "c1", action: "goto", args: {}, workspaceId: "company" };
+  const loose = { type: "browser-command" as const, id: "l1", action: "status", args: {} };
+  holdCommand(company);
+  holdCommand(loose);
+  assert.equal(takeHeldCommand("personal", false), undefined, "an off-screen personal browser takes neither");
+  assert.equal(takeHeldCommand("personal", true), loose, "on screen, a command naming no workspace is taken");
+  assert.equal(takeHeldCommand("company", true), company);
+  assert.equal(takeHeldCommand("company", true), undefined);
 });

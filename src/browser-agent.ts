@@ -20,6 +20,7 @@ export function agentTabFor<T extends { id: string; url: string; owner?: string 
 let browserWorkspace: string | undefined;
 /** The workspace on screen: its browser windows are the only ones mounted. */
 export function setBrowserWorkspace(id: string) { browserWorkspace = id; }
+export const browserWorkspaceId = () => browserWorkspace;
 /** An agent's command runs only in its own workspace's browser (company pages stay in company). */
 export function commandForThisWorkspace(command: { workspaceId?: string }): boolean {
   return !command.workspaceId || !browserWorkspace || command.workspaceId === browserWorkspace;
@@ -65,20 +66,26 @@ export function replayCommand(action: string): boolean {
 const claimed = new Set<string>();
 const claimedOrder: string[] = [];
 
-let held: AgentCommand | undefined;
+/** One parked command per workspace ("" for a command that names none: the workspace on screen). */
+const held = new Map<string, AgentCommand>();
 
 /** Park a command until a browser panel mounts.
  *  WKWebView's default inactive policy suspends the view when the window is not frontmost,
  *  so setTimeout and requestAnimationFrame do not run and must not carry the handoff. */
 export function holdCommand(command: AgentCommand): void {
-  if (command.id) held = command;
+  if (command.id) held.set(command.workspaceId ?? "", command);
 }
 
-/** The panel that just mounted takes the parked command. A panel that is not the target puts it back. */
-export function takeHeldCommand(): AgentCommand | undefined {
-  const command = held;
-  held = undefined;
-  return command;
+/**
+ * The panel that just mounted takes the parked command of its workspace (and, on screen, one that
+ * names no workspace). A panel that is not the target puts it back.
+ */
+export function takeHeldCommand(workspaceId?: string, onScreen = true): AgentCommand | undefined {
+  for (const key of [workspaceId ?? "", ...(onScreen && workspaceId ? [""] : [])]) {
+    const command = held.get(key);
+    if (command) { held.delete(key); return command; }
+  }
+  return undefined;
 }
 
 /** First delivery of an id wins. A 400ms resend must not start the command again. */

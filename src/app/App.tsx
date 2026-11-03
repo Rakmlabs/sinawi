@@ -4,6 +4,7 @@ import { isStrandedShell, returnToAppServer } from "../app-origin";
 import { useWorkspaceState } from "./useWorkspaceState";
 import { useOnboardingView } from "./useOnboardingView";
 import { WorkspaceApp } from "./WorkspaceApp";
+import { WorkspaceDesktops } from "./WorkspaceDesktops";
 import { WorkspacesContext, type WorkspacesApi } from "../workspace-context";
 import { t } from "../i18n";
 import { UpdateBanner } from "../updates/UpdateBanner";
@@ -34,6 +35,7 @@ export function App() {
       else retry();
     }}>{t("common.retry")}</button></div>}
     {workspaces ? <WorkspaceApp key={workspaces.currentWorkspaceId} workspaceId={workspaces.currentWorkspaceId} defaults={workspaces.defaults[workspaces.currentWorkspaceId] ?? {}} onDefaultsChange={updateDefaults} /> : !workspaceError && <div role="status">{t("app.loadingWorkspace")}</div>}
+    {workspaces && <WorkspaceDesktops current={workspaces.currentWorkspaceId} workspaceIds={workspaces.workspaces.map((item) => item.id)} firstId={workspaces.workspaces[0]?.id} />}
     <UpdateBanner />
   </WorkspacesContext.Provider>;
 }

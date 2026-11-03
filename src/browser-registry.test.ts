@@ -31,3 +31,19 @@ test("⌘W only targets a browser window after it was clicked, never the app", (
   assert.equal(registry.desktopFocused(), false);
   unmount();
 });
+
+test("each workspace has its own primary browser; only the one on screen is active", () => {
+  let screen = "personal";
+  const r = createBrowserRegistry(() => screen);
+  r.mount("p1", "personal"); r.mount("c1", "company"); r.mount("c2", "company");
+  assert.equal(r.active(), "p1");
+  assert.ok(r.isPrimary("c2", "company"), "the off-screen company browser still serves company agents");
+  r.activate("c1");
+  assert.ok(r.isPrimary("c1", "company"));
+  assert.equal(r.active(), "p1", "activating a company window does not take over the screen");
+  assert.equal(r.count(), 1);
+  assert.equal(r.countIn("company"), 2);
+  screen = "company";
+  assert.equal(r.active(), "c1");
+  assert.equal(r.count(), 2);
+});
