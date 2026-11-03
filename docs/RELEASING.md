@@ -7,23 +7,30 @@ Sinawi는 Tauri updater 플러그인으로 스스로 업데이트한다. 앱은
 
 ## 한눈에 보기
 
-지금은 Developer ID 인증서가 메인테이너 Mac 키체인에만 있으므로, 서명·공증 릴리스는 **로컬에서** 만든다.
+릴리스는 **태그 push 하나로** 나간다. GitHub Actions 가 빌드, Developer ID 서명, 공증, 릴리스 publish 까지 한다.
 
 ```
-node scripts/release.mjs minor --tag --notes notes.md   # 버전 올림 + 커밋 + 주석 태그
+node scripts/release.mjs minor --tag --notes notes.md   # 버전 올림 + 커밋 + 주석 태그(노트 = 태그 메시지)
+git push && git push origin v1.3.0                      # → Release 워크플로가 빌드·서명·공증·publish
+```
+
+- publish 되는 순간 설치된 앱들이 업데이트를 받는다. `main` push 만으로는 릴리스되지 않는다(CI 만 돈다).
+- 접미사가 붙은 태그(`v1.3.0-beta.1`)는 pre-release 로 올라가서 앱 업데이터가 보지 않는다. 베타 배포용이다.
+- 서명용 Secrets(아래)가 하나라도 없으면 워크플로는 빌드하지 않고 경고만 남긴다. 아무도 설치할 수 없는 앱이 올라가는 것을 막기 위해서다.
+- Secrets 를 처음 넣었거나 바꿨으면, Actions → Release → **Run workflow** 로 시험 실행한다. 같은 빌드·서명·공증을 하되
+  결과는 릴리스가 아니라 워크플로 아티팩트(7일 보관)로 올린다.
+
+### 로컬에서 내기 (예비 방법)
+
+CI 를 쓸 수 없을 때는 이 Mac 에서 같은 결과를 만든다. 먼저 publish 된 릴리스가 있으면 워크플로의 `guard` 잡이 빌드를 건너뛴다.
+
+```
 TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/sinawi.key)" \
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ~/.tauri/sinawi.key.password)" \
   bash scripts/bundle-macos.sh                           # 서명 + 공증 → release-assets/
 node scripts/latest-json.mjs --repo Rakmlabs/sinawi --tag v1.3.0 --assets release-assets --notes notes.md
-git push && git push origin v1.3.0
 gh release create v1.3.0 --verify-tag --title "Sinawi 1.3.0" --notes-file notes.md release-assets/*
 ```
-
-태그 push 로 Release 워크플로도 돌지만, 그 태그의 릴리스가 이미 publish 돼 있으면 `guard` 잡이 빌드를 건너뛴다.
-워크플로가 먼저 시작해 버렸어도 publish 된 릴리스의 파일은 덮어쓰지 않는다.
-
-서명 없이 CI 로만 낼 때(옛 방식)는 태그만 push 하면 draft 릴리스가 생기고, 확인 후 Publish 한다.
-Publish 하기 전까지 사용자 앱은 새 버전을 보지 못한다(`releases/latest` 는 draft와 pre-release를 건너뛴다).
 
 ## 버전: 기준은 하나
 
@@ -53,8 +60,8 @@ Publish 하기 전까지 사용자 앱은 새 버전을 보지 못한다(`releas
 
 1. 태그가 주석 태그면 그 메시지(`git tag -a v1.3.0 -F notes.md`, 또는 `release.mjs --tag --notes notes.md`).
 2. 아니면 GitHub 자동 생성 노트(이전 태그 이후 PR 목록).
-3. draft 를 **Publish 하는 순간** `refresh-notes` 잡이 릴리스 본문을 `latest.json` 에 다시 써 넣는다.
-   그러니 draft 단계에서 GitHub 화면으로 본문을 고쳐도 앱에 그대로 반영된다.
+3. publish 된 뒤 GitHub 화면에서 본문을 고쳐 **다시 publish** 하면(draft 로 돌렸다가 publish) `refresh-notes` 잡이
+   그 본문을 `latest.json` 에 다시 써 넣는다. 워크플로가 직접 만든 릴리스는 이 잡을 깨우지 않으므로, 처음 노트는 태그 메시지로 쓴다.
 
 pre-release 로 publish 하면 `latest` 가 그 릴리스를 가리키지 않으므로 사용자에게 배포되지 않는다(베타용으로 쓸 수 있다).
 
@@ -62,10 +69,12 @@ pre-release 로 publish 하면 `latest` 가 그 릴리스를 가리키지 않으
 
 - `.github/workflows/ci.yml` — PR 과 main push: `release.mjs check`, `typecheck`, `test`, `build`, `cargo check/test`.
 - `.github/workflows/release.yml`
-  - `v*` 태그 push → macOS(universal: arm64+x64) 빌드 → `scripts/bundle-macos.sh` → `latest.json` → **draft** 릴리스 업로드.
+  - `v*` 태그 push → `guard`(Secrets 확인, 이미 publish 된 태그는 건너뜀) → macOS(universal: arm64+x64) 빌드 →
+    임시 키체인에 Developer ID 인증서 가져오기 → `scripts/bundle-macos.sh`(서명 + 공증) → `latest.json` → 릴리스 **publish**.
     올라가는 파일: `Sinawi_<v>_universal.dmg`, `Sinawi_<v>_universal.app.tar.gz`, `.sig`, `latest.json`.
-    같은 태그로 다시 돌리면 파일을 덮어쓴다(`--clobber`).
-  - 릴리스 publish → `latest.json` 의 노트를 본문과 맞춘다.
+    같은 태그의 draft 가 있으면 파일을 덮어쓰고 publish 한다.
+  - 수동 실행(workflow_dispatch) → 같은 빌드를 아티팩트로만 올리는 시험 실행.
+  - 릴리스 publish(사람이 한 것) → `latest.json` 의 노트를 본문과 맞춘다.
 
 로컬에서 번들만 만들어 보려면(업로드 없음):
 
@@ -116,16 +125,30 @@ APPLE_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_<Key ID>.p8"
 `APPLE_SIGNING_IDENTITY` 가 있으면 `scripts/build-server.mjs` 가 번들에 들어가는 node-pty 의 `pty.node`·`spawn-helper` 도
 같은 인증서로 서명한다(Tauri 는 앱 자체 바이너리만 서명하는데, 공증은 서명 안 된 Mach-O 가 하나라도 있으면 거절한다).
 
-**CI** 는 아래 Secrets 가 있으면 `bundle-macos.sh` 가 Tauri 의 서명/공증을 그대로 쓴다. 없으면 ad-hoc 으로 빌드한다.
+**CI** 는 아래 Secrets 로 서명·공증한다. 인증서·서명 이름이 없으면 빌드하지 않는다(ad-hoc 릴리스는 내지 않는다).
 
 | Secret | 값 |
 |---|---|
-| `APPLE_CERTIFICATE` | "Developer ID Application" 인증서 `.p12` 를 base64 로 (`base64 -i cert.p12 \| pbcopy`) |
+| `APPLE_CERTIFICATE` | "Developer ID Application" 인증서 `.p12` 를 base64 로 |
 | `APPLE_CERTIFICATE_PASSWORD` | `.p12` 내보낼 때 정한 비밀번호 |
-| `APPLE_SIGNING_IDENTITY` | 예: `Developer ID Application: Your Name (TEAMID)` — **이 값이 있어야 Developer ID 모드가 켜진다** |
-| `APPLE_ID` | 공증용 Apple ID 이메일 |
-| `APPLE_PASSWORD` | 그 Apple ID 의 앱 암호(appleid.apple.com 에서 발급) |
-| `APPLE_TEAM_ID` | 팀 ID |
+| `APPLE_SIGNING_IDENTITY` | 예: `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_API_KEY` | 공증: App Store Connect API 키의 Key ID |
+| `APPLE_API_ISSUER` | 공증: Issuer ID |
+| `APPLE_API_KEY_P8` | 공증: `AuthKey_<Key ID>.p8` 파일 **내용 전체** |
+| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | API 키 대신 Apple ID 로 공증할 때만(앱 암호) |
+
+`.p12` 만들기: 키체인 접근 → 내 인증서 → "Developer ID Application: …" 를 펼쳐 개인 키까지 함께 선택 → 내보내기(.p12, 비밀번호 지정).
+
+```
+gh secret set APPLE_CERTIFICATE --body "$(base64 -i ~/Desktop/developer-id.p12)"
+gh secret set APPLE_CERTIFICATE_PASSWORD            # 입력 창에 .p12 비밀번호
+gh secret set APPLE_SIGNING_IDENTITY --body "Developer ID Application: 이름 (TEAMID)"
+gh secret set APPLE_API_KEY --body "<Key ID>"
+gh secret set APPLE_API_ISSUER --body "<Issuer ID>"
+gh secret set APPLE_API_KEY_P8 < ~/.appstoreconnect/private_keys/AuthKey_<Key ID>.p8
+```
+
+`.p12` 파일은 Secrets 에 넣은 뒤 지운다.
 
 ## 서명 방식과 사용자 경험 (솔직하게)
 
@@ -172,10 +195,9 @@ APPLE_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_<Key ID>.p8"
 
 ## 출시 전 점검 목록
 
-- [ ] `node scripts/release.mjs check` 통과, CI 녹색
-- [ ] draft 의 DMG 를 받아 깨끗한 계정(또는 다른 Mac)에 설치해 실행
-- [ ] Publish 직후, 이전 버전이 설치된 Mac 에서 설정 → "업데이트 확인" → 배너 → 재시작 → 새 버전 확인
-      (draft·pre-release 는 앱이 보지 못하므로 이 단계는 publish 뒤에만 가능하다. 문제가 있으면 릴리스를 다시 draft 로 돌리면
-      `latest` 가 이전 릴리스로 되돌아간다)
+- [ ] `node scripts/release.mjs check` 통과, `main` CI 녹색
+- [ ] 큰 변경이면 먼저 베타 태그(`v1.3.0-beta.1`)로 pre-release 를 내고, 그 DMG 를 다른 Mac 이나 깨끗한 계정에 설치해 실행
+- [ ] 태그 push 후 Release 워크플로 녹색, 릴리스에 파일 4개
+- [ ] 이전 버전이 설치된 Mac 에서 설정 → "업데이트 확인" → 배너 → 재시작 → 새 버전 확인.
+      문제가 있으면 릴리스를 draft 로 돌린다. 그러면 `latest` 가 이전 릴리스로 되돌아간다
 - [ ] 세션 실행 중 재시작 → 세션 유지, 끝난 뒤 `agent.log` 에 `updated server ... -> ...`
-- [ ] 릴리스 본문 확인 후 Publish
