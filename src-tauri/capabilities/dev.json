@@ -15,6 +15,7 @@
     "allow-server-version-status",
     "allow-permission-status",
     "allow-request-permission",
+    "allow-notify",
     "allow-computer-exec",
     "allow-computer-revoke",
     "allow-computer-stop",

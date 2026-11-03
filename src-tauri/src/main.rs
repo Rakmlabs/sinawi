@@ -235,6 +235,7 @@ fn main() {
             server_version_status,
             permissions::permission_status,
             permissions::request_permission,
+            permissions::notify,
             computer::computer_exec,
             computer::computer_revoke,
             computer::computer_stop,

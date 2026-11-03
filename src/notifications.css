@@ -129,7 +129,8 @@
   background: var(--bg-active);
 }
 
-.notification-run-finished .notification-type-icon {
+.notification-run-finished .notification-type-icon,
+.notification-lead .notification-type-icon {
   color: var(--accent-fg);
 }
 

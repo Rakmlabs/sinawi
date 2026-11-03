@@ -1,5 +1,5 @@
 import type { WorkspaceId } from "./types.js";
-export type NotificationType = "auth" | "quota" | "permission" | "run-finished" | "error" | "info";
+export type NotificationType = "auth" | "quota" | "permission" | "run-finished" | "lead" | "error" | "info";
 export interface NotificationAction { label: string; command?: string; cwd?: string; sessionId?: string }
 export interface AppNotification {
   id: string; key?: string; workspaceId: WorkspaceId; type: NotificationType;

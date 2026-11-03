@@ -154,6 +154,24 @@ export interface StewardState {
   /** A daily report at this local time ("HH:MM"), opened by the app (server/steward.ts reportDue). */
   report?: string;
   reportedAt?: string;
+  /** The project's git state when the last report opened: an unchanged, quiet project skips the next. */
+  reportState?: string;
+  /** Messages waiting for this lead (other leads' questions and answers, its report). Kept across restarts. */
+  inbox?: StewardDelivery[];
+  /** The lead whose question this lead is answering now; its answer goes back when the work ends. */
+  answering?: { id: string; question: string; depth: number };
+  /** Lets another lead's request change this project; off, the lead only looks and answers. */
+  acceptWork?: boolean;
+  /** What the app did after the last turn (merges), told to the lead at the start of the next. */
+  appNotes?: string[];
+}
+
+export interface StewardDelivery {
+  prompt: string;
+  /** A question from another lead: the answer goes back to `replyTo.id`. */
+  replyTo?: { id: string; question: string; depth: number };
+  /** Lead-to-lead hops so far (server/steward.ts MAX_ASK_DEPTH). */
+  depth?: number;
 }
 
 export interface CommanderState {

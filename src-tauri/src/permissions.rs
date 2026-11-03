@@ -88,6 +88,23 @@ mod mac {
         // The user may take a while to answer the prompt.
         rx.recv_timeout(Duration::from_secs(120)).unwrap_or_else(|_| notifications())
     }
+    /// Posts a banner now (a project lead's report or answer while the window is in the background).
+    pub fn notify(title: &str, body: &str) -> State {
+        use objc2_foundation::NSString;
+        use objc2_user_notifications::{UNMutableNotificationContent, UNNotificationRequest, UNUserNotificationCenter};
+        if !bundled() { return State::Unknown; }
+        // Asks once if the user was never asked; a decided answer returns at once.
+        let state = match notifications() { State::Granted => State::Granted, _ => request_notifications() };
+        if state != State::Granted { return state; }
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(title));
+        content.setBody(&NSString::from_str(body));
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let id = NSString::from_str(&format!("sinawi-{nanos}"));
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&id, &content, None);
+        UNUserNotificationCenter::currentNotificationCenter().addNotificationRequest_withCompletionHandler(&request, None);
+        state
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -99,6 +116,7 @@ mod mac {
     pub fn request_accessibility() -> State { State::Unknown }
     pub fn notifications() -> State { State::Unknown }
     pub fn request_notifications() -> State { State::Unknown }
+    pub fn notify(_title: &str, _body: &str) -> State { State::Unknown }
 }
 
 /// Called when computer use finds a permission missing: asks once per app run, off the calling
@@ -132,6 +150,12 @@ pub async fn request_permission(kind: String) -> Result<State, String> {
     };
     log(&format!("request_permission({kind}) -> {result:?}"));
     result
+}
+
+/// A system notification; the banner shows only while the app is not in front.
+#[tauri::command]
+pub async fn notify(title: String, body: String) -> State {
+    mac::notify(&title, &body)
 }
 
 /// Appends to ~/Library/Logs/Sinawi/permissions.log (and stderr).

@@ -12,7 +12,9 @@
  *   as a new message in its own chat;
  * - a daily report at the time the user picked, opened by the app.
  */
+import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import { basename, join } from "node:path";
 import type { Session, SessionEvent } from "./types.js";
 
@@ -44,8 +46,10 @@ export function stripLeadBlocks(text: string): string {
   return text.replace(/<<(CHECKLIST|NOTES)>>[\s\S]*?<<\/\1>>/gu, "").replace(ASK, "").trim();
 }
 
-export const askPrompt = (from: string, question: string) =>
-  `[담당 「${from}」이 보낸 질문]\n${question}\n\n[앱] 다른 프로젝트의 담당이 보낸 메시지입니다. 이 프로젝트에서 확인해 답하세요. 이번 응답 전체가 그 담당에게 그대로 전달됩니다. 부탁받은 작업이 이 프로젝트의 일이면 평소처럼 진행하고, 결과를 답으로 정리하세요.`;
+export const askPrompt = (from: string, question: string, acceptWork = false) =>
+  `[담당 「${from}」이 보낸 질문]\n${question}\n\n[앱] 다른 프로젝트의 담당이 보낸 메시지입니다. 이 프로젝트에서 확인해 답하세요. 이번 응답 전체가 그 담당에게 그대로 전달됩니다. ${acceptWork
+    ? "부탁받은 작업이 이 프로젝트의 일이면 평소처럼 진행하고, 결과를 답으로 정리하세요."
+    : "읽어서 확인만 하고 답하세요. 사용자가 다른 담당의 부탁으로 작업하는 것을 허락하지 않았으므로 파일을 고치거나 워커에게 맡기지 않습니다(앱이 위임을 막습니다). 작업이 필요하면 무엇을 해야 하는지 답에 적고, 사용자가 이 채팅에서 시키면 그때 합니다."}`;
 
 export const replyPrompt = (from: string, question: string, answer: string) =>
   `[담당 「${from}」의 답]\n질문: ${question.slice(0, 600)}\n\n${answer.slice(0, ANSWER_LIMIT)}\n\n[앱] 이 채팅에서 물어본 것에 대한 답입니다. 이 답으로 하던 일을 이어 가고, 사용자에게 알릴 것이 있으면 짧게 알리세요.`;
@@ -59,6 +63,17 @@ export function reportTime(value: unknown): string | undefined {
   const match = /^([01]?\d|2[0-3]):([0-5]\d)$/u.exec(value.trim());
   return match ? `${match[1].padStart(2, "0")}:${match[2]}` : undefined;
 }
+
+const run = promisify(execFile);
+
+/** The project's commit and uncommitted changes, to tell whether anything changed since the last report. */
+export async function projectState(cwd: string): Promise<string> {
+  const git = (...args: string[]) => run("git", ["-C", cwd, ...args], { timeout: 10_000, maxBuffer: 4 * 1024 * 1024 }).then(({ stdout }) => stdout.trim(), () => "");
+  const [head, status] = await Promise.all([git("rev-parse", "HEAD"), git("status", "--porcelain")]);
+  return `${head}\n${status}`;
+}
+
+export const isReportPrompt = (text: string) => text.startsWith("[앱 — 정기 보고]");
 
 /** True once today's report time has passed and no report was opened since. A closed app catches up once. */
 export function reportDue(time: string, reportedAt: string | undefined, now: Date): boolean {
@@ -128,7 +143,7 @@ ${peers.map((peer) => `- 「${peer.name}」 — \`${peer.cwd}\``).join("\n")}
 <</ASK>>`;
 }
 
-export function stewardRules(notes: string, transcript: string, peers: StewardPeer[] = []): string {
+export function stewardRules(notes: string, transcript: string, peers: StewardPeer[] = [], appNotes: string[] = []): string {
   return `## 프로젝트 담당 (앱이 붙임)
 당신은 이 프로젝트의 담당입니다. 사용자는 이 채팅 하나에서 계속 일을 시킵니다. 이전 대화가 기억나지 않아도 아래 노트와 기록으로 이어 갑니다.
 - 담당 노트(아래)는 당신이 관리합니다. 결정, 진행 중인 일, 남은 일, 중요한 경로·명령이 바뀌면 응답 끝에 노트 전체를 새로 씁니다. 짧게(40줄 이내) 유지하고, 끝난 일의 세부는 지웁니다.
@@ -138,6 +153,7 @@ export function stewardRules(notes: string, transcript: string, peers: StewardPe
 - 이 채팅의 전체 기록: \`${transcript}\`. 사용자가 예전에 말한 것·정한 것을 가리키면 이 파일을 검색해서 찾습니다. 추측하지 않습니다.
 - 워커가 끝낸 작업은 턴이 끝날 때 앱이 메인 폴더에 병합합니다. 워커에게 작업 브랜치에 커밋하게 하세요.${peerRules(peers)}
 
+${appNotes.length ? `\n### 지난 턴이 끝난 뒤 앱이 한 일\n${appNotes.map((note) => `- ${note}`).join("\n")}\n노트에 아직 반영되지 않았다면 이번 응답 끝에 고쳐 씁니다.\n` : ""}
 ### 지금 담당 노트
 ${notes.trim() || "(아직 없음: 이번 응답 끝에 처음 씁니다)"}`;
 }

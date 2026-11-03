@@ -17,3 +17,15 @@ test("session events produce actionable permission, quota, stall, error and comp
   assert.deepEqual(notes.map((n) => n.type), ["permission", "quota", "error", "run-finished"]);
   assert.ok(notes.every((n) => n.action?.sessionId === "s"));
 });
+
+test("a project lead's finished turn reads as a message from it", () => {
+  const session = {
+    id: "lead1", title: "첫 일", workspaceId: "personal", status: "done", endedAt: "t1", agent: "claude", cwd: "/w/api",
+    steward: { turns: 1, since: "", name: "api" },
+    events: [{ id: "1", time: "", type: "message", role: "orchestrator", agent: "claude", text: "포트는 4000입니다.\n<<NOTES>>\n- x\n<</NOTES>>" }],
+  } as unknown as Session;
+  const [note] = sessionNotifications(session);
+  assert.equal(note.type, "lead");
+  assert.equal(note.title, "「api」 담당");
+  assert.equal(note.body, "포트는 4000입니다.");
+});

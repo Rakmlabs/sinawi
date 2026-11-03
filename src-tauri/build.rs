@@ -6,6 +6,7 @@ const COMMANDS: &[&str] = &[
     "server_version_status",
     "permission_status",
     "request_permission",
+    "notify",
     "computer_exec",
     "computer_revoke",
     "computer_stop",

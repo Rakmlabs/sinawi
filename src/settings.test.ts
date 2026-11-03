@@ -57,8 +57,11 @@ test("settings search matches labels, descriptions and synonyms in both language
 
 test("toast preferences default to the previous critical types and ignore junk", () => {
   assert.deepEqual([...parseToastTypes(null)].sort(), [...DEFAULT_TOAST_TYPES].sort());
-  assert.deepEqual([...parseToastTypes("[\"quota\",\"nope\"]")], ["quota"]);
-  assert.deepEqual([...parseToastTypes("[]")], []);
+  const all = "[\"auth\",\"quota\",\"permission\",\"run-finished\",\"lead\",\"error\",\"info\"]";
+  assert.deepEqual([...parseToastTypes("[\"quota\",\"nope\"]", all)], ["quota"]);
+  assert.deepEqual([...parseToastTypes("[]", all)], []);
+  // Saved before lead updates existed: those come on, the rest stays as chosen.
+  assert.deepEqual([...parseToastTypes("[\"quota\"]")], ["quota", "lead"]);
   assert.deepEqual([...parseToastTypes("{oops")].sort(), [...DEFAULT_TOAST_TYPES].sort());
 });
 

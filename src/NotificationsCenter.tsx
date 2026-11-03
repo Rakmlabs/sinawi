@@ -9,7 +9,7 @@ import {
   KeyRound,
   ShieldAlert,
   SquareTerminal,
-  X,
+  X, UserCheck
 } from "lucide-react";
 import type { AppNotification, NotificationType } from "../server/notification-types";
 import type { WorkspaceId } from "../server/types";
@@ -18,6 +18,7 @@ import { useNow } from "./app/clock";
 import { t, translatedMap } from "./i18n";
 import { toastEnabled } from "./settings/notification-prefs";
 import { openSettings } from "./settings/settings-nav";
+import { tauriInvoke } from "./onboarding-state";
 
 const NOTIFICATIONS_EVENT = "orchestra:notifications";
 const toastStoragePrefix = "orchestra:notification-toasts:v1";
@@ -27,6 +28,7 @@ const typeLabels = translatedMap<NotificationType>({
   quota: "noti.quota",
   permission: "noti.permission",
   "run-finished": "noti.runFinished",
+  lead: "noti.lead",
   error: "noti.error",
   info: "noti.info",
 });
@@ -37,6 +39,7 @@ function NotificationIcon({ type, size = 15 }: { type: NotificationType; size?: 
   if (type === "quota") return <Gauge {...props} />;
   if (type === "permission") return <ShieldAlert {...props} />;
   if (type === "run-finished") return <CircleCheck {...props} />;
+  if (type === "lead") return <UserCheck {...props} />;
   if (type === "error") return <CircleAlert {...props} />;
   return <Info {...props} />;
 }
@@ -162,6 +165,11 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
     if (!fresh.length) return;
     for (const notification of fresh) seen.add(toastVersion(notification));
     saveSeenToasts(workspaceId, seen);
+    // A lead's message while the user is elsewhere: a system banner too, like a messenger.
+    const invoke = tauriInvoke();
+    if (invoke && (document.hidden || !document.hasFocus())) {
+      for (const notification of fresh.filter((item) => item.type === "lead")) void invoke("notify", { title: notification.title, body: notification.body }).catch(() => undefined);
+    }
     setToasts((current) => [...current, ...fresh]
       .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
       .slice(0, 3));

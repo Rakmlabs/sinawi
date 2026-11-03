@@ -1,6 +1,7 @@
 import type { AgentId, Session, WorkspaceId } from "./types.js";
 import type { NotificationInput } from "./notification-types.js";
 import { mcpAuthAction, mcpAuthTitle } from "./tools.js";
+import { stewardName, stripLeadBlocks } from "./steward.js";
 
 const mcpAuthFailure = /\bmcp\b[^\n]*(?:needs? authentication|requires? authentication|authentication required|unauthori[sz]ed|not logged in|401)|(?:needs? authentication|authentication required|not logged in)[^\n]*\bmcp\b/i;
 const mcpNameIn = (text: string) => /(?:mcp(?:\s+server)?|server)\s*[`'"“]([^`'"”\n]{1,120})[`'"”]/i.exec(text)?.[1]?.trim();
@@ -34,6 +35,11 @@ export function sessionNotifications(session: Session): NotificationInput[] {
     else if (event.type === "error") { type = "error"; title = /응답|정체|inactiv|stalled/i.test(event.text) ? "작업 응답이 멈췄습니다" : "작업 오류"; }
     if (type) notes.push({ workspaceId: session.workspaceId, key: `event:${event.id}`, type, title, body: event.text.slice(0, 2000), action });
   }
-  if (session.status === "done") notes.push({ workspaceId: session.workspaceId, key: `finished:${session.id}:${session.endedAt ?? session.turnCount ?? 0}`, type: "run-finished", title: "작업 완료", body: session.title, action });
+  // A project lead reads like a message from it: its name and what it said last.
+  if (session.status === "done" && session.steward) {
+    const said = [...session.events].reverse().find((event) => event.type === "message" && event.role === "orchestrator");
+    const body = stripLeadBlocks(said?.text ?? "").replace(/\s+/gu, " ").slice(0, 300) || session.title;
+    notes.push({ workspaceId: session.workspaceId, key: `lead:${session.id}:${session.endedAt ?? session.turnCount ?? 0}`, type: "lead", title: `「${stewardName(session)}」 담당`, body, action });
+  } else if (session.status === "done") notes.push({ workspaceId: session.workspaceId, key: `finished:${session.id}:${session.endedAt ?? session.turnCount ?? 0}`, type: "run-finished", title: "작업 완료", body: session.title, action });
   return notes;
 }

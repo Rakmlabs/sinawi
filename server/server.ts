@@ -321,7 +321,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const completedRuns = new Set<string>();
   const broadcast = (session: Session, publishOptions?: { full?: boolean }) => {
     for (const note of sessionNotifications(session)) {
-      const seen = note.type === "run-finished" ? completedRuns : observedEvents;
+      const seen = note.type === "run-finished" || note.type === "lead" ? completedRuns : observedEvents;
       if (note.key && !seen.has(note.key)) {
         seen.add(note.key); notify(note);
         if (seen.size > 10000) seen.delete(seen.values().next().value!);
@@ -411,9 +411,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   if (options.worktrees) orchestra.worktreeDataDir = options.dataDir ?? join(homedir(), ".sinawi");
   orchestra.stewardDataDir = options.dataDir ?? join(homedir(), ".sinawi");
   // Leads' daily reports: checked every minute, and once shortly after start for a report missed while closed.
-  const stewardTimer = setInterval(() => orchestra.stewardTick(), 60_000);
+  const stewardTimer = setInterval(() => void orchestra.stewardTick().catch(() => undefined), 60_000);
   stewardTimer.unref();
-  setTimeout(() => orchestra.stewardTick(), 15_000).unref();
+  setTimeout(() => void orchestra.stewardTick().catch(() => undefined), 15_000).unref();
   const routing = new RoutingService({ dataDir: options.dataDir, runner: routingRunner, skillLoader: options.routingSkillLoader, modelRunner: options.modelRunner, homeDir: options.modelHomeDir, authDiscovery: options.authDiscovery });
   const getAvailableAgents = async () => {
     if (Array.isArray(options.availableAgents)) return [...new Set(options.availableAgents)];
@@ -582,7 +582,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try {
       const workspaceId = workspace(req.body?.workspace ?? req.body?.workspaceId, currentWorkspace());
       const type = string(req.body?.type, 30) as NotificationType;
-      if (!["auth", "quota", "permission", "run-finished", "error", "info"].includes(type)) throw new Error("알림 종류가 올바르지 않습니다.");
+      if (!["auth", "quota", "permission", "run-finished", "lead", "error", "info"].includes(type)) throw new Error("알림 종류가 올바르지 않습니다.");
       // Client reports are informational; executable actions originate in server sources.
       res.status(201).json(await notifications.add({ workspaceId, type, title: string(req.body?.title, 200), body: optionalString(req.body?.body, 2000) ?? "", key: optionalString(req.body?.key, 200) }));
     } catch (error) { errorResponse(res, error); }
@@ -934,7 +934,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       res.json({
         notes: dir ? await readNotes(dir, session.id) : "", transcript: dir ? transcriptPath(dir, session.id) : undefined,
         turns: session.steward.turns, rolloverAt: STEWARD_ROLLOVER_TURNS,
-        name: stewardName(session), report: session.steward.report ?? null,
+        name: stewardName(session), report: session.steward.report ?? null, acceptWork: Boolean(session.steward.acceptWork),
         peers: orchestra.list().filter((item) => item.steward && item.id !== session.id).map((item) => ({ id: item.id, name: stewardName(item), cwd: item.cwd })),
       });
     } catch (error) { errorResponse(res, error, 404); }
@@ -944,10 +944,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const body = req.body ?? {};
       if (body.enabled !== undefined && typeof body.enabled !== "boolean") throw new Error("담당 설정이 올바르지 않습니다.");
       if (body.name !== undefined && typeof body.name !== "string") throw new Error("담당 이름이 올바르지 않습니다.");
+      if (body.acceptWork !== undefined && typeof body.acceptWork !== "boolean") throw new Error("담당 설정이 올바르지 않습니다.");
       const report = body.report === null || body.report === "" ? null : body.report === undefined ? undefined : reportTime(body.report);
       if (report === undefined && body.report !== undefined) throw new Error("보고 시각은 HH:MM 형식이어야 합니다.");
-      if (body.enabled === undefined && body.name === undefined && body.report === undefined) throw new Error("담당 설정이 올바르지 않습니다.");
-      const session = orchestra.updateSteward(routeParam(req.params.id), { enabled: body.enabled, name: body.name, report });
+      if (body.enabled === undefined && body.name === undefined && body.report === undefined && body.acceptWork === undefined) throw new Error("담당 설정이 올바르지 않습니다.");
+      const session = orchestra.updateSteward(routeParam(req.params.id), { enabled: body.enabled, name: body.name, report, acceptWork: body.acceptWork });
       await persistSessions(orchestra.list());
       res.json(session);
     } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }

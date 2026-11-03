@@ -74,6 +74,7 @@ test("a project lead keeps its notes and transcript, merges each turn's work and
   assert.match(leadPrompts[2], /## 프로젝트 담당/u);
   assert.match(leadPrompts[2], /지금까지 2턴/u, "the notes come with every turn");
   assert.ok(leadPrompts[2].includes(transcriptPath(dataDir, chat.id)), "the lead is told where the transcript is");
+  assert.match(leadPrompts[2], /지난 턴이 끝난 뒤 앱이 한 일[\s\S]*병합했습니다/u, "the next turn hears about the merge");
   assert.equal(chat.steward!.turns, 1);
 });
 
@@ -208,4 +209,112 @@ test("a lead's daily report opens a turn once its time has passed", async (t) =>
   orchestra.stewardTick();
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(prompts.length, 2, "one report a day");
+});
+
+test("messages waiting for a lead survive a restart, and an answer cut off by it still reaches the asker", async (t) => {
+  const a = await setup(t, "app");
+  const b = await setup(t, "api");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const runner = async (options: RunCliOptions) => {
+    if (options.prompt.includes("사용자 요청:\n느린 일")) { await gate; return { exitCode: 0, finalText: "느린 일 끝" }; }
+    if (options.prompt.includes("사용자 요청:\n포트 확인")) return { exitCode: 0, finalText: '<<ASK to="api">>포트?<</ASK>>' };
+    return { exitCode: 0, finalText: "준비" };
+  };
+  const first = new Orchestra(undefined, runner);
+  first.stewardDataDir = a.dataDir;
+  const app = await first.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: a.repo, steward: {} });
+  const api = await first.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: b.repo, steward: {} });
+  await waitFor(() => app.status === "done" && api.status === "done");
+  await first.followup(api.id, "느린 일");
+  await first.followup(app.id, "포트 확인");
+  await waitFor(() => app.status === "done" && Boolean(api.steward!.inbox?.length));
+  // The app quits: the busy lead's run is cut off (as the server's recovery marks it) and its question waits on disk.
+  const saved = JSON.parse(JSON.stringify([app, api])) as (typeof app)[];
+  saved[1].status = "stopped";
+  release();
+
+  const prompts: string[] = [];
+  const second = new Orchestra(undefined, async (options: RunCliOptions) => {
+    prompts.push(options.prompt);
+    return { exitCode: 0, finalText: options.prompt.includes("이 보낸 질문") ? "포트는 4000" : "알겠습니다" };
+  });
+  second.stewardDataDir = a.dataDir;
+  second.restore(saved);
+  await second.stewardTick();
+  const restoredApp = second.get(app.id)!;
+  await waitFor(() => restoredApp.events.some((event) => event.text.startsWith("[담당 「api」의 답]")) && restoredApp.status === "done", 10_000);
+  assert.match(restoredApp.events.find((event) => event.text.startsWith("[담당 「api」의 답]"))!.text, /포트는 4000/u);
+
+  // Cut off while answering: the asker hears so instead of waiting forever.
+  const cut = JSON.parse(JSON.stringify([second.get(app.id), second.get(api.id)])) as (typeof app)[];
+  cut[1].steward!.answering = { id: app.id, question: "또 포트?", depth: 1 };
+  const third = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "알겠습니다" }));
+  third.stewardDataDir = a.dataDir;
+  third.restore(cut);
+  assert.equal(third.get(api.id)!.steward!.answering, undefined);
+  assert.match(third.get(app.id)!.steward!.inbox?.[0]?.prompt ?? "", /답하지 못했습니다/u);
+});
+
+test("a lead answering another lead does not hand out work unless the user allowed it", async (t) => {
+  const a = await setup(t, "app");
+  const b = await setup(t, "api");
+  const workerRuns = [] as string[];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") { workerRuns.push(options.cwd); return { exitCode: 0, finalText: "상태: 완료" }; }
+    if (options.prompt.includes("이 보낸 질문")) return { exitCode: 0, finalText: '고치겠습니다.\n<<DELEGATE to="claude">>포트를 5000으로 바꾸기<</DELEGATE>>' };
+    if (options.prompt.includes("사용자 요청:\n바꿔 달라고 해")) return { exitCode: 0, finalText: '<<ASK to="api">>포트를 5000으로 바꿔 줘<</ASK>>' };
+    return { exitCode: 0, finalText: "준비" };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.stewardDataDir = a.dataDir;
+  orchestra.worktreeDataDir = a.dataDir;
+  const app = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: a.repo, steward: {} });
+  const api = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: b.repo, steward: {} });
+  await waitFor(() => app.status === "done" && api.status === "done");
+  await orchestra.followup(app.id, "바꿔 달라고 해");
+  await waitFor(() => app.events.some((event) => event.text.startsWith("[담당 「api」의 답]")) && app.status === "done" && api.status === "done", 10_000);
+  assert.equal(workerRuns.length, 0, "no worker ran for the other lead");
+  assert.ok(api.events.some((event) => event.type === "warning" && event.text.includes("워커에게 일을 맡기지 않았습니다")));
+  assert.match(api.events.find((event) => event.text.startsWith("[담당 「app」이 보낸 질문]"))!.text, /확인만 하고 답하세요/u);
+
+  orchestra.updateSteward(api.id, { acceptWork: true });
+  await orchestra.followup(app.id, "바꿔 달라고 해");
+  await waitFor(() => workerRuns.length === 1, 10_000);
+  assert.equal(workerRuns[0].includes("api"), true, "allowed: the api lead's worker ran");
+});
+
+test("two leads cannot share a name", async (t) => {
+  const a = await setup(t, "app");
+  const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "준비" }));
+  orchestra.stewardDataDir = a.dataDir;
+  const one = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: a.repo, steward: { name: "주식" } });
+  const two = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: a.repo, steward: { name: "개발" } });
+  await waitFor(() => one.status === "done" && two.status === "done");
+  assert.throws(() => orchestra.updateSteward(two.id, { name: "주식" }), /이미 「주식」 담당이 있습니다/u);
+  await assert.rejects(orchestra.create({ prompt: "x", agent: "codex", workers: ["claude"], cwd: a.repo, steward: { name: "개발" } }), /이미 「개발」/u);
+  orchestra.updateSteward(two.id, { name: "개발2" });
+  assert.equal(two.steward!.name, "개발2");
+});
+
+test("a daily report is skipped when the project and the chat are unchanged", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const prompts: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => { prompts.push(options.prompt); return { exitCode: 0, finalText: "보고" }; });
+  orchestra.stewardDataDir = dataDir;
+  const chat = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: repo, steward: {} });
+  await waitFor(() => chat.status === "done");
+  orchestra.updateSteward(chat.id, { report: "00:00" });
+  const day = (n: number) => new Date(Date.now() + n * 86_400_000);
+  await orchestra.stewardTick(day(1));
+  await waitFor(() => chat.status === "done" && prompts.length === 2);
+  await orchestra.stewardTick(day(2));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(prompts.length, 2, "nothing changed: no report");
+  await writeFile(join(repo, "new.txt"), "x\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-qm", "change");
+  await orchestra.stewardTick(day(3));
+  await waitFor(() => chat.status === "done" && prompts.length === 3);
+  assert.match(prompts[2], /정기 보고/u);
 });

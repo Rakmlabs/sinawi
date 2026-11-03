@@ -61,6 +61,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "toast-quota", category: "notifications", section: "set.noti.toasts", label: "noti.quota", keywords: "notification toast 알림 한도 quota" },
   { id: "toast-permission", category: "notifications", section: "set.noti.toasts", label: "noti.permission", keywords: "notification toast 알림 권한" },
   { id: "toast-run-finished", category: "notifications", section: "set.noti.toasts", label: "noti.runFinished", keywords: "notification toast 알림 완료 done" },
+  { id: "toast-lead", category: "notifications", section: "set.noti.toasts", label: "noti.lead", keywords: "notification toast 알림 담당 lead report 보고" },
   { id: "toast-error", category: "notifications", section: "set.noti.toasts", label: "noti.error", keywords: "notification toast 알림 오류 error" },
   { id: "toast-info", category: "notifications", section: "set.noti.toasts", label: "noti.info", keywords: "notification toast 알림 안내 info" },
   { id: "noti-permission", category: "notifications", section: "set.noti.system", label: "ob.perm.notifications", description: "set.noti.systemDesc", keywords: "macos notification permission 알림 권한" },

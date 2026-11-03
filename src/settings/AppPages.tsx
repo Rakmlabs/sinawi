@@ -13,8 +13,8 @@ import { translatedMap } from "../i18n";
 import { AUTO_RUN_KEY, autoRunEnabled, writePreference } from "../preferences";
 import type { NotificationType } from "../../server/notification-types";
 
-const typeLabels = translatedMap<NotificationType>({ auth: "noti.auth", quota: "noti.quota", permission: "noti.permission", "run-finished": "noti.runFinished", error: "noti.error", info: "noti.info" });
-const typeHints = translatedMap<NotificationType>({ auth: "set.noti.authDesc", quota: "set.noti.quotaDesc", permission: "set.noti.permissionDesc", "run-finished": "set.noti.runFinishedDesc", error: "set.noti.errorDesc", info: "set.noti.infoDesc" });
+const typeLabels = translatedMap<NotificationType>({ auth: "noti.auth", quota: "noti.quota", permission: "noti.permission", "run-finished": "noti.runFinished", lead: "noti.lead", error: "noti.error", info: "noti.info" });
+const typeHints = translatedMap<NotificationType>({ auth: "set.noti.authDesc", quota: "set.noti.quotaDesc", permission: "set.noti.permissionDesc", "run-finished": "set.noti.runFinishedDesc", lead: "set.noti.leadDesc", error: "set.noti.errorDesc", info: "set.noti.infoDesc" });
 
 export function GeneralPage() {
   const appearance = useAppearance();
