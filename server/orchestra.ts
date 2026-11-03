@@ -5,7 +5,8 @@ import { killSessionProcessGroups, runCli } from "./cli.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
 import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
-import { enabledPublicSkills, resolveSkillPrompt } from "./skills.js";
+import { enabledPublicSkills, filterEnabledSkills, loadSkills, resolveSkillPrompt } from "./skills.js";
+import { skillCatalog, workerSkillSection } from "./skill-routing.js";
 import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
@@ -24,6 +25,9 @@ const maxDelegations = 6;
 /** Extra delegation rounds the orchestrator may use to re-plan after verification. */
 const maxReplanRounds = 2;
 const stallCheckMs = 15_000;
+/** A worker's run ended because the session was stopped. */
+const STOPPED = Symbol("stopped");
+const guardKey = (sessionId: string, workerId: string) => `${sessionId}:${workerId}`;
 const agentNames: Record<AgentId, string> = {
   codex: "Codex",
   claude: "Claude",
@@ -97,6 +101,7 @@ export class Orchestra {
   private inactivityTimers = new Map<string, NodeJS.Timeout>();
   private configs = new Map<string, { skills: string[]; systemPrompt: string }>();
   /** Per-session kill switch + stall detector for the worker currently running. */
+  /** One per running worker (`guardKey`): workers of a session run at the same time. */
   private workerGuards = new Map<string, { kill: AbortController; detector: StallDetector; stall?: StallSignal }>();
   /** Sessions whose already-published events were edited or removed since the last publish. */
   private rewrittenEvents = new Set<string>();
@@ -350,7 +355,10 @@ export class Orchestra {
     if (requiresGrokMedia && session.agent !== "grok") {
       throw new Error(mediaUnavailableMessage);
     }
-    const skills = await resolveSkillPrompt(skillIds, session.cwd, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills);
+    const disabledSkills = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills;
+    const skills = await resolveSkillPrompt(skillIds, session.cwd, disabledSkills);
+    // Every installed skill, so the lead can pick skills for a brief the user never named.
+    const installedSkills = filterEnabledSkills(await loadSkills(session.cwd).catch(() => []), disabledSkills);
     const mediaPrompt = this.workspacePolicyResolver?.(session.workspaceId).mediaPrompt;
     if (!this.isCurrentRun(session, controller.signal)) return;
     let plan = "";
@@ -368,7 +376,7 @@ export class Orchestra {
     const workerContext = workers.map((worker) => `${worker.id}: ${worker.sessionMode !== "new" && workerSessionId(session, worker.id!) ? "이전 작업의 맥락을 가진 세션을 이어서 사용합니다. 기존 설명을 반복하지 않고 후속 작업을 지시할 수 있습니다." : "새 세션으로 시작합니다. 필요한 맥락을 전달하세요."}`).join("\n");
     const exampleWorker = workers[0]?.id ?? "claude";
     const worktreeNotice = await this.worktreeNotice(session);
-    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 선택되지 않은 워커에게 위임하지 마세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}`;
+    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 선택되지 않은 워커에게 위임하지 마세요. 서로 다른 워커에게 준 위임은 동시에 실행되고, 같은 워커에게 준 위임은 그 워커 세션에서 차례로 실행됩니다. 독립적인 일을 병렬로 돌리려면 다른 워커에게 나누세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}${skillCatalog(installedSkills)}`;
     const planningContext = plan ? `\n\n계획 전문 에이전트가 작성한 실행 계획:\n${plan}` : "";
     const handoffContext = session.handoffContext ? `\n\n이전 오케스트라의 대화 요약:\n${session.handoffContext}` : "";
     const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";
@@ -397,17 +405,19 @@ export class Orchestra {
     for (let round = 0; ; round++) {
       const workerResults: string[] = [];
       const roundWorktrees = new Map<string, NonNullable<Session["worktrees"]>[number]>();
-      for (const { request, worker } of requests) {
-        if (controller.signal.aborted) return this.finishStopped(session, controller);
+      // Different workers run at once (each has its own worktree and CLI session); one worker's
+      // briefs run in order inside its session. Reports keep the lead's delegation order.
+      const runRequest = async ({ request, worker }: (typeof requests)[number]): Promise<string | typeof STOPPED> => {
+        if (controller.signal.aborted) return STOPPED;
         const brief = ensureBrief(request.task, userPrompt);
         const workerId = worker.id!;
         const resumeIdForBrief = worker.sessionMode === "new" ? undefined : workerSessionId(session, workerId);
         const workerResume = resumeIdForBrief ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events, workerId)}` : "";
         const label = workerLabel(worker);
         const worktree = await this.prepareWorktree(session, workerId, label);
-        if (controller.signal.aborted) return this.finishStopped(session, controller);
+        if (controller.signal.aborted) return STOPPED;
         if (worktree.info) roundWorktrees.set(workerId, worktree.info);
-        const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${workerResume}`;
+        const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${workerSkillSection(request.task, installedSkills, worker.agent)}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${workerResume}`;
         const delegation = this.event(session, worker.agent, "delegation", request.task, { role: "worker", workerId, workerLabel: label, taskStatus: "running", model: worker.model, reasoningEffort: worker.reasoningEffort, ...(brief.missing.length ? { metadata: { briefAutofilled: brief.missing } } : {}) });
         const delegationId = delegation?.id;
         if (worktree.info) this.event(session, worker.agent, "status", `작업 브랜치 ${worktree.info.branch} — ${worktree.info.path}${worktree.info.mainDirty ? " (메인 폴더의 커밋되지 않은 변경은 포함되지 않음)" : ""}`, { role: "worker", workerId, workerLabel: label, delegationId });
@@ -415,7 +425,7 @@ export class Orchestra {
         const resumeId = resumeIdForBrief;
         if (!resumeId) setWorkerSessionId(session, workerId);
         const guard = { kill: new AbortController(), detector: new StallDetector(this.stallOptions) } as { kill: AbortController; detector: StallDetector; stall?: StallSignal };
-        this.workerGuards.set(session.id, guard);
+        this.workerGuards.set(guardKey(session.id, workerId), guard);
         const idleTimer = setInterval(() => {
           const stall = guard.detector.checkIdle();
           if (stall && !guard.stall) this.tripStall(session, guard, stall, worker.agent, workerId, label, delegationId);
@@ -439,14 +449,14 @@ export class Orchestra {
           if (!guard.stall) throw error;
         } finally {
           clearInterval(idleTimer);
-          if (this.workerGuards.get(session.id) === guard) this.workerGuards.delete(session.id);
+          if (this.workerGuards.get(guardKey(session.id, workerId)) === guard) this.workerGuards.delete(guardKey(session.id, workerId));
         }
-        if (controller.signal.aborted) return this.finishStopped(session, controller);
+        if (controller.signal.aborted) return STOPPED;
         if (guard.stall) {
           if (result?.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
           const partial = result?.finalText?.trim();
-          workerResults.push(`[${label} 결과 — 앱이 정체를 감지해 중단함]\n원인: ${guard.stall.reason}\n최근 기록:\n${guard.stall.evidence.map((line) => `- ${line}`).join("\n")}${partial ? `\n중단 전 마지막 응답:\n${partial.slice(-1_500)}` : ""}\n→ 같은 방법을 반복하지 말고 원인을 진단해 다른 접근으로 다시 계획하세요.`);
-          continue;
+          const out = `[${label} 결과 — 앱이 정체를 감지해 중단함]\n원인: ${guard.stall.reason}\n최근 기록:\n${guard.stall.evidence.map((line) => `- ${line}`).join("\n")}${partial ? `\n중단 전 마지막 응답:\n${partial.slice(-1_500)}` : ""}\n→ 같은 방법을 반복하지 말고 원인을 진단해 다른 접근으로 다시 계획하세요.`;
+          return out;
         }
         if (!result) throw new Error("작업자 세션을 시작할 수 없습니다.");
         if (result.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
@@ -458,13 +468,26 @@ export class Orchestra {
         // Exit code 0 but the CLI reported it stopped early (e.g. Grok "cancelled"): not a success.
         const interrupted = session.events.slice(eventStart).find((event) => event.type === "error" && event.delegationId === delegationId && /중단되었습니다 \(/.test(event.text));
         if (interrupted) {
-          workerResults.push(`[${label} 결과 — 중단됨: ${interrupted.text} 아래 내용은 불완전할 수 있다]\n${report}`);
+          const out = `[${label} 결과 — 중단됨: ${interrupted.text} 아래 내용은 불완전할 수 있다]\n${report}`;
           this.event(session, result.agent, "status", `작업이 중간에 중단되었습니다. ${interrupted.text}`, { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
-          continue;
+          return out;
         }
-        workerResults.push(`[${label} 결과]\n${report}`);
         this.event(session, result.agent, "status", "작업을 완료했습니다.", { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "done", model: result.model, reasoningEffort: result.reasoningEffort });
-      }
+        return `[${label} 결과]\n${report}`;
+      };
+      const queues = new Map<string, Array<{ index: number; item: (typeof requests)[number] }>>();
+      requests.forEach((item, index) => queues.set(item.worker.id!, [...(queues.get(item.worker.id!) ?? []), { index, item }]));
+      const outcomes: Array<string | typeof STOPPED | undefined> = new Array(requests.length);
+      const settled = await Promise.allSettled([...queues.values()].map(async (queue) => {
+        for (const { index, item } of queue) {
+          outcomes[index] = await runRequest(item);
+          if (outcomes[index] === STOPPED) return;
+        }
+      }));
+      if (controller.signal.aborted || outcomes.includes(STOPPED)) return this.finishStopped(session, controller);
+      const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+      if (failed) throw failed.reason;
+      for (const out of outcomes) if (typeof out === "string") workerResults.push(out);
 
       if (controller.signal.aborted) return this.finishStopped(session, controller);
       // The user said no to computer use: end the run instead of letting the lead look for workarounds.
@@ -779,7 +802,7 @@ export class Orchestra {
     this.requireCurrentRun(session, signal);
     const blockedMcp = disabledMcp.filter((key) => key.startsWith(`${agent}:`))
       .map((key) => `mcp__${key.slice(agent.length + 1)}__*`);
-    const guard = role === "worker" ? this.workerGuards.get(session.id) : undefined;
+    const guard = role === "worker" ? this.workerGuards.get(guardKey(session.id, workerId ?? agent)) : undefined;
     const runSignal = guard ? AbortSignal.any([signal, guard.kill.signal]) : signal;
     // Workers run in their own worktree; read-only lead runs may read every worktree of the session.
     const cwd = role === "worker" && workerId ? session.worktrees?.find((item) => item.workerId === workerId)?.cwd ?? session.cwd : session.cwd;

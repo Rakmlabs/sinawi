@@ -72,11 +72,13 @@ test("a running session answers status from the log and delivers a directive on 
   releaseWorker();
   await waitFor(() => session.status !== "running");
   assert.equal(session.status, "done");
-  const workerPrompts = calls.filter((call) => call.usageContext?.role === "worker").map((call) => call.prompt);
-  assert.equal(workerPrompts.length, 2);
-  assert.doesNotMatch(workerPrompts[0], /A부터 보/);
-  assert.match(workerPrompts[1], /A부터 보라고 해/);
-  assert.doesNotMatch(workerPrompts[1], /옆 문서를 먼저/);
+  // A and B run at the same time, so B was already working when the directive came. No turn took
+  // it, so it became the user's next request (finish → followup) and reached B there; the lead's
+  // notes went to the lead's review and never to a worker.
+  const workerCalls = calls.filter((call) => call.usageContext?.role === "worker");
+  assert.equal(workerCalls.slice(0, 2).some((call) => /A부터 보/.test(call.prompt)), false);
+  assert.equal(workerCalls.some((call) => call.usageContext?.workerId === "claude-2" && /A부터 보라고 해/.test(call.prompt)), true);
+  assert.equal(workerCalls.some((call) => /옆 문서를 먼저/.test(call.prompt)), false);
   const synthesis = calls.find((call) => call.prompt.includes("위임한 워커들의 결과"));
   assert.match(synthesis?.prompt ?? "", /옆 문서를 먼저/);
   assert.equal(session.pendingInstructions, undefined);
