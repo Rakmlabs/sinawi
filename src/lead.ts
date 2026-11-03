@@ -24,8 +24,15 @@ export function leadMessage(text: string): LeadMessage | undefined {
 
 export const isReportPrompt = (text: string) => text.startsWith("[앱 — 정기 보고]");
 
+/** Markdown read as plain text: one line in the sidebar has no room for headings or code marks. */
+const plain = (text: string) => text.replace(/^\s*(#{1,6}|>|[-*+]|\d+\.)\s+/gmu, "").replace(/[*_`~]+/gu, "").replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1");
+
 /** The last thing said in the lead's chat, for the line under its name. */
 export function leadPreview(session: Session): string {
+  return plain(lastSaid(session));
+}
+
+function lastSaid(session: Session): string {
   for (let index = session.events.length - 1; index >= 0; index--) {
     const event = session.events[index];
     if (event.type !== "message" || event.role === "worker") continue;

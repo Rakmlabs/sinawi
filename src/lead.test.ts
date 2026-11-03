@@ -21,4 +21,5 @@ test("the line under a lead is the last thing said, without the app's blocks or 
   assert.equal(leadPreview(lead([{ agent: "user", text: "해줘" }, { text: "끝냈습니다.\n<<NOTES>>\n- x\n<</NOTES>>" }])), "끝냈습니다.");
   assert.equal(leadPreview(lead([{ text: "이전 답" }, { agent: "user", text: "[앱 — 정기 보고] 보고하세요" }])), "이전 답");
   assert.equal(leadPreview(lead([{ agent: "user", text: "[담당 「api」의 답]\n4000\n\n[앱] ..." }])), "「api」 4000");
+  assert.equal(leadPreview(lead([{ text: "## 정기 보고\n- **바뀐 것:** `main` 그대로" }])), "정기 보고\n바뀐 것: main 그대로");
 });
