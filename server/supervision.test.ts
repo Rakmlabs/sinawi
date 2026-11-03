@@ -197,6 +197,24 @@ test("echoed duplicates count once and label-only prefixes keep the message", ()
   assert.notEqual(failureSignature("결과: 오류: 앱 창이 없습니다"), failureSignature("결과: 오류: 파일이 없습니다"));
 });
 
+test("a repeated command is a loop only when what runs between the repeats repeats too", () => {
+  const shoot = (detector: StallDetector, page: string) => {
+    detector.observe({ type: "tool", text: `명령: ao-browser goto ${page}` });
+    return detector.observe({ type: "tool", text: "명령: ao-browser screenshot" });
+  };
+  const tour = new StallDetector();
+  for (const page of ["#contents", "#content", "#places", "#closed", "#stats", "#public"]) assert.equal(shoot(tour, page), undefined, page);
+
+  const stuck = new StallDetector();
+  let fired;
+  for (let i = 0; i < 4; i++) { fired = stuck.observe({ type: "tool", text: "명령: ao-browser screenshot" }); if (!fired) stuck.observe({ type: "tool", text: `결과: shot-${i}.png` }); }
+  assert.equal(fired?.kind, "repeated-command");
+
+  const cycle = new StallDetector();
+  for (let i = 0; i < 4; i++) { cycle.observe({ type: "tool", text: "명령: ao-browser click e3" }); fired = cycle.observe({ type: "tool", text: "명령: ao-browser snapshot" }); }
+  assert.equal(fired?.kind, "repeated-command");
+});
+
 test("idle detector fires after idleMs without meaningful events", () => {
   let now = 0;
   const detector = new StallDetector({ idleMs: 1_000, now: () => now });

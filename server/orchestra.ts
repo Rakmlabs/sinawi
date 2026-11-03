@@ -95,6 +95,12 @@ const PLAN_MODE_NOTICE = `## 계획 모드
 읽기 전용으로 확인한 뒤 실행 계획만 짧게 쓰세요: 목표(무엇을 어떤 상태로, git이면 대상 브랜치·커밋), 바꿀 파일, 실행할 명령과 순서(커밋·push·배포 포함), 확인 방법, 사용자에게 물어볼 것.
 사용자가 "이대로 실행"을 누르면 다음 턴에 이 계획대로 실행합니다.`;
 
+/** A finished run whose CLI reported a quota or rate limit. */
+function runExhausted(run: { exitCode: number; cliText: string; quotaErrorEvidence: boolean; stoppedByApp: boolean }): boolean {
+  if (run.stoppedByApp) return false;
+  return run.quotaErrorEvidence || run.exitCode !== 0 && isQuotaExhaustion(run.cliText);
+}
+
 export class Orchestra {
   private sessions = new Map<string, Session>();
   private controllers = new Map<string, AbortController>();
@@ -771,7 +777,7 @@ export class Orchestra {
       }
     }
 
-    const exhaustedEvidence = first.quotaErrorEvidence || first.exitCode !== 0 && isQuotaExhaustion(first.outputText);
+    const exhaustedEvidence = runExhausted(first);
     if (!context?.enabled || !exhaustedEvidence || signal.aborted) return first;
     if (grokMediaTask) throw new Error(mediaUnavailableMessage);
     const fallback = choose(context);
@@ -779,7 +785,7 @@ export class Orchestra {
     const mapped = switchAgent(fallback, this.knownReset(context, agent));
     const retryPrompt = this.fallbackRetryPrompt(session, role, prompt, agent, first.outputText, delegationId);
     const retried = await this.runAgentOnce(session, fallback, this.remapFallbackPrompt(retryPrompt, agent, fallback, session, role), mapped.model, mapped.reasoningEffort, undefined, signal, trackPrimarySession, readOnly, role, delegationId, workerId, workerName);
-    const retryExhausted = retried.quotaErrorEvidence || retried.exitCode !== 0 && isQuotaExhaustion(retried.outputText);
+    const retryExhausted = runExhausted(retried);
     return retryExhausted ? { ...retried, exitCode: retried.exitCode || 1, quotaFailure: true } : retried;
   }
 
@@ -797,6 +803,9 @@ export class Orchestra {
     }
     let lastCompleteMessage = "";
     const output: string[] = [];
+    // What the CLI itself said. Tool output (a file, a grep, a screenshot read as base64) can contain
+    // "429" or "quota" and is never the provider refusing the run.
+    const cliOutput: string[] = [];
     let quotaErrorEvidence = false;
     const disabledMcp = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledMcp;
     this.requireCurrentRun(session, signal);
@@ -833,6 +842,7 @@ export class Orchestra {
           if (stall) this.tripStall(session, guard, stall, agent, workerId ?? agent, workerName ?? agent, delegationId);
         }
         output.push(line.text);
+        if (line.type !== "tool" && line.type !== "command") cliOutput.push(line.text);
         if (line.type === "error" && isQuotaExhaustion(line.text)) quotaErrorEvidence = true;
         if (trackPrimarySession && line.sessionId && agent === session.agent) session.cliSessionId = line.sessionId;
         if (role === "worker" && workerId && line.sessionId) setWorkerSessionId(session, workerId, line.sessionId);
@@ -852,7 +862,9 @@ export class Orchestra {
       inflight.delete(pending);
       if (!inflight.size && this.inflightRuns.get(session.id) === inflight) this.inflightRuns.delete(session.id);
     }
-    return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, quotaErrorEvidence, quotaFailure: false };
+    // A run the stall guard stopped ended because the app killed it, not because a quota ran out.
+    const stoppedByApp = Boolean(guard?.kill.signal.aborted);
+    return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false };
   }
 
   private async quotaFallbackContext(session: Session, signal?: AbortSignal): Promise<QuotaFallbackContext | undefined> {

@@ -369,12 +369,26 @@ export class StallDetector {
         this.fired = { kind: "repeated-error", reason: `같은 오류가 ${hits.length}번 반복됐습니다: ${signature}`, evidence: hits.map((item) => item.text) };
       }
     } else if (command) {
-      const hits = this.recent.filter((item) => item.command === command);
+      const hits = this.repeatedCycle(command);
       if (hits.length >= this.repeatLimit + 1) {
         this.fired = { kind: "repeated-command", reason: `같은 명령을 ${hits.length}번 반복했습니다: ${clip(command, 120)}`, evidence: hits.map((item) => item.text) };
       }
     }
     return this.fired;
+  }
+
+  /**
+   * The latest runs of `command` that repeat one cycle: the commands between each pair are the
+   * same. `screenshot, screenshot` or `click, snapshot, click, snapshot` is a loop; a screenshot
+   * after each `goto` of a different page is not, even though the screenshot command is identical.
+   */
+  private repeatedCycle(command: string) {
+    const commands = this.recent.filter((item) => item.command);
+    const at = commands.flatMap((item, index) => (item.command === command ? [index] : []));
+    const between = (from: number, to: number) => commands.slice(from + 1, to).map((item) => item.command).join("\n");
+    let start = at.length - 1;
+    while (start > 0 && between(at[start - 1], at[start]) === between(at[at.length - 2], at[at.length - 1])) start--;
+    return at.slice(start).map((index) => commands[index]);
   }
 
   /**

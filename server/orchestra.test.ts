@@ -1229,3 +1229,23 @@ test("a run ends after the worker round when the user denied computer use, witho
   assert.equal(roles.length, 2, "lead + worker only; no review round");
   assert.match(session.events.at(-1)?.text ?? "", /컴퓨터 조작을 거부해 작업을 멈췄습니다/);
 });
+
+test("a failed worker whose tool output mentions 429 or quota is not handed to another agent", async () => {
+  const calls: RunCliOptions[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => {
+    calls.push(options);
+    if (options.usageContext?.role === "worker") {
+      // A screenshot read back as base64 and a doc about rate limits: tool output, not the provider.
+      options.onLine?.({ type: "tool", text: "도구 결과: iVBORw0KGgo+429/AAAA quota exceeded on purpose in this doc" });
+      return { exitCode: 1, finalText: "" };
+    }
+    return { exitCode: 0, finalText: '<<DELEGATE to="claude">>화면 확인<</DELEGATE>>' };
+  }, undefined, undefined, undefined, undefined, undefined, async () => ({
+    enabled: true, threshold: 3, authenticated: ["codex", "claude", "grok"],
+    quotas: [{ agent: "claude", windows: [{ key: "a", label: "a", remainingPercent: 53 }] }],
+  }));
+  const session = await orchestra.create({ prompt: "확인해", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitUntilSettled(session);
+  assert.equal(calls.filter((call) => call.usageContext?.role === "worker").every((call) => call.agent === "claude"), true);
+  assert.equal(session.events.some((event) => event.metadata?.quotaFallback || /한도 소진/u.test(event.text)), false);
+});
