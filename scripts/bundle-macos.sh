@@ -42,25 +42,47 @@ done
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
+APP="$BUNDLE/macos/Sinawi.app"
+# The DMG is a plain image with the app and an Applications link. Tauri's dmg bundler drives Finder
+# over AppleScript to lay the window out, and unmounting its work volume fails while macOS is still
+# scanning the freshly notarized app inside ("resource busy").
+make_dmg() {
+  local stage
+  stage="$(mktemp -d)"
+  ditto "$APP" "$stage/Sinawi.app"
+  ln -s /Applications "$stage/Applications"
+  hdiutil create -volname "Sinawi" -srcfolder "$stage" -ov -format UDZO "$OUT/$NAME.dmg"
+  rm -rf "$stage"
+}
+
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   echo "bundle: Developer ID mode ($APPLE_SIGNING_IDENTITY)"
-  npx tauri build --ci --target "$TARGET" --bundles app,dmg
+  # Tauri signs and notarizes the app and writes the updater tarball from it.
+  npx tauri build --ci --target "$TARGET" --bundles app
   cp "$BUNDLE/macos/Sinawi.app.tar.gz" "$OUT/$NAME.app.tar.gz"
   cp "$BUNDLE/macos/Sinawi.app.tar.gz.sig" "$OUT/$NAME.app.tar.gz.sig"
-  cp "$BUNDLE"/dmg/*.dmg "$OUT/$NAME.dmg"
+  make_dmg
+  codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$OUT/$NAME.dmg"
+  notary=()
+  if [ -n "${APPLE_API_KEY:-}" ]; then
+    notary=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER")
+  elif [ -n "${APPLE_ID:-}" ]; then
+    notary=(--apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID")
+  fi
+  if [ ${#notary[@]} -gt 0 ]; then
+    xcrun notarytool submit "$OUT/$NAME.dmg" "${notary[@]}" --wait
+    xcrun stapler staple "$OUT/$NAME.dmg"
+  else
+    echo "bundle: no notarization credentials; the DMG is signed but not notarized"
+  fi
 else
   echo "bundle: ad-hoc mode (no Apple Developer ID; Gatekeeper will warn on first install)"
   npx tauri build --ci --target "$TARGET" --bundles app
-  APP="$BUNDLE/macos/Sinawi.app"
   bash scripts/sign-app.sh "$APP"
   # Tarball layout matches tauri-bundler's: the .app at the archive root.
   COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$OUT/$NAME.app.tar.gz" -C "$BUNDLE/macos" Sinawi.app
   npx tauri signer sign --app-version "$VERSION" "$OUT/$NAME.app.tar.gz"
-  STAGE="$(mktemp -d)"
-  ditto "$APP" "$STAGE/Sinawi.app"
-  ln -s /Applications "$STAGE/Applications"
-  hdiutil create -volname "Sinawi" -srcfolder "$STAGE" -ov -format UDZO "$OUT/$NAME.dmg"
-  rm -rf "$STAGE"
+  make_dmg
 fi
 
 test -s "$OUT/$NAME.app.tar.gz.sig" || { echo "bundle: missing updater signature" >&2; exit 1; }
