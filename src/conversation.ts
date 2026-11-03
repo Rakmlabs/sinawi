@@ -7,6 +7,8 @@ export function conversationText(text: string): string {
     // The goal panel shows the checklist; a commander's goals read as one line each.
     .replace(/<<CHECKLIST>>[\s\S]*?<<\/CHECKLIST>>/gu, "")
     .replace(/<<NOTES>>[\s\S]*?<<\/NOTES>>/gu, "")
+    // A question for another project's lead: the app sends it when the turn ends.
+    .replace(/<<ASK\s+to="([^"\n]*)">>([\s\S]*?)<<\/ASK>>/gu, (_match, to: string, body: string) => `> **「${to.trim()}」에게:** ${body.trim().replace(/\n+/gu, " ")}`)
     .replace(/<<GOAL([^>]*)>>([\s\S]*?)<<\/GOAL>>/gu, (_match, attrs: string, body: string) => {
       const key = /id\s*=\s*"([^"]*)"/u.exec(attrs)?.[1];
       const title = /title\s*=\s*"([^"]*)"/u.exec(attrs)?.[1] || body.trim().split("\n")[0].replace(/^#+\s*/u, "");

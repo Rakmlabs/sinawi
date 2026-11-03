@@ -49,3 +49,14 @@
 .steward-notes { padding: 0 12px 10px; max-height: min(40vh, 360px); overflow: auto; color: var(--text-secondary); }
 .steward-notes p { margin: 4px 0; }
 .steward-panel > summary svg { color: var(--accent-fg); }
+.steward-panel > summary strong { white-space: nowrap; }
+.steward-settings { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin: 4px 0 10px; }
+.steward-settings label { display: grid; gap: 4px; font-size: calc(12px * var(--font-scale)); color: var(--text-muted); }
+.steward-settings input { min-width: 0; padding: 5px 8px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.steward-settings label:first-child input { width: 160px; }
+.steward-settings small { color: var(--text-muted); }
+.lead-message .message-author svg { color: var(--accent-fg); }
+.lead-message .message-text { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-subtle, transparent); }
+.steward-divider svg { color: var(--accent-fg); }
+.minimal-empty-note { max-width: 520px; margin: 0 auto 12px; color: var(--text-muted); text-align: center; }
+.minimal-empty h2 svg { vertical-align: -3px; color: var(--accent-fg); }

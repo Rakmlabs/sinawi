@@ -17,7 +17,7 @@ import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
-import { parseNotes, readNotes, rolloverContext, saveNotes, saveTranscript, STEWARD_ROLLOVER_TURNS, stewardRules, transcriptPath } from "./steward.js";
+import { askPrompt, MAX_ASK_DEPTH, parseAsks, parseNotes, readNotes, replyPrompt, reportDue, reportPrompt, rolloverContext, saveNotes, saveTranscript, STEWARD_ROLLOVER_TURNS, stewardName, stewardRules, stripLeadBlocks, transcriptPath, type StewardAsk } from "./steward.js";
 import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 
@@ -105,6 +105,13 @@ function runExhausted(run: { exitCode: number; cliText: string; quotaErrorEviden
   return run.quotaErrorEvidence || run.exitCode !== 0 && isQuotaExhaustion(run.cliText);
 }
 
+interface StewardDelivery {
+  prompt: string;
+  /** A question from this lead: its answer goes back to `replyTo.id`. */
+  replyTo?: { id: string; question: string; depth: number };
+  depth?: number;
+}
+
 export class Orchestra {
   private sessions = new Map<string, Session>();
   private controllers = new Map<string, AbortController>();
@@ -118,6 +125,16 @@ export class Orchestra {
   private goalAutoTurn = new Set<string>();
   /** Where project leads keep their notes and transcripts (server/steward.ts); unset: no files. */
   stewardDataDir?: string;
+  /** `<<ASK>>` blocks a lead wrote this turn, sent when the turn ends. */
+  private stewardAsks = new Map<string, StewardAsk[]>();
+  /** Messages for a lead that was busy: other leads' questions and answers, and its daily report. */
+  private stewardInbox = new Map<string, StewardDelivery[]>();
+  /** The lead whose question this lead is answering now; its answer goes back when the work ends. */
+  private stewardAnswering = new Map<string, { id: string; question: string; depth: number }>();
+  /** The lead's last final answer: what goes back to the lead that asked. */
+  private stewardLastAnswer = new Map<string, string>();
+  /** How many lead-to-lead hops led to this lead's current turn (MAX_ASK_DEPTH). */
+  private stewardDepth = new Map<string, number>();
   /** Goal sessions started by a commander run at once, at most. */
   commanderParallelGoals = 3;
   /** Per-session kill switch + stall detector for the worker currently running. */
@@ -362,14 +379,16 @@ export class Orchestra {
       groupId: input.groupId,
       workspaceId,
       skills: selectedSkills, systemPrompt: input.systemPrompt ?? "",
-      ...(input.commander ? { commander: { goals: [], forced: true } } : input.goal || input.autoRun ? { goal: freshGoal() } : {}),
+      ...(input.commander ? { commander: { goals: [], forced: true } } : input.goal || input.autoRun || input.steward ? { goal: freshGoal() } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.steward && !input.parentId ? { steward: { turns: 0, since: new Date().toISOString(), ...(input.steward.name?.trim() ? { name: input.steward.name.trim().slice(0, 80) } : {}) } } : {}),
     };
     this.sessions.set(session.id, session);
     this.configs.set(session.id, { skills: selectedSkills, systemPrompt: input.systemPrompt ?? "" });
     const controller = new AbortController();
     this.controllers.set(session.id, controller);
     this.event(session, agent, "status", `${agentNames[agent]} 세션을 시작했습니다.`);
+    if (session.steward) this.event(session, agent, "status", "이 채팅을 프로젝트 담당으로 정했습니다. 담당 노트와 전체 기록을 이어 가며, 끝낸 작업은 메인 폴더에 병합합니다.");
     this.event(session, "user", "message", input.prompt);
     void this.execute(session, input.prompt, selectedSkills, input.systemPrompt ?? "", controller, mediaLead || (mediaRequest && agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
@@ -1396,7 +1415,7 @@ export class Orchestra {
     // A message typed during this run that no turn picked up is the user's next request, not a note for later.
     const leftover = session.pendingInstructions ?? [];
     this.afterTurn(session, "done", leftover.length > 0);
-    if (!leftover.length) return;
+    if (!leftover.length) return this.stewardIdle(session, "done");
     delete session.pendingInstructions;
     this.event(session, session.agent, "status", "진행 중에 받은 메시지를 이어서 처리합니다.");
     const latest = leftover[leftover.length - 1];
@@ -1411,6 +1430,7 @@ export class Orchestra {
     this.event(session, session.agent, "status", "중지됨");
     if (session.steward) void this.stewardTurnEnded(session, "stopped").catch(() => undefined);
     this.afterTurn(session, "stopped", false);
+    this.stewardIdle(session, "stopped");
   }
   private fail(session: Session, error: unknown, controller?: AbortController) {
     if (controller && this.controllers.get(session.id) !== controller) return;
@@ -1421,6 +1441,7 @@ export class Orchestra {
     this.event(session, session.agent, "error", message);
     if (session.steward) void this.stewardTurnEnded(session, "error").catch(() => undefined);
     this.afterTurn(session, "error", false);
+    this.stewardIdle(session, "error");
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1428,25 +1449,133 @@ export class Orchestra {
 
   /** Makes a chat the project lead, or an ordinary chat again. A lead always runs work to the end. */
   setSteward(id: string, enabled: boolean): Session {
+    return this.updateSteward(id, { enabled });
+  }
+
+  /** Turns the lead on or off, renames it, and sets or clears its daily report time ("HH:MM"). */
+  updateSteward(id: string, patch: { enabled?: boolean; name?: string; report?: string | null }): Session {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.parentId) throw new Error("나눠 맡긴 채팅은 담당이 될 수 없습니다.");
+    const enabled = patch.enabled ?? Boolean(session.steward);
     if (enabled && !session.steward) {
       session.steward = { turns: 0, since: new Date().toISOString() };
       session.goal ??= freshGoal();
       this.event(session, session.agent, "status", "이 채팅을 프로젝트 담당으로 정했습니다. 담당 노트와 전체 기록을 이어 가며, 끝낸 작업은 메인 폴더에 병합합니다.");
     } else if (!enabled && session.steward) {
       delete session.steward;
+      this.stewardInbox.delete(id);
+      this.stewardLastAnswer.delete(id);
       this.event(session, session.agent, "status", "프로젝트 담당을 해제했습니다.");
+    }
+    const steward = session.steward;
+    if (steward && patch.name !== undefined) {
+      const name = patch.name.trim().slice(0, 80);
+      if (name) steward.name = name;
+      else delete steward.name;
+    }
+    if (steward && patch.report !== undefined) {
+      if (patch.report) {
+        // From now on: a time already past today waits for tomorrow.
+        if (steward.report !== patch.report) steward.reportedAt = new Date().toISOString();
+        steward.report = patch.report;
+      } else {
+        delete steward.report;
+        delete steward.reportedAt;
+      }
     }
     this.broadcast(session);
     return session;
   }
 
+  private stewards(except?: string): Session[] {
+    return [...this.sessions.values()].filter((item) => item.steward && item.id !== except);
+  }
+
+  /** Called every minute: opens each lead's daily report once its time has passed. */
+  stewardTick(now = new Date()): void {
+    for (const session of this.stewards()) {
+      const steward = session.steward!;
+      if (!steward.report || !reportDue(steward.report, steward.reportedAt, now)) continue;
+      steward.reportedAt = now.toISOString();
+      this.deliverToSteward(session, { prompt: reportPrompt() });
+      this.broadcast(session);
+    }
+  }
+
+  /** Runs the message now when the lead is free, else after its current work. */
+  private deliverToSteward(session: Session, delivery: StewardDelivery): void {
+    this.stewardInbox.set(session.id, [...(this.stewardInbox.get(session.id) ?? []), delivery]);
+    if (session.status !== "running" && !this.goalAutoNext.has(session.id)) this.drainStewardInbox(session);
+  }
+
+  private drainStewardInbox(session: Session): void {
+    const inbox = this.stewardInbox.get(session.id);
+    const next = inbox?.shift();
+    if (!inbox?.length) this.stewardInbox.delete(session.id);
+    if (!next) return;
+    if (next.replyTo) this.stewardAnswering.set(session.id, next.replyTo);
+    this.stewardDepth.set(session.id, next.replyTo?.depth ?? next.depth ?? 0);
+    void this.followup(session.id, next.prompt).catch((error) => {
+      this.stewardDepth.delete(session.id);
+      if (session.status === "running") {
+        // The user's own message got there first: this one waits for that turn to end.
+        if (next.replyTo) this.stewardAnswering.delete(session.id);
+        this.stewardInbox.set(session.id, [next, ...(this.stewardInbox.get(session.id) ?? [])]);
+        return;
+      }
+      this.event(session, session.agent, "warning", `다른 담당의 메시지를 시작하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
+      this.settleStewardAnswer(session, "error");
+    });
+  }
+
+  /**
+   * A lead's work ended and nothing else follows on its own: answer the lead that asked, then take
+   * the next waiting message. A stop answers but takes nothing new; the user stopped it.
+   */
+  private stewardIdle(session: Session, outcome: "done" | "error" | "stopped"): void {
+    if (!session.steward || session.status === "running" || this.goalAutoNext.has(session.id)) return;
+    this.settleStewardAnswer(session, outcome);
+    if (outcome !== "stopped") this.drainStewardInbox(session);
+  }
+
+  private settleStewardAnswer(session: Session, outcome: "done" | "error" | "stopped"): void {
+    const asked = this.stewardAnswering.get(session.id);
+    if (!asked) return;
+    this.stewardAnswering.delete(session.id);
+    const asker = this.sessions.get(asked.id);
+    if (!asker?.steward) return;
+    const answer = outcome === "done"
+      ? stripLeadBlocks(this.stewardLastAnswer.get(session.id) ?? "") || "(답이 비어 있습니다)"
+      : `(이 담당이 답하지 못했습니다: ${outcome === "stopped" ? "사용자가 중지했습니다" : "실행 중 오류가 났습니다"})`;
+    this.deliverToSteward(asker, { prompt: replyPrompt(stewardName(session), asked.question, answer), depth: asked.depth });
+  }
+
+  /** Sends the `<<ASK>>` blocks of a finished lead turn to the leads they name. */
+  private sendStewardAsks(session: Session, asks: StewardAsk[], depth: number): void {
+    const from = stewardName(session);
+    for (const ask of asks) {
+      const peers = this.stewards(session.id);
+      const wanted = ask.to.toLowerCase();
+      const target = peers.find((peer) => stewardName(peer).toLowerCase() === wanted);
+      if (!target) {
+        this.event(session, session.agent, "warning", `「${ask.to}」 담당을 찾지 못해 보내지 않았습니다. 지금 담당: ${peers.map((peer) => `「${stewardName(peer)}」`).join(", ") || "없음"}`);
+        continue;
+      }
+      if (depth >= MAX_ASK_DEPTH) {
+        this.event(session, session.agent, "warning", `담당끼리 주고받은 횟수가 ${MAX_ASK_DEPTH}번을 넘어 「${stewardName(target)}」에게 보내지 않았습니다. 필요하면 사용자에게 물어보세요.`);
+        continue;
+      }
+      this.event(session, session.agent, "status", `「${stewardName(target)}」 담당에게 물었습니다. 답이 오면 이 채팅에서 이어 갑니다.`);
+      this.deliverToSteward(target, { prompt: askPrompt(from, ask.text), replyTo: { id: session.id, question: ask.text, depth: depth + 1 } });
+    }
+  }
+
   private async stewardContext(session: Session): Promise<string> {
     if (!session.steward || !this.stewardDataDir) return "";
     const notes = await readNotes(this.stewardDataDir, session.id);
-    return `\n\n${stewardRules(notes, transcriptPath(this.stewardDataDir, session.id))}`;
+    const peers = this.stewards(session.id).map((peer) => ({ name: stewardName(peer), cwd: peer.cwd }));
+    return `\n\n${stewardRules(notes, transcriptPath(this.stewardDataDir, session.id), peers)}`;
   }
 
   /**
@@ -1457,6 +1586,11 @@ export class Orchestra {
     const steward = session.steward;
     if (!steward) return;
     steward.turns++;
+    const asks = this.stewardAsks.get(session.id) ?? [];
+    this.stewardAsks.delete(session.id);
+    const depth = this.stewardDepth.get(session.id) ?? 0;
+    this.stewardDepth.delete(session.id);
+    if (outcome === "done" && asks.length) this.sendStewardAsks(session, asks, depth);
     if (this.stewardDataDir) await saveTranscript(this.stewardDataDir, session).catch(() => undefined);
     if (outcome === "done" && !commanderActive(session) && this.permissionModeOf(session) !== "plan") await this.mergeStewardWork(session);
     if (steward.turns < STEWARD_ROLLOVER_TURNS || session.status === "running") return;
@@ -1494,6 +1628,14 @@ export class Orchestra {
   private noteChecklist(session: Session, text: string): void {
     const items = session.goal ? parseChecklist(text) : undefined;
     if (items) this.turnChecklists.set(session.id, items);
+    if (session.steward) {
+      if (text.trim()) this.stewardLastAnswer.set(session.id, text);
+      const asks = parseAsks(text);
+      // The review often restates the first answer's question: send each one once.
+      const known = this.stewardAsks.get(session.id) ?? [];
+      const fresh = asks.filter((ask) => !known.some((item) => item.to === ask.to && item.text === ask.text));
+      if (fresh.length) this.stewardAsks.set(session.id, [...known, ...fresh]);
+    }
     const notes = session.steward && this.stewardDataDir ? parseNotes(text) : undefined;
     if (notes) void saveNotes(this.stewardDataDir!, session.id, notes).catch((error) => this.event(session, session.agent, "warning", `담당 노트를 저장하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`));
   }

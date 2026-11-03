@@ -60,6 +60,7 @@
   --accent: #5bd6a0;
   --accent-hover: #7fe0b4;
   --accent-text: #06110c;      /* text on an accent fill */
+  --avatar-text: #ffffff;      /* letter on a project lead's coloured avatar (src/lead.ts leadHue) */
   --accent-fg: #7fe0b4;        /* accent-coloured text/links on surfaces */
   --accent-tint: #12291f;      /* quiet accent background (badges, selection halo) */
   --accent-border: #1f4a37;

@@ -45,7 +45,7 @@ import { registerSessionFileRoutes } from "./session-files.js";
 import { registerLinkPreviewRoute } from "./link-preview.js";
 import { registerWorktreeRoutes } from "./worktree-routes.js";
 import { cleanupSessionWorktrees } from "./worktrees.js";
-import { readNotes, STEWARD_ROLLOVER_TURNS, transcriptPath } from "./steward.js";
+import { readNotes, reportTime, STEWARD_ROLLOVER_TURNS, stewardName, transcriptPath } from "./steward.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -221,6 +221,7 @@ function startInput(body: any, workspace: WorkspaceResolver, fallbackWorkspace: 
     workspaceId: workspace(body?.workspaceId, fallbackWorkspace),
     // A commander's goal sessions are started by the app (parentId), never from a request.
     ...(body?.commander === true ? { commander: true } : body?.goal === true ? { goal: true } : {}),
+    ...(body?.steward === true || body?.steward && typeof body.steward === "object" ? { steward: { name: optionalString(body.steward?.name, 80) } } : {}),
   };
 }
 
@@ -409,6 +410,10 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   // Per-worker git worktrees (server/worktrees.ts). Opt-in so tests and embedders never create branches.
   if (options.worktrees) orchestra.worktreeDataDir = options.dataDir ?? join(homedir(), ".sinawi");
   orchestra.stewardDataDir = options.dataDir ?? join(homedir(), ".sinawi");
+  // Leads' daily reports: checked every minute, and once shortly after start for a report missed while closed.
+  const stewardTimer = setInterval(() => orchestra.stewardTick(), 60_000);
+  stewardTimer.unref();
+  setTimeout(() => orchestra.stewardTick(), 15_000).unref();
   const routing = new RoutingService({ dataDir: options.dataDir, runner: routingRunner, skillLoader: options.routingSkillLoader, modelRunner: options.modelRunner, homeDir: options.modelHomeDir, authDiscovery: options.authDiscovery });
   const getAvailableAgents = async () => {
     if (Array.isArray(options.availableAgents)) return [...new Set(options.availableAgents)];
@@ -505,6 +510,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const tokenPrune = setInterval(() => pruneComputerTokens((id) => orchestra.list().some((item) => item.id === id && item.status === "running")), 60_000);
   tokenPrune.unref();
   httpServer.once("close", () => clearInterval(tokenPrune));
+  httpServer.once("close", () => clearInterval(stewardTimer));
   const computerBridge = new ComputerBridge({
     // Each connection gets its own nonce; /api/computer/result accepts only a nonce sent with that command.
     send: (command, nonce) => { const clients = openClients(); for (const client of clients) client.send(JSON.stringify({ ...command, nonce: nonce() })); return clients.length; },
@@ -925,13 +931,23 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const session = orchestra.get(routeParam(req.params.id));
       if (!session?.steward) throw new Error("담당 채팅이 아닙니다.");
       const dir = orchestra.stewardDataDir;
-      res.json({ notes: dir ? await readNotes(dir, session.id) : "", transcript: dir ? transcriptPath(dir, session.id) : undefined, turns: session.steward.turns, rolloverAt: STEWARD_ROLLOVER_TURNS });
+      res.json({
+        notes: dir ? await readNotes(dir, session.id) : "", transcript: dir ? transcriptPath(dir, session.id) : undefined,
+        turns: session.steward.turns, rolloverAt: STEWARD_ROLLOVER_TURNS,
+        name: stewardName(session), report: session.steward.report ?? null,
+        peers: orchestra.list().filter((item) => item.steward && item.id !== session.id).map((item) => ({ id: item.id, name: stewardName(item), cwd: item.cwd })),
+      });
     } catch (error) { errorResponse(res, error, 404); }
   });
   app.patch("/api/sessions/:id/steward", async (req, res) => {
     try {
-      if (typeof req.body?.enabled !== "boolean") throw new Error("담당 설정이 올바르지 않습니다.");
-      const session = orchestra.setSteward(routeParam(req.params.id), req.body.enabled);
+      const body = req.body ?? {};
+      if (body.enabled !== undefined && typeof body.enabled !== "boolean") throw new Error("담당 설정이 올바르지 않습니다.");
+      if (body.name !== undefined && typeof body.name !== "string") throw new Error("담당 이름이 올바르지 않습니다.");
+      const report = body.report === null || body.report === "" ? null : body.report === undefined ? undefined : reportTime(body.report);
+      if (report === undefined && body.report !== undefined) throw new Error("보고 시각은 HH:MM 형식이어야 합니다.");
+      if (body.enabled === undefined && body.name === undefined && body.report === undefined) throw new Error("담당 설정이 올바르지 않습니다.");
+      const session = orchestra.updateSteward(routeParam(req.params.id), { enabled: body.enabled, name: body.name, report });
       await persistSessions(orchestra.list());
       res.json(session);
     } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }

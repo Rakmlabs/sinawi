@@ -218,3 +218,18 @@
 .delete-dialog-actions button:disabled { opacity: .55; cursor: default; }
 @keyframes delete-dialog-in { from { opacity: 0; transform: translateY(4px) scale(.98); } }
 @media (prefers-reduced-motion: reduce) { .delete-dialog { animation: none; } }
+
+/* Project leads: a contact list at the top, avatar plus the last thing said (src/lead.ts). */
+.sidebar-leads { margin-bottom: 12px; }
+.sidebar-row:has(.sidebar-lead-open.active) { background: var(--bg-active); }
+.rail .sidebar-lead-open { flex: 1; min-width: 0; min-height: 48px; padding: 6px 8px; gap: 10px; text-align: left; }
+.rail .sidebar-lead-open.active { color: var(--text); }
+.sidebar-lead-avatar {
+  display: inline-flex; flex: 0 0 32px; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%;
+  color: var(--avatar-text); font-weight: 700; font-size: calc(14px * var(--font-scale));
+}
+.sidebar-lead-copy { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 2px; }
+.sidebar-lead-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; }
+.sidebar-lead-name .status-beat { display: inline-flex; flex: none; }
+.sidebar-lead-name .status-dot { flex: none; }
+.sidebar-lead-preview { display: block; max-width: 100%; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }

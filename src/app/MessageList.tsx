@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { runPhase } from "../run-activity";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, CalendarClock, UserCheck } from "lucide-react";
+import { isReportPrompt, leadMessage } from "../lead";
 import { Beat } from "../Beat";
 import { AgentMark } from "../AgentMark";
 import { CopyButton } from "../CopyButton";
@@ -101,6 +102,14 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
       </div>;
       if (e.type === "delegation") return <DelegationCard key={e.id} e={e} task={tasksById.get(e.id)!} active={active} onOpenWorker={onOpenWorker} />;
       const isUser = e.agent === "user";
+      // What the app put in a project lead's chat for it: another lead's message, or its daily report.
+      if (isUser && isReportPrompt(e.text)) return <div className="handoff-divider steward-divider" key={e.id}><span className="agent-label"><CalendarClock size={13} aria-hidden="true" />{t("steward.reportTurn")}</span></div>;
+      const lead = isUser ? leadMessage(e.text) : undefined;
+      if (lead) return <article className="message assistant-message lead-message" key={e.id}>
+        <div className="message-author"><UserCheck size={15} aria-hidden="true" /><strong>{t(lead.kind === "ask" ? "steward.askFrom" : "steward.replyFrom", { name: lead.from })}</strong>
+          <time dateTime={e.time} title={new Date(e.time).toLocaleString("ko-KR")}>{new Date(e.time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</time></div>
+        <div className="message-text"><MessageFold text={lead.body} streaming={false}><Markdown text={lead.body} /></MessageFold></div>
+      </article>;
       const text = isUser ? e.text : conversationText(e.text);
       const copied = isUser ? (parseAttachmentMessage(text).body || text) : text;
       const liveBadge = liveBadgeLabel(e);

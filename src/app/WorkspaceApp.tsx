@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MotionConfig } from "framer-motion";
-import { ArrowDown, ArrowLeft, ChevronDown, Folder, MessageSquare, PanelRightClose, PanelRightOpen, Square } from "lucide-react";
+import { ArrowDown, ArrowLeft, ChevronDown, Folder, MessageSquare, PanelRightClose, PanelRightOpen, Square, UserCheck } from "lucide-react";
 import { MarkdownSessionContext } from "../markdown-images";
 import { isNetworkFailure, teamAvailabilityWarning } from "../team";
 import { normalizeWorkerConfigs } from "../../server/workers";
@@ -107,6 +107,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const scopedWorkspaces = useMemo(() => ({ ...workspacesApi, running: allSessions.length ? liveRunning : workspacesApi.running }), [workspacesApi, liveRunning, allSessions.length]);
   const [workerSelection, setWorkerSelection] = useState<{ sessionId: string; taskId: string }>();
   const [selected, setSelected] = useState<string>();
+  /** The next new chat starts as a project lead (sidebar "New project lead"). */
+  const [stewardDraft, setStewardDraft] = useState(false);
   const [tab, setTab] = useState(() => isUsageCommand(window.location.pathname) ? "usage" : "workspace");
   const [toolsTab, setToolsTab] = useState<{ tab: "mcp" | "skills"; n: number }>({ tab: "mcp", n: 0 });
   const [terminalHeight, setTerminalHeight] = useState(0);
@@ -533,9 +535,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
             skills: [...new Set([...skills, ...messageSkills])], groupId: groupId || undefined,
             systemPrompt, mode, autoSwitch, workspaceId, permissionMode: sendMode,
             autoRun: autoRunEnabled(),
+            ...(stewardDraft ? { steward: {} } : {}),
           }, executeRecommendation ? pendingRecommendation : undefined, setRouting);
           setSessions((old) => [s, ...old.filter((x) => x.id !== s.id)]);
           setSelected(s.id);
+          setStewardDraft(false);
         }
         storeSentPrompt(visibleMessage);
         clearComposer(sentAttachments);
@@ -582,6 +586,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const closeModal = useCallback(() => setModal(undefined), []);
   useModalFocusTrap(modal, closeModal);
   const newSession = () => {
+    setStewardDraft(false);
     setSelected(undefined);
     setWorkerSelection(undefined);
     setActivityOpen(false);
@@ -729,7 +734,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         {sidebarOverlay && sidebarOpen && <div className="sidebar-scrim" aria-hidden="true" onClick={() => setSidebarOpen(false)} />}
         <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} tab={tab}
           onNavigate={(next) => { setTab(next); closeSidebarOverlay(); }} onSkills={() => { closeSidebarOverlay(); openTools("skills"); }} onSettings={() => { closeSidebarOverlay(); openSettingsAt(); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
-          onNew={(id) => { newSession(); setGroupId(id ?? ""); closeSidebarOverlay(); }} selectedWorker={selectedWorker?.id} onSelectWorker={(sessionId, taskId) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); }} onSelect={(id) => { selectConversation(id); closeSidebarOverlay(); }}
+          onNew={(id) => { newSession(); setGroupId(id ?? ""); closeSidebarOverlay(); }}
+          onNewSteward={() => { newSession(); setStewardDraft(true); closeSidebarOverlay(); window.setTimeout(() => composerInput.current?.focus(), 0); }} selectedWorker={selectedWorker?.id} onSelectWorker={(sessionId, taskId) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); }} onSelect={(id) => { selectConversation(id); closeSidebarOverlay(); }}
           onHelp={() => { closeSidebarOverlay(); openSettingsAt("environment", "env-onboarding"); }} onUsage={() => { closeSidebarOverlay(); openUsage(); }}
           onCreateGroup={(name) => safe(async () => {
             const group = await api<Group>("/groups", { name, workspaceId });
@@ -822,10 +828,19 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                         <div ref={bottom} />
                       </div> : <div className="minimal-empty">
                         {activeProject && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
-                        <h2>{t("ws.emptyTitle")}</h2>
-                        <div className="prompt-chips">
-                          {promptChips().map(([label, text]) => <button key={label} onClick={() => { setPrompt(text); composerInput.current?.focus(); }}>{label}</button>)}
-                        </div>
+                        {stewardDraft ? <>
+                          <h2><UserCheck size={20} aria-hidden="true" /> {t("steward.newTitle")}</h2>
+                          <p className="minimal-empty-note">{t("steward.newBody")}</p>
+                          <div className="prompt-chips">
+                            <button onClick={() => { setPrompt(t("steward.newChipText")); composerInput.current?.focus(); }}>{t("steward.newChip")}</button>
+                            <button onClick={() => setStewardDraft(false)}>{t("steward.newCancel")}</button>
+                          </div>
+                        </> : <>
+                          <h2>{t("ws.emptyTitle")}</h2>
+                          <div className="prompt-chips">
+                            {promptChips().map(([label, text]) => <button key={label} onClick={() => { setPrompt(text); composerInput.current?.focus(); }}>{label}</button>)}
+                          </div>
+                        </>}
                       </div>
                     ) : (
                       <MessageList active={active} events={conversationEvents} tasksById={tasksById} latestHandoffId={latestHandoffId} latestAssistantId={latestAssistant?.id}

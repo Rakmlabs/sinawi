@@ -1,6 +1,7 @@
 import { terminalOwnsKeyboardEvent } from "./terminal-events";
 import { AgentMark } from "./AgentMark";
 import { goalProgress } from "./goal-progress";
+import { leadHue, leadName, leadPreview } from "./lead";
 import { useEffect, useReducer, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
@@ -26,6 +27,8 @@ type SidebarProps = {
   workspaceId?: WorkspaceId;
   onMoveSession?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>; onMoveGroup?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>;
   onUsage?: () => void;
+  /** Starts a new chat that will be a project lead (the composer picks its folder and first request). */
+  onNewSteward?: () => void;
   /** Opens the settings window (⌘,); without it "Settings" falls back to the legacy settings tab. */
   onSettings?: () => void;
   onDeleteWorker?: (sessionId: string, workerId: string) => Promise<boolean>;
@@ -81,9 +84,10 @@ export function Sidebar(props: SidebarProps) {
   // A chat's goal chats sit under it (server/goals.ts), not in the list on their own.
   const shownIds = new Set(results.sessions.map((session) => session.id));
   const subChats = (id: string) => results.sessions.filter((session) => session.parentId === id);
-  // The project lead sits first in its project.
-  const visibleSessions = results.sessions.filter((session) => !session.parentId || !shownIds.has(session.parentId))
-    .sort((a, b) => Number(Boolean(b.steward)) - Number(Boolean(a.steward)));
+  const topSessions = results.sessions.filter((session) => !session.parentId || !shownIds.has(session.parentId));
+  // Project leads have their own list at the top, like a messenger's contacts; the rest are chats.
+  const leads = topSessions.filter((session) => session.steward);
+  const visibleSessions = topSessions.filter((session) => !session.steward);
   const visibleGroups = results.groups;
   const searching = Boolean(query.trim());
   useEffect(() => {
@@ -225,6 +229,28 @@ export function Sidebar(props: SidebarProps) {
     {subChats(session.id).length > 0 && <div className="sidebar-subchats" aria-label={t("side.subChats", { title: session.title })}>{subChats(session.id).map(sessionRow)}</div>}
   </div>;
   };
+  const leadRow = (session: Session) => {
+    const name = leadName(session);
+    const active = selected === session.id && tab === "workspace" && !props.selectedWorker;
+    const preview = leadPreview(session).replace(/\s+/gu, " ").slice(0, 140);
+    const progress = goalProgress(session);
+    return <div key={session.id} className="sidebar-chat sidebar-lead">
+      <div className="sidebar-row" onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}>
+        <button className={`sidebar-lead-open${active ? " active" : ""}`} aria-current={active ? "page" : undefined} title={`${name} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
+          <span className="sidebar-lead-avatar" style={{ background: `hsl(${leadHue(name)} 52% 44%)` }} aria-hidden="true">{[...name][0]?.toUpperCase()}</span>
+          <span className="sidebar-lead-copy">
+            <span className="sidebar-lead-name"><span className="sidebar-session-title">{name}</span>
+              {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : session.status === "error" ? <span className="status-dot error" role="img" aria-label={statusLabels.error} /> : null}
+              {progress && <small className="sidebar-goal-progress" title={t("goal.progressTitle", progress)}>{progress.done}/{progress.total}</small>}
+            </span>
+            <small className="sidebar-lead-preview">{preview || t("side.leadNoMessages")}</small>
+          </span>
+        </button>
+        <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: name })} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
+      </div>
+      {subChats(session.id).length > 0 && <div className="sidebar-subchats" aria-label={t("side.subChats", { title: name })}>{subChats(session.id).map(sessionRow)}</div>}
+    </div>;
+  };
   const ungrouped = visibleSessions.filter((session) => !visibleGroups.some((group) => group.id === session.groupId));
   const mac = isMacPlatform();
   const newChatKey = mac ? "⌘N" : "Ctrl+N";
@@ -245,7 +271,11 @@ export function Sidebar(props: SidebarProps) {
     <label className="sidebar-search" title={`${t("side.search")} (${searchKey})`}><Search size={16} aria-hidden="true" /><input type="search" aria-label={t("side.search")} placeholder={t("side.searchShort")} value={query}
       onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && query) { event.stopPropagation(); setQuery(""); } }} />{!query && <kbd aria-hidden="true">{searchKey}</kbd>}</label>
     <nav id="sidebar-links" className="rail-main" aria-label={t("side.chatList")}>
-      {searching && !visibleGroups.length && !visibleSessions.length && <p className="sidebar-search-empty" role="status">{t("side.noResults")}</p>}
+      {searching && !visibleGroups.length && !visibleSessions.length && !leads.length && <p className="sidebar-search-empty" role="status">{t("side.noResults")}</p>}
+      {(leads.length > 0 || props.onNewSteward && !searching) && <section className="sidebar-leads" aria-label={t("side.leads")}>
+        <div className="sidebar-section-heading"><h2>{t("side.leads")}</h2>{props.onNewSteward && <button aria-label={t("side.newLead")} title={t("side.newLead")} disabled={busy} onClick={props.onNewSteward}><Plus size={15} /></button>}</div>
+        {leads.length ? leads.map(leadRow) : <p className="sidebar-empty">{t("side.leadsEmpty")}</p>}
+      </section>}
       <section className="sidebar-projects" aria-label={t("side.projects")}>
         <div className="sidebar-section-heading"><h2>{t("side.projects")}</h2><button aria-label={t("ob.createProject")} title={t("ob.createProject")} disabled={busy} onClick={() => { setEditor({ kind: "create", id: "", value: "" }); setMenu(undefined); }}><Plus size={15} /></button></div>
         {editor?.kind === "create" && editForm(editor)}

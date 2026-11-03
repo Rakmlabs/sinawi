@@ -149,6 +149,11 @@ export interface StewardState {
   /** Lead turns on the current CLI session; at STEWARD_ROLLOVER_TURNS the app starts a fresh one. */
   turns: number;
   since: string;
+  /** What other leads and the sidebar call it; the project folder's name when unset. */
+  name?: string;
+  /** A daily report at this local time ("HH:MM"), opened by the app (server/steward.ts reportDue). */
+  report?: string;
+  reportedAt?: string;
 }
 
 export interface CommanderState {
@@ -294,6 +299,8 @@ export interface StartSessionInput extends ConversationSettings {
   goal?: boolean;
   /** Starts as a commander that only splits the request into goal chats (server/goals.ts). */
   commander?: boolean;
+  /** Starts as the project lead (server/steward.ts). */
+  steward?: { name?: string };
   parentId?: string;
 }
 
