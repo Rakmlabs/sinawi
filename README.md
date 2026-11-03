@@ -93,7 +93,7 @@ The agents edit files and run commands in the folder you choose. *Plan* mode is 
 
 ## Contributing
 
-Issues and pull requests are welcome. Before opening a pull request, run `npm run typecheck` and `npm test`, and keep each change focused on one thing.
+Issues and pull requests are welcome. Open or pick an issue, branch from `main`, and send a pull request that links it. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, checks and conventions.
 
 ## License
 
