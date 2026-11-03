@@ -490,8 +490,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     // -g leaves it behind other windows. It still has to answer: WKWebView must not suspend (backgroundThrottling: disabled).
     execFile("open", ["-g", "-b", envVar("BUNDLE_ID") ?? "dev.sinawi.app"], (error) => done(!error));
   }) : undefined);
-  registerBrowserRoutes(app, browserBridge);
-  if (options.browserQueue) { const stop = watchQueue(browserBridge); httpServer.once("close", stop); }
+  // Every agent run has a token; a command without one has no workspace or owner (see NO_TOKEN_ERROR).
+  registerBrowserRoutes(app, browserBridge, true);
+  if (options.browserQueue) { const stop = watchQueue(browserBridge, undefined, undefined, true); httpServer.once("close", stop); }
   // Computer use: same relay as the browser bridge, gated by the workspace setting `computerUse`.
   const openClients = () => [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN);
   // The caller is identified only by its per-run token (issued by runCli); client-sent ids are ignored.

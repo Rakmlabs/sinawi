@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import express from "express";
 import { BrowserBridge, CLI_SOURCE, SKILL_MD, installBrowserTooling, isBrowserAction, isOwnAppUrl, materialize, prepareBrowserArgs, registerBrowserRoutes, watchQueue, type BrowserCommand } from "./browser-bridge.js";
 import { buildInvocation } from "./cli.js";
+import { clearComputerTokens, issueComputerToken } from "./computer-tokens.js";
 
 test("bridge resolves a command with the frontend result", async () => {
   const sent: BrowserCommand[] = [];
@@ -261,4 +262,25 @@ test("a command from an agent run carries that run's workspace", async () => {
   assert.equal("owner" in sent[1], false);
   bridge.resolve(sent[1].id, { ok: true });
   await q;
+});
+
+test("the app server refuses a browser command without a live run token", async () => {
+  clearComputerTokens();
+  const app = express(); app.use(express.json());
+  const seen: BrowserCommand[] = [];
+  let bridge!: BrowserBridge;
+  bridge = new BrowserBridge((c) => { seen.push(c); setTimeout(() => bridge.resolve(c.id, { ok: true }), 5); return 1; });
+  registerBrowserRoutes(app, bridge, true);
+  const server = app.listen(0); const port = (server.address() as { port: number }).port;
+  const call = (token?: string) => fetch(`http://127.0.0.1:${port}/api/browser/snapshot`, { method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-sinawi-token": token } : {}) }, body: "{}" });
+  try {
+    const bare = await call();
+    assert.equal(bare.status, 403);
+    assert.match((await bare.json()).error, /SINAWI_COMPUTER_TOKEN을 지우거나/);
+    assert.equal(seen.length, 0, "nothing reaches the screen");
+    const token = issueComputerToken({ sessionId: "s1", workspaceId: "personal", agent: "claude", owner: "s1:claude-1" });
+    assert.equal((await call(token)).status, 200);
+    assert.equal(seen[0].workspaceId, "personal");
+    assert.equal(seen[0].owner, "s1:claude-1");
+  } finally { server.close(); clearComputerTokens(); }
 });

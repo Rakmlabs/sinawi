@@ -124,7 +124,14 @@ export async function prepareBrowserArgs(action: string, args: Record<string, un
   return { ...args, file: { name, type: UPLOAD_MIME[extname(name).toLowerCase()] ?? "application/octet-stream", base64: data.toString("base64"), size: data.length } };
 }
 
-export function registerBrowserRoutes(app: Express, bridge: BrowserBridge) {
+/**
+ * Without the run's token a command carries no workspace and no owner, so it would land in
+ * whatever browser is on screen (another workspace's, another session's tab). An agent that
+ * unset the token to get past "you are in another workspace" did exactly that.
+ */
+export const NO_TOKEN_ERROR = "Sinawi 실행 토큰이 없거나 끝난 실행의 토큰입니다. SINAWI_COMPUTER_TOKEN을 지우거나 바꾸지 마세요. 앱이 브라우저 사용을 막으면 우회하지 말고 막힘으로 보고하세요.";
+
+export function registerBrowserRoutes(app: Express, bridge: BrowserBridge, requireToken = false) {
   app.post("/api/browser/result", (req, res) => {
     const id = String(req.body?.id ?? "");
     res.json({ ok: bridge.resolve(id, { ok: Boolean(req.body?.ok), result: req.body?.result, error: req.body?.error }) });
@@ -136,13 +143,14 @@ export function registerBrowserRoutes(app: Express, bridge: BrowserBridge) {
     let args: Record<string, unknown>;
     try { args = await prepareBrowserArgs(action, body); } catch (error) { res.status(422).json({ ok: false, error: error instanceof Error ? error.message : String(error) }); return; }
     const run = resolveComputerToken(req.get("x-sinawi-token"));
+    if (requireToken && !run) { res.status(403).json({ ok: false, error: NO_TOKEN_ERROR }); return; }
     const result = await materialize(await bridge.request(action, args, undefined, run?.workspaceId, run?.owner));
     res.status(result.ok ? 200 : 422).json(result);
   });
 }
 
 /** File-queue fallback for sandboxes without loopback network (Codex workspace-write). */
-export function watchQueue(bridge: BrowserBridge, dir = QUEUE_DIR, intervalMs = 150) {
+export function watchQueue(bridge: BrowserBridge, dir = QUEUE_DIR, intervalMs = 150, requireToken = false) {
   const busy = new Set<string>();
   let stopped = false;
   const tick = async () => {
@@ -161,7 +169,7 @@ export function watchQueue(bridge: BrowserBridge, dir = QUEUE_DIR, intervalMs = 
             const action = String(raw.action);
             const args = isBrowserAction(action) ? await prepareBrowserArgs(action, raw.args ?? {}) : {};
             const run = resolveComputerToken(raw.token);
-            out = isBrowserAction(action) ? await materialize(await bridge.request(action, args, undefined, run?.workspaceId, run?.owner), dir) : { ok: false, error: `알 수 없는 브라우저 명령: ${action}` };
+            out = requireToken && !run ? { ok: false, error: NO_TOKEN_ERROR } : isBrowserAction(action) ? await materialize(await bridge.request(action, args, undefined, run?.workspaceId, run?.owner), dir) : { ok: false, error: `알 수 없는 브라우저 명령: ${action}` };
           } catch (error) { out = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
           await writeFile(join(dir, `${base}.res.tmp`), JSON.stringify(out));
           const { rename } = await import("node:fs/promises");
