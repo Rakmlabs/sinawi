@@ -149,5 +149,50 @@ test("a merge commits the worker's uncommitted files and keeps the user's own lo
   assert.equal(result.ok, true, result.text);
   assert.equal(await readFile(join(repo, "feature.txt"), "utf8"), "feature\n");
   assert.equal(await readFile(join(repo, "README.md"), "utf8"), "user edit, not committed\n");
-  assert.equal(git(repo, "log", "-1", "--format=%s"), "merge goal");
+  assert.equal(git(repo, "log", "-1", "--format=%b"), "merge goal");
+});
+
+test("a merge goes through a repository whose commit-msg hook rejects the app's wording", async (t) => {
+  const { repo, dataDir } = await tempRepo(t);
+  await mkdir(join(repo, ".hooks"), { recursive: true });
+  await writeFile(join(repo, ".hooks", "commit-msg"), "#!/bin/sh\ngrep -qE '^(feat|fix|chore)' \"$1\" || { echo 'subject must be conventional' >&2; exit 1; }\n", { mode: 0o755 });
+  git(repo, "config", "core.hooksPath", ".hooks");
+  const info = (await ensureWorkerWorktree({ dataDir, sessionId: "abcdef12-0002", workerId: "claude", cwd: repo }))!;
+  await writeFile(join(info.path, "feature.txt"), "feature\n");
+  git(info.path, "add", "-A");
+  git(info.path, "commit", "-qm", "feat: feature");
+  const result = await mergeWorktree(info, "sinawi: 목표 g1 기능");
+  assert.equal(result.ok, true, result.text);
+  assert.match(git(repo, "log", "-1", "--format=%s"), /^Merge branch 'sinawi\//u);
+});
+
+test("writing to the commander again retries a goal whose merge failed and the goals waiting on it", async (t) => {
+  const { repo, dataDir } = await tempRepo(t);
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      const file = /FILE-(\w+)/u.exec(options.prompt)?.[1] ?? "x";
+      await writeFile(join(options.cwd, `${file}.txt`), `${file}\n`);
+      return { exitCode: 0, finalText: "상태: 완료" };
+    }
+    if (options.prompt.includes("당신은 Sinawi의 총지휘입니다")) {
+      if (options.prompt.includes("다시 해")) return { exitCode: 0, finalText: "다시 시도합니다." };
+      if (options.prompt.includes("모든 목표가 끝났습니다")) return { exitCode: 0, finalText: "정리" };
+      return { exitCode: 0, finalText: '<<GOAL id="g1" title="첫째">>FILE-one<</GOAL>>\n<<GOAL id="g2" title="둘째" after="g1">>FILE-two<</GOAL>>' };
+    }
+    if (options.readOnly) return { exitCode: 0, finalText: checklist("- [x] 파일") };
+    const file = /FILE-(\w+)/u.exec(options.prompt)?.[1];
+    return { exitCode: 0, finalText: `${checklist("- [ ] 파일")}\n<<DELEGATE to="claude">>FILE-${file}<</DELEGATE>>` };
+  };
+  // The main checkout sits on a detached HEAD at first, so the first merge is refused.
+  const head = git(repo, "rev-parse", "HEAD");
+  git(repo, "checkout", "-q", "--detach", head);
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.worktreeDataDir = dataDir;
+  const commander = await orchestra.create({ prompt: "둘 다 해", agent: "codex", workers: ["claude"], cwd: repo, commander: true });
+  await waitFor(() => commander.commander!.goals.length === 2 && commander.commander!.goals.every((goal) => goal.state === "blocked") && commander.status === "done" && commander.commander!.reported === true, 15_000);
+  git(repo, "checkout", "-q", "main");
+  await orchestra.followup(commander.id, "다시 해");
+  await waitFor(() => commander.commander!.goals.every((goal) => goal.state === "merged"), 15_000);
+  assert.equal(await readFile(join(repo, "one.txt"), "utf8"), "one\n");
+  assert.equal(await readFile(join(repo, "two.txt"), "utf8"), "two\n");
 });

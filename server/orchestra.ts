@@ -1005,6 +1005,7 @@ export class Orchestra {
     else this.goalAutoTurn.delete(id);
     // The user's own message restarts a goal loop that had stopped, with a fresh budget.
     if (session.goal && !auto) Object.assign(session.goal, { idleTurns: 0, autoTurns: 0, startedAt: new Date().toISOString(), stopped: undefined, outcome: undefined });
+    if (session.commander && !alreadyLogged) this.retryGoals(session);
     const controller = new AbortController();
     this.controllers.set(id, controller);
     if (settings.mode !== undefined) session.mode = settings.mode;
@@ -1509,8 +1510,41 @@ export class Orchestra {
       .catch((error) => this.event(commander, commander.agent, "error", error instanceof Error ? error.message : String(error)));
   }
 
+  /**
+   * The user wrote to the commander again: goals whose work finished but whose merge failed get
+   * another merge, and goals that never started because of them wait again. The tick after this
+   * turn runs them.
+   */
+  private retryGoals(commander: Session): void {
+    const goals = commander.commander?.goals ?? [];
+    const retried = new Set<string>();
+    for (const goal of goals) {
+      const child = goal.childId ? this.sessions.get(goal.childId) : undefined;
+      if (goal.state === "blocked" && goal.merge?.ok === false && child?.goal?.outcome === "complete" && child.status !== "running") {
+        goal.state = "waiting";
+        retried.add(goal.key);
+      }
+    }
+    for (const goal of goals) {
+      if (goal.state === "blocked" && !goal.childId && goal.after.some((key) => retried.has(key) || goals.find((dep) => dep.key === key)?.state === "waiting")) {
+        goal.state = "waiting";
+        delete goal.merge;
+        delete goal.endedAt;
+        retried.add(goal.key);
+      }
+    }
+    if (!retried.size) return;
+    commander.commander!.reported = false;
+    this.event(commander, commander.agent, "status", `막혔던 목표를 다시 시도합니다: ${[...retried].join(", ")}`);
+  }
+
   private async launchGoal(commander: Session, goal: CommanderGoal): Promise<void> {
     const existing = goal.childId ? this.sessions.get(goal.childId) : undefined;
+    // Its work is done and only the merge failed: merge again without another turn.
+    if (existing?.goal?.outcome === "complete") {
+      await this.childSettled(existing);
+      return;
+    }
     // Interrupted by an app restart: resume in the goal's own session, keeping its checklist and branches.
     if (existing) {
       if (existing.goal) Object.assign(existing.goal, { stopped: undefined, outcome: undefined });
