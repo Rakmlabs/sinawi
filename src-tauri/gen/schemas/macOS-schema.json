@@ -279,6 +279,12 @@
           "markdownDescription": "Enables the native_browser_supported command without any pre-configured scope."
         },
         {
+          "description": "Enables the notify command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-notify",
+          "markdownDescription": "Enables the notify command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_devtools command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-devtools",
@@ -403,6 +409,12 @@
           "type": "string",
           "const": "deny-native-browser-supported",
           "markdownDescription": "Denies the native_browser_supported command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the notify command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-notify",
+          "markdownDescription": "Denies the notify command without any pre-configured scope."
         },
         {
           "description": "Denies the open_devtools command without any pre-configured scope.",
