@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { reviewPrompt } from "./supervision.js";
-import { buildInvocation, CLAUDE_READ_ONLY_BASH_DENY, CLAUDE_READ_ONLY_BASH_RULES, claudeHelpFlags, killSessionProcessGroups, parseHelpFlags, prepareCliInvocation, runCli, sessionProcessGroups } from "./cli.js";
+import { buildInvocation, CLAUDE_AUTO_MODE, CLAUDE_READ_ONLY_BASH_DENY, CLAUDE_READ_ONLY_BASH_RULES, claudeHelpFlags, killSessionProcessGroups, parseHelpFlags, prepareCliInvocation, runCli, sessionProcessGroups } from "./cli.js";
 
 const HELP = `Usage: claude [options] [command] [prompt]
 
@@ -30,6 +30,13 @@ test("the help parser lists long flags, including aliases, and rejects unrelated
   const flags = parseHelpFlags(HELP)!;
   for (const flag of ["--add-dir", "--allowedTools", "--allowed-tools", "--effort", "--include-partial-messages", "--output-format", "--print", "--settings"]) assert.ok(flags.has(flag), flag);
   assert.equal(flags.has("--tools"), false);
+  assert.equal(flags.has(CLAUDE_AUTO_MODE), false);
+  const withAuto = parseHelpFlags(`${HELP}\n  --permission-mode <mode>              Permission mode to use for the session\n                                        (choices: "acceptEdits", "auto",\n                                        "bypassPermissions", "plan")\n`)!;
+  assert.equal(withAuto.has(CLAUDE_AUTO_MODE), true);
+  const auto = buildInvocation({ agent: "claude", prompt: "p", cwd: "/w", claudeFlags: withAuto });
+  assert.equal(auto.args[auto.args.indexOf("--permission-mode") + 1], "auto", "Sinawi auto uses Claude Code's auto mode");
+  const old = buildInvocation({ agent: "claude", prompt: "p", cwd: "/w", claudeFlags: flags });
+  assert.equal(old.args[old.args.indexOf("--permission-mode") + 1], "acceptEdits");
   assert.equal(parseHelpFlags("command not found"), undefined);
   assert.equal(parseHelpFlags(""), undefined);
 });

@@ -147,7 +147,9 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     if (readOnly && readTools) args.push("--tools", ...CLAUDE_READ_TOOLS, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan", "--allowedTools", ...CLAUDE_READ_ONLY_BASH_RULES, "--disallowedTools", ...CLAUDE_READ_ONLY_BASH_DENY);
     else if (readOnly) args.push("--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan");
     else if (full) args.push("--dangerously-skip-permissions");
-    else args.push("--permission-mode", "acceptEdits", "--allowedTools", ...developmentBashRules);
+    // Sinawi's "auto": Claude Code's own auto mode where available, so ordinary commands (a loop,
+    // `cd x && git log`) run without a question; only what it judges risky reaches the user.
+    else args.push("--permission-mode", options.claudeFlags?.has(CLAUDE_AUTO_MODE) ? "auto" : "acceptEdits", "--allowedTools", ...developmentBashRules);
     if (!readOnly && !full && options.claudeSettings && supports("--settings")) args.push("--settings", options.claudeSettings);
     for (const dir of extraDirs) args.push("--add-dir", dir);
     for (const dir of new Set(options.readOnlyDirs ?? [])) {
@@ -198,8 +200,14 @@ export function parseHelpFlags(help: string): ReadonlySet<string> | undefined {
     // Option lines start with the flag list; descriptions may mention other flags, which still exist.
     for (const match of line.matchAll(/(?:^|[\s,(])(--[A-Za-z][A-Za-z0-9-]*)/gu)) flags.add(match[1]);
   }
+  // Not a flag but a choice of one: Claude Code's auto mode (a classifier allows safe actions and
+  // stops risky ones, no prompt). Older versions only have acceptEdits.
+  if (/--permission-mode[\s\S]{0,300}?choices:[^)]*"auto"/u.test(help)) flags.add(CLAUDE_AUTO_MODE);
   return flags.has("--output-format") ? flags : undefined;
 }
+
+/** Marker in the parsed help flags: `--permission-mode auto` exists. */
+export const CLAUDE_AUTO_MODE = "--permission-mode=auto";
 
 const claudeFlagCache = new Map<string, Promise<ReadonlySet<string> | undefined>>();
 
