@@ -308,7 +308,14 @@ AI agents and MCP clients: start with [llms.txt](llms.txt) and [docs/ai/for-ai.m
 
 ## Contributing
 
-Issues and pull requests are welcome. Open or pick an issue, branch from `main`, and send a pull request that links it. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, checks and conventions.
+Issues and pull requests are welcome.
+
+- **Found a bug?** Open a [bug report](https://github.com/Rakmlabs/sinawi/issues/new?template=bug_report.yml) with your Sinawi, macOS and CLI versions, steps and logs (`~/Library/Logs/Sinawi/`, tokens removed).
+- **Have an idea or a question?** Open a [feature request](https://github.com/Rakmlabs/sinawi/issues/new?template=feature_request.yml) or start a [discussion](https://github.com/Rakmlabs/sinawi/discussions).
+- **Want to code?** Pick an issue (`good first issue`, `help wanted`), branch from `main`, and send a pull request that links it. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, checks and conventions.
+- **Security issue?** Report it privately: [SECURITY.md](SECURITY.md).
+
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Built by rakm
 

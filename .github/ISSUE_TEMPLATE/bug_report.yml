@@ -1,36 +1,65 @@
-name: Bug report
+name: Bug report / 버그 신고
 description: Something in Sinawi does not work as it should
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! 한국어로 써도 됩니다. Security problems: please use [SECURITY.md](https://github.com/Rakmlabs/sinawi/blob/main/SECURITY.md) instead.
   - type: textarea
     id: what
     attributes:
-      label: What happened
+      label: What happened / 무슨 일이 있었나요
       description: What you did, what you expected and what happened instead.
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
-      label: Steps to reproduce
+      label: Steps to reproduce / 재현 방법
       placeholder: |
         1. New chat with Claude as lead, Codex as worker
         2. Send "…"
         3. …
+    validations:
+      required: true
   - type: input
     id: version
     attributes:
       label: Sinawi version
       description: Settings → About, or the release you installed.
+      placeholder: "1.5.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      placeholder: "macOS 26.1, Apple Silicon"
     validations:
       required: true
   - type: input
     id: clis
     attributes:
       label: CLIs and versions
-      placeholder: "claude 2.1.x, codex 0.16x, grok 1.0.x"
+      description: "`claude --version`, `codex --version`, `grok --version`, `node --version`"
+      placeholder: "claude 2.1.x, codex 0.16x, grok 1.0.x, node 24.x"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Lead (담당) / delegation
+        - Schedules
+        - MCP (lead tools or external AI)
+        - Spaces / CLI accounts
+        - Chat UI / composer
+        - Browser or computer use
+        - Install / update
+        - Other
   - type: textarea
     id: logs
     attributes:
       label: Logs or screenshots
-      description: Remove tokens, keys and private paths before pasting.
+      description: Logs are in `~/Library/Logs/Sinawi/`. Remove tokens, keys and private paths before pasting.
+      render: text

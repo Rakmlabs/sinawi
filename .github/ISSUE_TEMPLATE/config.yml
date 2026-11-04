@@ -1,1 +1,8 @@
 blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas / 질문과 아이디어
+    url: https://github.com/Rakmlabs/sinawi/discussions
+    about: Ask how to use Sinawi or share an idea before opening an issue.
+  - name: Security vulnerability / 보안 취약점
+    url: https://github.com/Rakmlabs/sinawi/security/advisories/new
+    about: Report privately, not as a public issue.

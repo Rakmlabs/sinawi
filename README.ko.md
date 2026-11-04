@@ -308,7 +308,14 @@ AI 에이전트와 MCP 클라이언트는 [llms.txt](llms.txt)와 [docs/ai/for-a
 
 ## 기여하기
 
-이슈와 풀 리퀘스트를 환영합니다. 이슈를 열거나 고르고, `main`에서 브랜치를 만든 뒤 이슈를 연결한 풀 리퀘스트를 보내 주세요. 설정, 검사, 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
+이슈와 풀 리퀘스트를 환영합니다. 한국어로 써도 됩니다.
+
+- **버그를 찾았다면:** [버그 신고](https://github.com/Rakmlabs/sinawi/issues/new?template=bug_report.yml)에 시나위·macOS·CLI 버전, 재현 방법, 로그(`~/Library/Logs/Sinawi/`, 토큰은 지우고)를 적어 주세요.
+- **아이디어나 질문:** [기능 제안](https://github.com/Rakmlabs/sinawi/issues/new?template=feature_request.yml)을 열거나 [Discussions](https://github.com/Rakmlabs/sinawi/discussions)에 올려 주세요.
+- **코드로 기여:** 이슈(`good first issue`, `help wanted`)를 고르고 `main`에서 브랜치를 만든 뒤, 이슈를 연결한 풀 리퀘스트를 보내 주세요. 설정, 검사, 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
+- **보안 문제:** 공개 이슈 말고 [SECURITY.md](SECURITY.md) 방법으로 알려 주세요.
+
+모두 [행동 강령](CODE_OF_CONDUCT.md)을 따릅니다.
 
 ## 만든 곳: rakm
 
