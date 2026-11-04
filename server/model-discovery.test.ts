@@ -75,6 +75,155 @@ test("Grok positive login output wins over stale negative diagnostics", async ()
   assert.equal(settings.modelOptions.grok.authStatus, "authenticated");
 });
 
+test("Claude structured login status wins over unrelated unauthenticated stderr", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  let claudeCalls = 0;
+  const runner: ModelCommandRunner = async (command) => {
+    if (command !== "claude") return { stdout: "" };
+    claudeCalls += 1;
+    return {
+      stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }),
+      stderr: "MCP server example is unauthenticated",
+    };
+  };
+
+  const settings = await discoverCliModels(
+    structuredClone(defaultRoutingSettings),
+    homeDir,
+    runner,
+    { sleep: async () => undefined },
+  );
+
+  assert.equal(claudeCalls, 1);
+  assert.equal(settings.modelOptions.claude.authStatus, "authenticated");
+});
+
+test("Claude plain-text login status wins over unrelated unauthenticated stderr", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  let claudeCalls = 0;
+  const runner: ModelCommandRunner = async (command) => {
+    if (command !== "claude") return { stdout: "" };
+    claudeCalls += 1;
+    return { stdout: "Logged in using Claude.ai", stderr: "MCP server example is unauthenticated" };
+  };
+
+  const settings = await discoverCliModels(
+    structuredClone(defaultRoutingSettings), homeDir, runner, { sleep: async () => undefined },
+  );
+
+  assert.equal(claudeCalls, 1);
+  assert.equal(settings.modelOptions.claude.authStatus, "authenticated");
+});
+
+test("Claude retry uses structured status and unavailable account probes remain unknown", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  let claudeCalls = 0;
+  const runner: ModelCommandRunner = async (command, _args, options) => {
+    if (command !== "claude") return { stdout: "" };
+    if (options?.env?.CLAUDE_CONFIG_DIR?.endsWith("missing")) throw new Error("CLI unavailable");
+    claudeCalls += 1;
+    return claudeCalls === 1
+      ? { stdout: JSON.stringify({ loggedIn: false }) }
+      : { stdout: JSON.stringify({ loggedIn: true }), stderr: "MCP server remains unauthenticated" };
+  };
+
+  const recovered = await discoverCliModels(
+    structuredClone(defaultRoutingSettings), homeDir, runner, { sleep: async () => undefined }, { claude: join(homeDir, "working") },
+  );
+  const unavailable = await discoverCliModels(
+    structuredClone(defaultRoutingSettings), homeDir, runner, { sleep: async () => undefined }, { claude: join(homeDir, "missing") },
+  );
+
+  assert.equal(claudeCalls, 2);
+  assert.equal(recovered.modelOptions.claude.authStatus, "authenticated");
+  assert.equal(unavailable.modelOptions.claude.authStatus, "unknown");
+});
+
+test("Codex and Grok positive command output wins over unrelated unauthenticated stderr", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const calls = { codex: 0, grok: 0 };
+  const runner: ModelCommandRunner = async (command) => {
+    if (command === "codex") {
+      calls.codex += 1;
+      return { stdout: "Logged in using ChatGPT", stderr: "MCP server docs is not authenticated" };
+    }
+    if (command === "grok") {
+      calls.grok += 1;
+      return { stdout: "You are logged in with grok.com.\n* grok-4.7 (default)", stderr: "MCP server docs is not authenticated" };
+    }
+    return { stdout: "" };
+  };
+
+  const settings = await discoverCliModels(
+    structuredClone(defaultRoutingSettings), homeDir, runner, { sleep: async () => undefined },
+  );
+
+  assert.deepEqual(calls, { codex: 1, grok: 1 });
+  assert.equal(settings.modelOptions.codex.authStatus, "authenticated");
+  assert.equal(settings.modelOptions.grok.authStatus, "authenticated");
+});
+
+test("Codex and Grok explicit negative stdout remains a confirmed logout", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const calls = { codex: 0, grok: 0 };
+  const runner: ModelCommandRunner = async (command) => {
+    if (command === "codex") calls.codex += 1;
+    if (command === "grok") calls.grok += 1;
+    return command === "claude" ? { stdout: "" } : { stdout: "Not authenticated" };
+  };
+
+  const settings = await discoverCliModels(
+    structuredClone(defaultRoutingSettings), homeDir, runner, { sleep: async () => undefined },
+  );
+
+  assert.deepEqual(calls, { codex: 2, grok: 2 });
+  assert.equal(settings.modelOptions.codex.authStatus, "unauthenticated");
+  assert.equal(settings.modelOptions.grok.authStatus, "unauthenticated");
+});
+
+test("MCP-only unauthenticated stderr remains unknown for every CLI", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const calls = { claude: 0, codex: 0, grok: 0 };
+  const runner: ModelCommandRunner = async (command) => {
+    calls[command as keyof typeof calls] += 1;
+    return { stdout: "", stderr: "MCP server docs is not authenticated" };
+  };
+
+  const settings = await discoverCliModels(
+    structuredClone(defaultRoutingSettings), homeDir, runner, { sleep: async () => undefined },
+  );
+
+  assert.deepEqual(calls, { claude: 1, codex: 1, grok: 1 });
+  assert.equal(settings.modelOptions.claude.authStatus, "unknown");
+  assert.equal(settings.modelOptions.codex.authStatus, "unknown");
+  assert.equal(settings.modelOptions.grok.authStatus, "unknown");
+});
+
+test("MCP-only unauthenticated stdout remains unknown for every CLI", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const calls = { claude: 0, codex: 0, grok: 0 };
+  const runner: ModelCommandRunner = async (command) => {
+    calls[command as keyof typeof calls] += 1;
+    return { stdout: "MCP server docs is not authenticated", stderr: "" };
+  };
+
+  const settings = await discoverCliModels(
+    structuredClone(defaultRoutingSettings), homeDir, runner, { sleep: async () => undefined },
+  );
+
+  assert.deepEqual(calls, { claude: 1, codex: 1, grok: 1 });
+  assert.equal(settings.modelOptions.claude.authStatus, "unknown");
+  assert.equal(settings.modelOptions.codex.authStatus, "unknown");
+  assert.equal(settings.modelOptions.grok.authStatus, "unknown");
+});
+
 test("an unauthenticated status is retried once before it is reported", async () => {
   let grokCalls = 0;
   const sleeps: number[] = [];
@@ -196,6 +345,28 @@ test("workspace account folders drive local model and authentication discovery",
     { CODEX_HOME: codexHome },
     { CLAUDE_CONFIG_DIR: claudeHome },
   ]);
+});
+
+test("default CLI accounts are probed without forcing their conventional config directories", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-default-account-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const environments = new Map<string, Record<string, string> | undefined>();
+  const runner: ModelCommandRunner = async (command, _args, options) => {
+    environments.set(command, options?.env);
+    return command === "claude" && options?.env?.CLAUDE_CONFIG_DIR
+      ? { stdout: JSON.stringify({ loggedIn: false }) }
+      : { stdout: command === "claude" ? JSON.stringify({ loggedIn: true }) : "Logged in authenticated" };
+  };
+
+  const discovered = await discoverCliModels(
+    structuredClone(defaultRoutingSettings),
+    homeDir,
+    runner,
+    { sleep: async () => undefined },
+  );
+
+  assert.deepEqual(environments.get("claude"), {});
+  assert.equal(discovered.modelOptions.claude.authStatus, "authenticated");
 });
 
 test("RoutingService caches authentication separately for each workspace account", async (t) => {

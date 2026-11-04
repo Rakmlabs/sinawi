@@ -211,10 +211,14 @@ async function jsonConfig(file: string): Promise<Record<string, any> | undefined
   } catch { return undefined; }
 }
 
+function configuredAccountDir(agent: AgentId, accounts: WorkspaceAccounts = {}): string | undefined {
+  return accounts[agent] ?? process.env[ACCOUNT_ENV[agent]];
+}
+
 function effectiveAccounts(homeDirectory: string, accounts: WorkspaceAccounts = {}): WorkspaceAccounts {
   return Object.fromEntries((["codex", "claude", "grok"] as const).map((agent) => [
     agent,
-    accounts[agent] ?? process.env[ACCOUNT_ENV[agent]] ?? resolve(homeDirectory, `.${agent}`),
+    configuredAccountDir(agent, accounts) ?? resolve(homeDirectory, `.${agent}`),
   ]));
 }
 
@@ -304,9 +308,24 @@ function isAuthenticated(text: string) {
     && /logged in|authenticated/i.test(text);
 }
 
-function isUnauthenticated(text: string) {
-  return !/you are logged in/i.test(text)
-    && /not authenticated|not (?:logged|signed) in|unauthenticated/i.test(text);
+function hasConfirmedUnauthenticatedStatus(text: string) {
+  return stripVTControlCharacters(text).split(/\r?\n/u).some((line) =>
+    /^(?:you are\s+)?(?:not authenticated|not (?:logged|signed) in|unauthenticated)(?:[.!:].*)?$/iu.test(line.trim()));
+}
+
+function claudeAuthStatus(result: ModelCommandResult): ModelOptions["authStatus"] {
+  try {
+    const loggedIn = JSON.parse(result.stdout)?.loggedIn;
+    if (typeof loggedIn === "boolean") return loggedIn ? "authenticated" : "unauthenticated";
+  } catch { /* Some Claude versions return plain text. */ }
+  return cliAuthStatus(result, "claude");
+}
+
+function cliAuthStatus(result: ModelCommandResult, agent: AgentId): ModelOptions["authStatus"] {
+  const stdout = stripVTControlCharacters(result.stdout ?? "").trim();
+  if (isAuthenticated(stdout) || (agent === "grok" && parseGrokModels(stdout).length > 0)) return "authenticated";
+  if (hasConfirmedUnauthenticatedStatus(stdout)) return "unauthenticated";
+  return hasConfirmedUnauthenticatedStatus(result.stderr ?? "") ? "unauthenticated" : "unknown";
 }
 
 async function commandResult(runner: ModelCommandRunner, agent: AgentId, args: string[], accountDir?: string): Promise<ModelCommandResult | undefined> {
@@ -342,31 +361,28 @@ export async function discoverCliModels(
   }
 
   let [grokResult, codexResult, claudeResult] = await Promise.all([
-    commandResult(runner, "grok", ["models"], effective.grok),
-    commandResult(runner, "codex", ["login", "status"], effective.codex),
-    commandResult(runner, "claude", ["auth", "status"], effective.claude),
+    commandResult(runner, "grok", ["models"], configuredAccountDir("grok", accounts)),
+    commandResult(runner, "codex", ["login", "status"], configuredAccountDir("codex", accounts)),
+    commandResult(runner, "claude", ["auth", "status"], configuredAccountDir("claude", accounts)),
   ]);
 
-  const grokUnauthenticated = grokResult ? isUnauthenticated(output(grokResult)) : false;
-  const codexUnauthenticated = codexResult ? isUnauthenticated(output(codexResult)) : false;
-  let claudeUnauthenticated = false;
-  if (claudeResult) {
-    try { claudeUnauthenticated = JSON.parse(claudeResult.stdout).loggedIn === false; }
-    catch { claudeUnauthenticated = isUnauthenticated(output(claudeResult)); }
-  }
+  const grokUnauthenticated = grokResult ? cliAuthStatus(grokResult, "grok") === "unauthenticated" : false;
+  const codexUnauthenticated = codexResult ? cliAuthStatus(codexResult, "codex") === "unauthenticated" : false;
+  const claudeUnauthenticated = claudeResult ? claudeAuthStatus(claudeResult) === "unauthenticated" : false;
   if (grokUnauthenticated || codexUnauthenticated || claudeUnauthenticated) {
     await (options.sleep ?? ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))))(5_000);
     const retried = await Promise.all([
-      grokUnauthenticated ? commandResult(runner, "grok", ["models"], effective.grok) : Promise.resolve(grokResult),
-      codexUnauthenticated ? commandResult(runner, "codex", ["login", "status"], effective.codex) : Promise.resolve(codexResult),
-      claudeUnauthenticated ? commandResult(runner, "claude", ["auth", "status"], effective.claude) : Promise.resolve(claudeResult),
+      grokUnauthenticated ? commandResult(runner, "grok", ["models"], configuredAccountDir("grok", accounts)) : Promise.resolve(grokResult),
+      codexUnauthenticated ? commandResult(runner, "codex", ["login", "status"], configuredAccountDir("codex", accounts)) : Promise.resolve(codexResult),
+      claudeUnauthenticated ? commandResult(runner, "claude", ["auth", "status"], configuredAccountDir("claude", accounts)) : Promise.resolve(claudeResult),
     ]);
     [grokResult, codexResult, claudeResult] = retried;
   }
 
   if (grokResult) {
     const text = output(grokResult);
-    if (isUnauthenticated(text)) {
+    const authStatus = cliAuthStatus(grokResult, "grok");
+    if (authStatus === "unauthenticated") {
       setAuth(settings.modelOptions.grok, "grok", "unauthenticated");
     } else {
       const models = parseGrokModels(text);
@@ -375,22 +391,16 @@ export async function discoverCliModels(
         settings.modelOptions.grok.source = "cli";
         settings.modelOptions.grok.sourceDetail = "grok models 명령에서 현재 계정의 모델 목록을 발견했습니다.";
         setAuth(settings.modelOptions.grok, "grok", "authenticated");
-      } else setAuth(settings.modelOptions.grok, "grok", isAuthenticated(text) ? "authenticated" : "unknown");
+      } else setAuth(settings.modelOptions.grok, "grok", authStatus);
     }
   } else setAuth(settings.modelOptions.grok, "grok", "unknown");
 
   if (codexResult) {
-    const text = output(codexResult);
-    setAuth(settings.modelOptions.codex, "codex", isUnauthenticated(text) ? "unauthenticated" : isAuthenticated(text) ? "authenticated" : "unknown");
+    setAuth(settings.modelOptions.codex, "codex", cliAuthStatus(codexResult, "codex"));
   } else setAuth(settings.modelOptions.codex, "codex", "unknown");
 
   if (claudeResult) {
-    const text = output(claudeResult);
-    let loggedIn: boolean | undefined;
-    try { loggedIn = JSON.parse(claudeResult.stdout).loggedIn; } catch { /* Some Claude versions return plain text. */ }
-    const loggedOut = loggedIn === false || isUnauthenticated(text);
-    setAuth(settings.modelOptions.claude, "claude", loggedOut ? "unauthenticated"
-      : loggedIn === true || isAuthenticated(text) ? "authenticated" : "unknown");
+    setAuth(settings.modelOptions.claude, "claude", claudeAuthStatus(claudeResult));
   } else setAuth(settings.modelOptions.claude, "claude", "unknown");
 
   return settings;
@@ -541,7 +551,8 @@ export class RoutingService {
   constructor(private options: { dataDir?: string; homeDir?: string; runner?: PlannerRunner; modelRunner?: ModelCommandRunner; authDiscovery?: AuthDiscoveryOptions; skillLoader?: (cwd?: string) => Promise<SkillInfo[]>; timeoutMs?: number } = {}) {}
 
   private modelCacheKey(agent: AgentId, accounts?: WorkspaceAccounts) {
-    return `${agent}\0${effectiveAccounts(this.options.homeDir ?? homedir(), accounts)[agent]}`;
+    const configured = configuredAccountDir(agent, accounts);
+    return `${agent}\0${configured === undefined ? "<default>" : configured}`;
   }
 
   private applyDiscoveredModels(settings: RoutingSettings, accounts?: WorkspaceAccounts) {

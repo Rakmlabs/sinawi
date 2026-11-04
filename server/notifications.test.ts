@@ -37,3 +37,38 @@ test("notifications serialize concurrent writes and retain newest 200 per worksp
     assert.ok((await store.list("personal")).every((n) => n.read));
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("auth alerts stay deduplicated per workspace and CLI until recovery", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "notifications-auth-"));
+  try {
+    const store = new NotificationStore(dir);
+    const personal = await store.add({
+      workspaceId: "personal", key: "auth:claude", type: "auth", title: "Claude 로그인 필요", body: "first detail",
+      action: { label: "로그인", command: "claude auth login" },
+    });
+    const company = await store.add({
+      workspaceId: "company", key: "auth:claude", type: "auth", title: "Claude 로그인 필요", body: "company detail",
+      action: { label: "로그인", command: "CLAUDE_CONFIG_DIR=/company claude auth login" },
+    });
+    await store.read("personal", [personal.id]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const updated = await store.add({
+      workspaceId: "personal", key: "auth:claude", type: "auth", title: "Claude 로그인 필요", body: "new diagnostic detail",
+      action: { label: "다시 로그인", command: "CLAUDE_CONFIG_DIR=/personal claude auth login" },
+    });
+
+    assert.equal(updated.id, personal.id);
+    assert.equal(updated.updatedAt, personal.updatedAt);
+    assert.equal(updated.read, true);
+    assert.equal(updated.body, "new diagnostic detail");
+    assert.equal((await store.list("company"))[0].id, company.id);
+    assert.equal((await store.list("company"))[0].read, false);
+
+    await store.resolve("personal", "auth:claude");
+    assert.deepEqual(await store.list("personal"), []);
+    const relapsed = await store.add({ workspaceId: "personal", key: "auth:claude", type: "auth", title: "Claude 로그인 필요", body: "failed again" });
+    assert.notEqual(relapsed.id, personal.id);
+    assert.equal(relapsed.read, false);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

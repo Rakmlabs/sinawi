@@ -26,7 +26,12 @@ export class NotificationStore {
       const previous = input.key ? items.find((n) => n.workspaceId === input.workspaceId && n.key === input.key) : undefined;
       if (previous && previous.type === input.type && previous.title === input.title && previous.body === input.body && JSON.stringify(previous.action) === JSON.stringify(input.action)) return previous;
       const now = new Date().toISOString();
-      const next: AppNotification = { ...input, id: previous?.id ?? randomUUID(), createdAt: previous?.createdAt ?? now, updatedAt: now, read: false };
+      const keepAuthReadState = previous?.type === "auth" && input.type === "auth";
+      const next: AppNotification = {
+        ...input, id: previous?.id ?? randomUUID(), createdAt: previous?.createdAt ?? now,
+        updatedAt: keepAuthReadState ? previous.updatedAt : now,
+        read: keepAuthReadState ? previous.read : false,
+      };
       const rest = items.filter((n) => n.id !== next.id);
       items.splice(0, items.length, next, ...rest.filter((n) => n.workspaceId === input.workspaceId).slice(0, 199), ...rest.filter((n) => n.workspaceId !== input.workspaceId));
       changed = true;
