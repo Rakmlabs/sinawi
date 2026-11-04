@@ -11,7 +11,7 @@
 | 표면 | 엔드포인트 | 인증 | 누가 |
 |---|---|---|---|
 | 담당 (`sinawi_lead`) | `POST /api/lead-mcp` | 담당 실행의 토큰(`x-sinawi-token`), 담당 본인 실행만 | 담당 CLI 실행(Claude/Codex). 담당 전용 도구 + 앱 도구 |
-| 외부 (`sinawi`) | `POST /api/app-mcp` | 데이터 폴더의 `app-mcp-token`(0600)을 `Authorization: Bearer`로 | `scripts/sinawi-mcp.mjs`(stdio)를 띄우는 Claude Desktop 등. 앱 도구만 |
+| 외부 (`sinawi`) | `POST /api/app-mcp` | 데이터 폴더의 `app-mcp-token`(0600)을 `Authorization: Bearer`로 | stdio 브리지(`sinawi mcp`, `packages/sinawi`)를 띄우는 Claude Desktop, Cursor 등. 앱 도구만 |
 
 담당 전용 도구(`delegate_task`, `collect_results` 등)는 담당의 진행 중인 턴이 필요해 외부에는 없습니다. 일정은 담당이 자기 `schedule_*` 도구를 쓰고, 외부에는 담당 ID를 받는 `*_lead_schedule` 도구가 있습니다.
 
@@ -129,9 +129,11 @@
 | 라우트 | 이유 |
 |---|---|
 | `POST /api/lead-mcp` | MCP 엔드포인트 자체(담당 실행의 sinawi_lead). |
-| `POST /api/app-mcp` | MCP 엔드포인트 자체(외부 AI용 sinawi-mcp). |
+| `POST /api/app-mcp` | MCP 엔드포인트 자체(외부 AI용 브리지 `sinawi mcp`). |
 | `GET /api/app-mcp/connection` | 외부 연결 토큰을 보여 주는 설정 화면용. AI에게 토큰을 주지 않는다. |
 | `POST /api/app-mcp/token` | 외부 연결 토큰 재발급(설정 화면 버튼). AI가 자기 연결을 바꾸면 안 된다. |
+| `GET /api/app-mcp/clients/:client` | Claude Desktop·Cursor 연결 미리보기(설정 화면 버튼). 다른 앱의 구성 파일을 다루는 일이라 도구가 아니다. |
+| `POST /api/app-mcp/clients/:client` | Claude Desktop·Cursor 구성 파일에 sinawi 항목을 쓴다(설정 화면에서 사용자가 확인한 뒤에만, 앱 Origin 필요). AI가 다른 AI 클라이언트의 도구 구성을 바꾸면 안 된다. |
 | `POST /api/app-approvals/:id/approve` | 사용자만 하는 결정. AI가 자기 승인 요청을 승인하면 승인의 의미가 없다. |
 | `POST /api/app-approvals/:id/reject` | 사용자만 하는 결정(승인 카드의 거절 버튼). |
 | `POST /api/permissions/request` | Claude 실행 내부의 권한 질문 MCP가 실행 토큰으로 부르는 경로. |
@@ -182,23 +184,23 @@
 | 앱 브라우저 탭·시뮬레이터 창·터미널 창 UI | 화면. 에이전트는 orchestra-browser/ao-sim 스킬, 터미널 명령은 `run_in_terminal` |
 | 보관(archive) | 지금 시나위에 보관 기능이 없음(삭제만 있음 → `delete_session`, 승인 필요) |
 
-## Claude Desktop 연결
+## Claude Desktop·Cursor 연결
 
-1. 시나위 설정 → 일반 → **외부 AI 연결 (MCP)** 에서 **구성 복사**를 누릅니다. 앱이 `<데이터 폴더>/hooks/sinawi-mcp.mjs`를 써 두고 토큰이 들어간 구성을 보여 줍니다.
-2. Claude Desktop → 설정 → 개발자 → 구성 편집으로 `claude_desktop_config.json`을 열고 `mcpServers`에 넣습니다:
+1. 가장 쉬운 방법: 시나위 설정 → 일반 → **외부 AI 연결 (MCP)** 에서 **Claude Desktop에 연결** 또는 **Cursor에 연결**을 누릅니다. 넣을 JSON을 확인하면 앱이 클라이언트 구성 파일에 `mcpServers.sinawi`를 합칩니다(다른 항목 유지, 원본은 `.bak`). 항목은 `<데이터 폴더>/hooks/sinawi-mcp.mjs`를 앱의 Node로 실행하고 토큰은 `SINAWI_MCP_TOKEN_FILE`로 읽습니다. 클라이언트를 다시 시작하세요.
+2. 직접 넣으려면 같은 화면의 **구성 복사**를 누릅니다. 토큰이 들어간 `npx -y sinawi mcp` 구성이 나옵니다(npm 패키지 `sinawi`가 올라간 뒤부터 동작). npx 없이 쓰는 구성도 함께 나옵니다. Claude Desktop → 설정 → 개발자 → 구성 편집으로 `claude_desktop_config.json`을 열고 `mcpServers`에 넣습니다:
 
 ```json
 {
   "mcpServers": {
     "sinawi": {
-      "command": "/path/to/node",
-      "args": ["/Users/<you>/Library/Application Support/dev.sinawi.app/.data/hooks/sinawi-mcp.mjs"],
+      "command": "npx",
+      "args": ["-y", "sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
     }
   }
 }
 ```
 
-3. Claude Desktop을 다시 시작합니다. 시나위 앱이 켜져 있어야 합니다.
+3. npm 없이: `node "/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"`(앱에 든 브리지). 클라이언트를 다시 시작합니다. 시나위 앱이 켜져 있어야 합니다.
 
-저장소에서는 `npm run sinawi-mcp` 또는 `node scripts/sinawi-mcp.mjs`(package.json bin `sinawi-mcp`)로 같은 서버를 띄웁니다. 토큰은 `SINAWI_MCP_TOKEN` → `SINAWI_MCP_TOKEN_FILE` → `$SINAWI_DATA_DIR/app-mcp-token` → `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token` 순서로 찾습니다(호출마다 다시 읽음). 설정 화면의 **토큰 다시 만들기**를 누르면 이전 토큰은 바로 거부됩니다.
+저장소에서는 `npm run sinawi-mcp` 또는 `node scripts/sinawi-mcp.mjs`로 같은 서버를 띄웁니다(구현은 `packages/sinawi/lib/mcp.mjs` 하나). 토큰은 `SINAWI_MCP_TOKEN` → `SINAWI_MCP_TOKEN_FILE` → `$SINAWI_DATA_DIR/app-mcp-token` → `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token` 순서로 찾습니다(호출마다 다시 읽음). 설정 화면의 **토큰 다시 만들기**를 누르면 이전 토큰은 바로 거부됩니다.

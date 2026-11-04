@@ -781,9 +781,11 @@ export function listedTool(tool: AppTool) {
  */
 export const ROUTE_EXCLUSIONS: Record<string, string> = {
   "POST /api/lead-mcp": "MCP 엔드포인트 자체(담당 실행의 sinawi_lead).",
-  "POST /api/app-mcp": "MCP 엔드포인트 자체(외부 AI용 sinawi-mcp).",
+  "POST /api/app-mcp": "MCP 엔드포인트 자체(외부 AI용 브리지 `sinawi mcp`).",
   "GET /api/app-mcp/connection": "외부 연결 토큰을 보여 주는 설정 화면용. AI에게 토큰을 주지 않는다.",
   "POST /api/app-mcp/token": "외부 연결 토큰 재발급(설정 화면 버튼). AI가 자기 연결을 바꾸면 안 된다.",
+  "GET /api/app-mcp/clients/:client": "Claude Desktop·Cursor 연결 미리보기(설정 화면 버튼). 다른 앱의 구성 파일을 다루는 일이라 도구가 아니다.",
+  "POST /api/app-mcp/clients/:client": "Claude Desktop·Cursor 구성 파일에 sinawi 항목을 쓴다(설정 화면에서 사용자가 확인한 뒤에만, 앱 Origin 필요). AI가 다른 AI 클라이언트의 도구 구성을 바꾸면 안 된다.",
   "POST /api/app-approvals/:id/approve": "사용자만 하는 결정. AI가 자기 승인 요청을 승인하면 승인의 의미가 없다.",
   "POST /api/app-approvals/:id/reject": "사용자만 하는 결정(승인 카드의 거절 버튼).",
   "POST /api/permissions/request": "Claude 실행 내부의 권한 질문 MCP가 실행 토큰으로 부르는 경로.",

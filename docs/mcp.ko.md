@@ -34,12 +34,13 @@ Grok Build에는 실행마다 MCP를 붙이는 옵션이 없어, Grok 담당은 
 
 ## 앱 전체 MCP (외부 AI)
 
-시나위는 기능을 MCP 서버로도 내놓아 Claude Desktop 같은 외부 AI가 채팅·담당·일정·워크스페이스·그룹·봇·알림·스킬·설정 등을 다룰 수 있습니다.
+시나위는 기능을 MCP 서버로도 내놓아 Claude Desktop, Cursor 같은 외부 AI가 채팅·담당·일정·워크스페이스·그룹·봇·알림·스킬·설정 등을 다룰 수 있습니다.
 
-### Claude Desktop 연결
+### Claude Desktop·Cursor 연결
 
-1. 시나위 **설정 → 일반 → 외부 AI 연결 (MCP)** 에서 **구성 복사**를 누릅니다. 앱이 `<데이터 폴더>/hooks/sinawi-mcp.mjs`를 써 두고 토큰이 들어간 구성을 보여 줍니다.
-2. Claude Desktop **설정 → 개발자 → 구성 편집**으로 `claude_desktop_config.json`을 열어 `mcpServers`에 넣습니다:
+시나위가 켜져 있어야 합니다. 쉬운 순서로 세 가지 방법이 있습니다.
+
+1. **버튼 하나.** 시나위 **설정 → 일반 → 외부 AI 연결 (MCP)**에서 **Claude Desktop에 연결** 또는 **Cursor에 연결**을 누릅니다. 대화상자가 넣을 JSON을 그대로 보여 주고, **구성에 쓰기**를 누르면 `~/Library/Application Support/Claude/claude_desktop_config.json` 또는 `~/.cursor/mcp.json`에 합칩니다(없으면 만들고, 다른 키와 서버는 그대로 두고, 원래 파일은 `<파일>.bak`으로 복사하고, 올바른 JSON이 아닌 파일은 건드리지 않음). 그다음 클라이언트를 다시 시작하세요. 이 항목은 앱이 쓰는 Node로 앱의 브리지 사본을 실행하고 토큰은 파일에서 읽습니다. 토큰이 복사되지 않고, 다시 만든 토큰도 그대로 동작합니다:
 
 ```json
 {
@@ -47,15 +48,38 @@ Grok Build에는 실행마다 MCP를 붙이는 옵션이 없어, Grok 담당은 
     "sinawi": {
       "command": "/path/to/node",
       "args": ["/Users/<you>/Library/Application Support/dev.sinawi.app/.data/hooks/sinawi-mcp.mjs"],
+      "env": {
+        "SINAWI_URL": "http://127.0.0.1:3001",
+        "SINAWI_MCP_TOKEN_FILE": "/Users/<you>/Library/Application Support/dev.sinawi.app/.data/app-mcp-token"
+      }
+    }
+  }
+}
+```
+
+   이 버튼은 MCP 도구가 아니고, 쓰기는 앱 자신의 창에서 사용자가 확인한 JSON으로만 받습니다. AI가 다른 AI 클라이언트의 구성을 바꿀 수 없습니다.
+
+2. **npx.** npm 패키지 [`sinawi`](../packages/sinawi)가 올라간 뒤부터 씁니다. 같은 화면의 **구성 복사**가 토큰이 채워진 다음 구성을 줍니다. Claude Desktop은 **설정 → 개발자 → 구성 편집**에 넣습니다:
+
+```json
+{
+  "mcpServers": {
+    "sinawi": {
+      "command": "npx",
+      "args": ["-y", "sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
     }
   }
 }
 ```
 
-3. Claude Desktop을 다시 시작합니다. 시나위가 켜져 있어야 합니다.
+3. **앱 안의 브리지.** npm 없이 `"command": "node"`(또는 `which node`의 전체 경로), `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, `env`는 같습니다. 설정 화면의 "npx 없이 쓰는 구성"은 `<데이터 폴더>/hooks/sinawi-mcp.mjs` 사본을 가리키며, 앱을 옮기거나 업데이트해도 그대로입니다.
 
-저장소에서는 `npm run sinawi-mcp`(또는 `node scripts/sinawi-mcp.mjs`)로 같은 stdio 서버를 띄웁니다.
+모두 같은 파일 `packages/sinawi/lib/mcp.mjs`를 실행합니다. 저장소에서는 `npm run sinawi-mcp`도 같습니다. 환경변수는 [패키지 README](../packages/sinawi/README.md)에 있습니다.
+
+### npm 패키지 `sinawi`
+
+`npx sinawi`는 앱을 설치하거나 업데이트합니다(최신 GitHub 릴리즈를 `codesign --verify --deep --strict`와 `spctl -a -t exec`로 확인하고, `/Applications/Sinawi.app`을 바꾸기 전에 묻습니다). `npx sinawi mcp`가 브리지입니다. 배포는 손으로 합니다. `packages/sinawi/package.json` 버전을 올린 뒤 **Actions → Publish sinawi (npm) → Run workflow**를 실행합니다(`.github/workflows/publish-sinawi.yml`, `NPM_TOKEN` 시크릿으로 `npm publish --provenance --access public`). `npm run pkg:pack`은 묶일 파일을 보여 주고, `npm run pkg:publish`는 로그인된 컴퓨터에서 provenance 없이 배포합니다.
 
 ### 토큰
 

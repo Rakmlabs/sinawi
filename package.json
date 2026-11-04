@@ -1,7 +1,7 @@
 {
   "name": "sinawi",
   "private": true,
-  "version": "1.3.2",
+  "version": "1.4.0",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -9,7 +9,7 @@
   },
   "type": "module",
   "bin": {
-    "sinawi-mcp": "scripts/sinawi-mcp.mjs"
+    "sinawi": "packages/sinawi/bin/sinawi.mjs"
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -24,7 +24,9 @@
     "preapp:dev": "npm run build",
     "release": "node scripts/release.mjs",
     "sinawi-mcp": "node scripts/sinawi-mcp.mjs",
-    "docs:ai": "node --import tsx scripts/gen-ai-docs.mjs"
+    "docs:ai": "node --import tsx scripts/gen-ai-docs.mjs",
+    "pkg:pack": "npm pack --dry-run ./packages/sinawi",
+    "pkg:publish": "npm publish ./packages/sinawi --access public"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",

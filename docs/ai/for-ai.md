@@ -33,29 +33,32 @@ Both surfaces read the same registry (`APP_TOOLS` in `server/app-tools.ts`). App
 | Surface | Server name | Endpoint | Auth | Who |
 |---|---|---|---|---|
 | Lead | `sinawi_lead` | `POST /api/lead-mcp` | That run's token in `x-sinawi-token`; only the lead's own run | A Claude or Codex lead's CLI run (not in *Plan* mode, never Grok). Lead-only tools + app tools. |
-| External | `sinawi` | `POST /api/app-mcp` | `Authorization: Bearer <token>` (or `x-sinawi-mcp-token`) | Claude Desktop or any MCP client through the stdio bridge `scripts/sinawi-mcp.mjs`. App tools only. |
+| External | `sinawi` | `POST /api/app-mcp` | `Authorization: Bearer <token>` (or `x-sinawi-mcp-token`) | Claude Desktop, Cursor or any MCP client through the stdio bridge (`sinawi mcp`, `packages/sinawi`). App tools only. |
 
 ### Connect an MCP client
 
-1. Sinawi must be running.
-2. In the app: **Settings → General → External AI connection (MCP) → Copy config**. The app writes the bridge to `<data>/hooks/sinawi-mcp.mjs` (it survives app updates) and shows a config with the token filled in.
-3. Add it to the client. Claude Desktop (`claude_desktop_config.json`, **Settings → Developer → Edit Config**):
+Sinawi must be running. In order of preference:
+
+1. **In-app button** (Claude Desktop, Cursor): **Settings → General → External AI connection (MCP) → Connect to Claude Desktop / Connect to Cursor**. After the user confirms the exact JSON, the app merges `mcpServers.sinawi` into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json`, keeping other entries and a `.bak` copy. The entry is `"command": "<node>", "args": ["<data>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<data>/app-mcp-token"}` (no token copied). Routes: `GET`/`POST /api/app-mcp/clients/:client` (`claude`, `cursor`); not MCP tools, and `POST` needs the app's own Origin and the confirmed JSON. Tests move the paths with `SINAWI_CLAUDE_DESKTOP_CONFIG` and `SINAWI_CURSOR_MCP_CONFIG`.
+2. **npx**, once the npm package `sinawi` is published: **Copy config** on the same screen gives
 
 ```json
 {
   "mcpServers": {
     "sinawi": {
-      "command": "/path/to/node",
-      "args": ["/Users/<you>/Library/Application Support/dev.sinawi.app/.data/hooks/sinawi-mcp.mjs"],
+      "command": "npx",
+      "args": ["-y", "sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
     }
   }
 }
 ```
 
-From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`, package bin `sinawi-mcp`) starts the same stdio bridge. It has no dependencies.
+3. **The bridge bundled in the app**: `"command": "node"`, `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, same `env`. The settings screen's "without npx" config points at the copy in `<data>/hooks/sinawi-mcp.mjs` instead (it survives app updates and moves).
 
-### Bridge environment variables (`scripts/sinawi-mcp.mjs`)
+From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`) starts the same stdio bridge. Every form runs one implementation, `packages/sinawi/lib/mcp.mjs`, which has no dependencies (Node 18+). The same npm package installs the app: `npx sinawi` (macOS; downloads the latest release, verifies it with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`).
+
+### Bridge environment variables (`sinawi mcp`)
 
 | Variable | Meaning |
 |---|---|
@@ -69,7 +72,7 @@ From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`, package 
 
 - Stored in `<data>/app-mcp-token` with mode 0600, created on first use (`server/app-mcp.ts`). Default path: `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`.
 - Lookup order in the bridge: `SINAWI_MCP_TOKEN` → `SINAWI_MCP_TOKEN_FILE` → `$SINAWI_DATA_DIR/app-mcp-token` → the default path. It is reread on every call, so a renewed token works without restarting the client.
-- **Regenerate token** on the same settings screen (`POST /api/app-mcp/token`) rejects the old token at once. No MCP tool can read or rotate the token.
+- **Make a new token** on the same settings screen (`POST /api/app-mcp/token`) rejects the old token at once. No MCP tool can read or rotate the token.
 - A wrong or missing token gets HTTP 401 from `/api/app-mcp`.
 
 ## Tools

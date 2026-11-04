@@ -107,6 +107,12 @@ test("the external MCP endpoint refuses a missing or wrong token and answers wit
   const connection = await call("GET", "/api/app-mcp/connection");
   assert.equal(connection.body.token, token);
   assert.equal(connection.body.config.mcpServers.sinawi.env.SINAWI_MCP_TOKEN, token);
+  assert.equal(connection.body.config.mcpServers.sinawi.command, "npx", "the config runs the npm package");
+  assert.deepEqual(connection.body.config.mcpServers.sinawi.args, ["-y", "sinawi", "mcp"]);
+  const alternative = connection.body.scriptConfig.mcpServers.sinawi;
+  assert.equal(alternative.command, process.execPath, "the alternative runs the app's copy with Node, without npx");
+  assert.equal(alternative.args[0], connection.body.script);
+  assert.equal(alternative.env.SINAWI_MCP_TOKEN, token);
   const rotated = await call("POST", "/api/app-mcp/token");
   assert.notEqual(rotated.body.token, token);
   assert.equal((await call("POST", "/api/app-mcp", rpc(2, "tools/list"), { authorization: `Bearer ${token}` })).status, 401, "old token");

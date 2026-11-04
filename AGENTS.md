@@ -14,7 +14,9 @@ Sinawi: a macOS app that runs the Claude Code, Codex and Grok Build CLIs as one 
 | `server/app-tools.ts` | The MCP tool registry (`APP_TOOLS`, `ROUTE_EXCLUSIONS`) for the lead (`sinawi_lead`) and external (`sinawi`) surfaces. |
 | `src/` | React UI. UI text lives in `src/i18n.ts`, Korean and English — add both. |
 | `src-tauri/` | Tauri v2 shell (Rust): window, updater, in-app browser bridge, computer-use bridge. |
-| `scripts/` | `dev.mjs`, `build-server.mjs` (bundles the server into `src-tauri/resources/server.cjs`), `sinawi-mcp.mjs` (stdio MCP bridge), `gen-ai-docs.mjs`, signing and release scripts. |
+| `scripts/` | `dev.mjs`, `build-server.mjs` (bundles the server into `src-tauri/resources/server.cjs`), `sinawi-mcp.mjs` (runs the MCP bridge for `npm run sinawi-mcp`), `gen-ai-docs.mjs`, signing and release scripts. |
+| `packages/sinawi/` | The npm package `sinawi` (zero dependencies): `npx sinawi` installs the app from the latest release (`lib/install.mjs`), `npx sinawi mcp` is the stdio MCP bridge. `lib/mcp.mjs` is the one bridge implementation: `scripts/sinawi-mcp.mjs` imports it, `build-server.mjs` bundles it into the app (`Contents/Resources/sinawi-mcp.mjs`) and into `server.cjs`, which writes `<data>/hooks/sinawi-mcp.mjs`. Keep it self-contained (node: imports only). Published by hand with the `Publish sinawi (npm)` workflow; tests in `server/sinawi-package.test.ts`. |
+| `server/mcp-clients.ts` | Settings → "Connect to Claude Desktop / Cursor": merges `mcpServers.sinawi` into the client's config (`.bak` first). Tests point it at temp files with `SINAWI_CLAUDE_DESKTOP_CONFIG` / `SINAWI_CURSOR_MCP_CONFIG`; never touch the real configs. |
 | `docs/` | `mcp.md`, `mcp-coverage.md`, `RELEASING.md`, `orchestration/` (rules the app enforces on leads and workers), `ai/` (docs for AI agents). |
 | `*.test.ts` | Tests sit next to the code: `server/*.test.ts`, `src/*.test.ts`, `src/updates/*.test.ts`. |
 
@@ -44,9 +46,9 @@ SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev
 
 | Variable | Read by | Default | Notes |
 |---|---|---|---|
-| `SINAWI_PORT` | server (`server/index.ts`, `origin-policy.ts`), Vite proxy, `sinawi-mcp.mjs` | `3001` | API and WebSocket port. |
+| `SINAWI_PORT` | server (`server/index.ts`, `origin-policy.ts`), Vite proxy, the MCP bridge | `3001` | API and WebSocket port. |
 | `SINAWI_UI_PORT` | `vite.config.ts` | `5188` | Vite port (`strictPort`). **Use 5188 or 5198 only**: the server accepts browser origins only from `tauri://localhost`, the API port, 5188 and 5198 (`server/origin-policy.ts`); any other UI port gets 403. |
-| `SINAWI_DATA_DIR` | server (`server/runtime.ts`), `sinawi-mcp.mjs` | `./.data` (gitignored) | Sessions, leads, tokens, approvals. |
+| `SINAWI_DATA_DIR` | server (`server/runtime.ts`), the MCP bridge | `./.data` (gitignored) | Sessions, leads, tokens, approvals. |
 
 Even an isolated dev server is not fully sandboxed: on start, `server/index.ts` installs the `ao-browser`/`ao-computer`/`ao-serve`/`ao-sim` CLIs into `~/.local/bin` and the `orchestra-browser`/`orchestra-computer` skills into `~/.claude/skills`, `~/.codex/skills` and `~/.grok/skills` (for installed CLIs), and sessions run the real CLIs with their own logins. When you must not touch the home folder, stick to `npm test`, `npm run typecheck` and `npm run build`.
 

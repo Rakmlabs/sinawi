@@ -1,11 +1,12 @@
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
-import { chmod, cp, mkdir, readFile, rm } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 // All runtime dependencies are included; the installed app only needs Node.
 const resources = new URL("../src-tauri/resources/", import.meta.url);
 await mkdir(resources, { recursive: true });
+const bridge = await readFile(new URL("../packages/sinawi/lib/mcp.mjs", import.meta.url), "utf8");
 await build({
   entryPoints: [fileURLToPath(new URL("../server/index.ts", import.meta.url))],
   outfile: fileURLToPath(new URL("server.cjs", resources)),
@@ -15,9 +16,11 @@ await build({
   target: "node22",
   // ws uses these optional native addons only as performance accelerators.
   external: ["bufferutil", "utf-8-validate", "node-pty"],
-  // The outside-AI MCP entry (scripts/sinawi-mcp.mjs) rides inside server.cjs; the server writes it to <data>/hooks.
-  define: { __SINAWI_MCP_SCRIPT__: JSON.stringify(await readFile(new URL("sinawi-mcp.mjs", import.meta.url), "utf8")) },
+  // The outside-AI MCP bridge (packages/sinawi, `npx sinawi mcp` on npm) rides inside server.cjs; the server writes it to <data>/hooks.
+  define: { __SINAWI_MCP_SCRIPT__: JSON.stringify(bridge) },
 });
+// The same bridge as a plain file in the app bundle: Sinawi.app/Contents/Resources/sinawi-mcp.mjs (tauri.conf.json).
+await writeFile(new URL("sinawi-mcp.mjs", resources), bridge, { mode: 0o755 });
 await rm(new URL("dist/", resources), { recursive: true, force: true });
 await cp(new URL("../dist/", import.meta.url), new URL("dist/", resources), { recursive: true });
 const nodePtySource = new URL("../node_modules/node-pty/", import.meta.url);

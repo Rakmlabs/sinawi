@@ -12,11 +12,11 @@ Chat with a lead that writes the briefs and skills, hands the work out in parall
 
 **English** · [한국어](README.ko.md)
 
-[Download](https://github.com/Rakmlabs/sinawi/releases/latest) · [How it works](#how-it-works) · [MCP](docs/mcp.md) · [For AI agents](#for-ai-agents) · [Work with us](#built-by-rakm)
+[Download](https://github.com/Rakmlabs/sinawi/releases/latest) · [How it works](#how-it-works) · [MCP](docs/mcp.md) · [Prompts for your AI](#copy-paste-prompts-for-your-ai) · [For AI agents](#for-ai-agents) · [Work with us](#built-by-rakm)
 
 <br />
 
-<img src="docs/assets/parallel-delegation.png" width="860" alt="A lead hands two tasks to two Claude workers at once and reports both commits" />
+<img src="docs/assets/en/parallel-delegation.png" width="860" alt="A lead hands two tasks to two Claude workers at once and reports both commits" />
 
 <sub>The lead sent two tasks to two Claude workers at the same time, checked both worktrees and reported the commits.</sub>
 
@@ -73,15 +73,15 @@ Say *"summarize yesterday's commits every morning at 9"* and the lead creates a 
 <td valign="top">
 
 ### 🔌 Other AIs can drive it
-`npm run sinawi-mcp` exposes the whole app to MCP clients such as Claude Desktop, with a token from **Settings → General → External AI connection**.
+Claude Desktop, Cursor and other MCP clients can drive the whole app. **Settings → General → External AI connection (MCP)** connects Claude Desktop or Cursor in one click.
 
 </td>
 </tr>
 </table>
 
 <div align="center">
-<img src="docs/assets/schedules.png" width="49%" alt="A schedule the lead created on its own, shown in the lead's settings and as a chat card" />
-<img src="docs/assets/approval-cards.png" width="49%" alt="Approval cards for a lead deletion requested by the AI" />
+<img src="docs/assets/en/schedules.png" width="49%" alt="A schedule the lead created on its own, shown in the lead's settings and as a chat card" />
+<img src="docs/assets/en/approval-cards.png" width="49%" alt="An approval card for a lead deletion requested by the AI" />
 <br />
 <sub>Left: a schedule the lead created by itself. Right: deleting a lead waits for approval.</sub>
 </div>
@@ -100,7 +100,7 @@ flowchart LR
     L -. "schedule_create / write_skill / …" .-> S
     S -. "risky tools" .-> A{{Approval card}}
     A -- you approve --> S
-    X([Claude Desktop / other MCP client]) -- "npm run sinawi-mcp" --> S
+    X([Claude Desktop / Cursor / other MCP client]) -- "sinawi mcp (stdio bridge)" --> S
 ```
 
 1. You talk to the lead in a normal chat.
@@ -115,6 +115,14 @@ flowchart LR
 
 Download `Sinawi_<version>_universal.dmg` from the **[latest release](https://github.com/Rakmlabs/sinawi/releases/latest)**, open it and drag **Sinawi** to **Applications**.
 
+Or, once the [`sinawi`](packages/sinawi) npm package is published, from a terminal:
+
+```sh
+npx sinawi
+```
+
+It downloads the latest release, checks it with `codesign` and `spctl`, asks before replacing an existing app and opens it (`--yes`, `--no-open`, `--help`).
+
 - Signed with a Developer ID and notarized by Apple, so it opens without a Gatekeeper warning.
 - Native on Apple Silicon and Intel.
 - Updates itself from GitHub Releases (you choose when to restart).
@@ -125,15 +133,81 @@ Download `Sinawi_<version>_universal.dmg` from the **[latest release](https://gi
 - [Node.js](https://nodejs.org) **24.22.1 or newer recommended** (on 22.x, 22.23.4 or newer: the 2026-10-20 security release), on your login shell's `PATH`. Use an arm64 Node on Apple Silicon
 - At least one of these CLIs, installed and logged in: [Codex CLI](https://github.com/openai/codex) · [Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup) · [Grok Build](https://docs.x.ai/build/overview)
 
-Sinawi finds the CLIs on your login shell's `PATH` and in common install locations. The help panel in the app shows which ones it found and how to log in. Sinawi never asks for or stores API keys; it uses each CLI's own login.
+Sinawi finds the CLIs on your login shell's `PATH` and in common install locations. **Settings → Help & setup assistant** in the app shows which ones it found and how to log in. Sinawi never asks for or stores API keys; it uses each CLI's own login.
 
 ## Connect another AI (MCP)
 
-```sh
-npm run sinawi-mcp
+Claude Desktop, Cursor and other MCP clients can use the whole app through a small stdio bridge. Three ways to connect, easiest first:
+
+1. **One click.** In Sinawi, open **Settings → General → External AI connection (MCP)** and press **Connect to Claude Desktop** or **Connect to Cursor**. Sinawi shows the exact JSON it will merge, writes it into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json` (other entries stay, the original is kept as `.bak`), and you restart the client. The entry reads the token from Sinawi's token file, so no secret is copied.
+2. **npx**, once the [`sinawi`](packages/sinawi) package is published to npm. **Copy config** on the same screen gives this, with your token filled in:
+
+   ```json
+   {
+     "mcpServers": {
+       "sinawi": {
+         "command": "npx",
+         "args": ["-y", "sinawi", "mcp"],
+         "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
+       }
+     }
+   }
+   ```
+
+3. **The bridge inside the app**, no npm needed: `"command": "node", "args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]` with the same `env` (use the full path from `which node` if the client cannot find `node`). From a checkout, `npm run sinawi-mcp` runs the same file.
+
+Reads and creates run at once; risky tools wait for an approval card. Full guide: [docs/mcp.md](docs/mcp.md) · tool coverage: [docs/mcp-coverage.md](docs/mcp-coverage.md).
+
+## Copy-paste prompts for your AI
+
+Paste one of these into Claude Code, Codex or any assistant that can run commands on your Mac.
+
+**Install and set up Sinawi**
+
+```text
+Help me install and set up Sinawi (https://github.com/Rakmlabs/sinawi), a macOS app that runs the Claude Code, Codex and Grok Build CLIs as one team.
+
+1. Install the app. If the npm package `sinawi` is published, run `npx sinawi`: it downloads the latest release, checks the signature with codesign and spctl, asks before replacing an existing /Applications/Sinawi.app, and opens it. Otherwise download the latest Sinawi_<version>_universal.dmg from https://github.com/Rakmlabs/sinawi/releases/latest, open it and drag Sinawi to Applications. It is signed and notarized.
+2. Check Node.js on my login shell's PATH (`node -v`): 24.22.1 or newer is recommended; on 22.x it must be 22.23.4 or newer. On Apple Silicon it must be an arm64 Node. If it is missing or too old, install it (for example `brew install node`).
+3. Check Git (`git --version`; if missing: `xcode-select --install`).
+4. Make sure at least one agent CLI is installed and logged in, and ask me which ones I want:
+   - Claude Code: `curl -fsSL https://claude.ai/install.sh | bash`, then `claude auth login`
+   - Codex CLI: `npm install -g @openai/codex`, then `codex login`
+   - Grok Build: `curl -fsSL https://x.ai/cli/install.sh | bash`, then `grok login`
+   Logins open a browser; let me finish them myself. Sinawi never needs API keys.
+5. Open Sinawi from Finder or the Dock (not from a terminal), then tell me to open Settings → Help & setup assistant and confirm Node, Git and my CLIs show as installed and logged in.
+6. If something is not found, show me the exact `which` / `--version` output and fix my PATH. Do not touch ~/Library/Application Support/dev.sinawi.app.
 ```
 
-Copy the connection config from **Settings → General → External AI connection (MCP)** into your MCP client. Reads and creates run at once; risky tools wait for an approval card. Full guide: [docs/mcp.md](docs/mcp.md) · tool coverage: [docs/mcp-coverage.md](docs/mcp-coverage.md).
+**Connect my AI to Sinawi over MCP**
+
+```text
+Connect this AI client to Sinawi (https://github.com/Rakmlabs/sinawi) over MCP.
+
+- Sinawi must be running on this Mac; its API is http://127.0.0.1:3001.
+- Easiest for Claude Desktop or Cursor: ask me to open Sinawi → Settings → General → External AI connection (MCP) and press "Connect to Claude Desktop" or "Connect to Cursor". Sinawi shows the JSON, writes it into the client's config (keeping a .bak) and I restart the client. Then skip to "Verify".
+- Otherwise add an mcpServers entry named "sinawi" to this client's MCP config yourself:
+  - with npm (once the package `sinawi` is published): command "npx", args ["-y", "sinawi", "mcp"]
+  - without npm: command "node", args ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]
+  - env: SINAWI_URL "http://127.0.0.1:3001", and SINAWI_MCP_TOKEN from Sinawi → Settings → General → External AI connection (MCP) → "Copy config". Let me paste the token; never print it back or commit it.
+  - Claude Code: `claude mcp add sinawi --env SINAWI_MCP_TOKEN=<token> -- npx -y sinawi mcp`
+  Then restart the client.
+- Verify: list the `sinawi` tools and call `app_status`.
+- Risky tools (delete, settings, merge, terminal commands) return `pending_approval`; I approve or reject them on the approval card in Sinawi. Never try to approve them yourself.
+- Reference: https://github.com/Rakmlabs/sinawi/blob/main/docs/ai/for-ai.md
+```
+
+**Understand or contribute to the codebase**
+
+```text
+I want to understand (and maybe contribute to) the Sinawi codebase: https://github.com/Rakmlabs/sinawi
+
+1. Clone it and read, in this order: llms.txt, AGENTS.md, docs/ai/for-ai.md, CONTRIBUTING.md.
+2. Summarize the layout for me: server/ (Express + WebSocket server, CLI runners, orchestration, MCP tool registry in server/app-tools.ts), src/ (React UI, text in src/i18n.ts in Korean and English), src-tauri/ (Tauri v2 shell), packages/sinawi/ (the `sinawi` npm package: app installer and MCP bridge).
+3. Use Node ^22.23.4, ^24.22.1 or >=26.12.1. Run `npm install`, then `npm run typecheck`, `npm test` and `npm run build`; all three must pass before any change is done.
+4. Follow AGENTS.md: never use port 3001 or the real app data; for a dev server use `SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev`. If you change server/app-tools.ts, run `npm run docs:ai`. Add UI text in both languages.
+5. Do not commit, push or open a pull request until I say so. Branch from main (fix/… or feat/…) and link an issue, as CONTRIBUTING.md describes.
+```
 
 <details>
 <summary><b>Everything else Sinawi does</b></summary>
@@ -217,6 +291,7 @@ macOS only today.
 - [ ] MCP tools for Grok leads
 - [ ] Verify Codex leads end to end with the MCP tools
 - [ ] Exact-minute schedule firing (today they can run up to a minute late)
+- [ ] Remote MCP access for cloud AIs (tunnel)
 
 ## For AI agents
 

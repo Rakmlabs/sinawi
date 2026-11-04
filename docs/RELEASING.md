@@ -201,3 +201,15 @@ gh secret set APPLE_API_KEY_P8 < ~/.appstoreconnect/private_keys/AuthKey_<Key ID
 - [ ] 이전 버전이 설치된 Mac 에서 설정 → "업데이트 확인" → 배너 → 재시작 → 새 버전 확인.
       문제가 있으면 릴리스를 draft 로 돌린다. 그러면 `latest` 가 이전 릴리스로 되돌아간다
 - [ ] 세션 실행 중 재시작 → 세션 유지, 끝난 뒤 `agent.log` 에 `updated server ... -> ...`
+- [ ] 앱 번들에 `Contents/Resources/sinawi-mcp.mjs` 가 있는지(`ls /Applications/Sinawi.app/Contents/Resources/`)
+
+## npm 패키지 `sinawi`
+
+`packages/sinawi`(`npx sinawi` 설치기 + `npx sinawi mcp` 브리지)는 앱 버전과 따로 손으로 배포한다.
+
+1. `packages/sinawi/package.json` 의 `version` 을 올린다(이미 올라간 버전은 npm 이 거부한다).
+2. **Actions → Publish sinawi (npm) → Run workflow**. 먼저 `dry_run` 으로 돌려 테스트와 `npm pack` 내용을 확인한다.
+3. 비밀값 `NPM_TOKEN`: npm 계정 `rakmlabs` 의 automation 토큰. 워크플로는 `npm publish --provenance --access public` 으로 올린다.
+
+로컬에서는 `npm run pkg:pack`(묶일 파일 확인), `npm run pkg:publish`(로그인된 컴퓨터에서, provenance 없이).
+`npx sinawi` 는 GitHub 의 최신 릴리스에서 `*_universal.dmg` 를 받으므로, 앱 릴리스 자산 이름이 바뀌면 `lib/install.mjs` 의 `pickAsset` 도 확인한다.

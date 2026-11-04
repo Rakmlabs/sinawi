@@ -5,7 +5,7 @@ import { ComputerBridge, registerComputerRoutes, SHOT_DIR, watchComputerQueue, t
 import { findTool, handleToolMcp, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
 import { withJosa } from "./korean.js";
 import { ApprovalStore, approvalRequester, type AppApproval, type ApprovalStatus } from "./app-approvals.js";
-import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, ensureAppMcpToken, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
+import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, connectEntry, ensureAppMcpToken, scriptClientConfig, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
 import { LEAD_MCP_SERVER } from "./lead-tools.js";
 import { loadSchedules, saveSchedules, type ScheduleInput } from "./schedules.js";
 import { isComputerUseAllowed } from "./workspace-policy.js";
@@ -31,6 +31,7 @@ import { authNotification, sessionNotifications } from "./notification-sources.j
 import type { NotificationInput, NotificationType } from "./notification-types.js";
 import { createTerminalService } from "./terminal.js";
 import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
+import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from "./mcp-clients.js";
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
 import { mediaRouteRequired, mediaUnavailableMessage } from "./media-routing.js";
@@ -1244,7 +1245,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       res.json(answer);
     } catch (error) { errorResponse(res, error, 500); }
   });
-  // Outside AIs (scripts/sinawi-mcp.mjs): the token in <data>/app-mcp-token.
+  // Outside AIs (the bridge in packages/sinawi/lib/mcp.mjs): the token in <data>/app-mcp-token.
   app.post("/api/app-mcp", async (req, res) => {
     try {
       if (!tokenMatches(await ensureAppMcpToken(mcpDataDir), presentedToken(req.headers))) {
@@ -1260,7 +1261,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   const connectionPayload = async (token: string) => {
     const script = await installAppMcpScript(mcpDataDir).catch(() => undefined);
-    return { token, tokenFile: appMcpTokenPath(mcpDataDir), script: script ?? null, server: APP_MCP_SERVER, config: script ? clientConfig(script, token) : null };
+    // `config` runs the npm package through npx; `scriptConfig` is the offline alternative (the copy in <data>/hooks).
+    return { token, tokenFile: appMcpTokenPath(mcpDataDir), script: script ?? null, server: APP_MCP_SERVER, config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token) : null };
   };
   // For the settings page: how to connect Claude Desktop (shows the token, so not a tool).
   app.get("/api/app-mcp/connection", async (_req, res) => {
@@ -1271,7 +1273,42 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try { res.json(await connectionPayload(await rotateAppMcpToken(mcpDataDir))); }
     catch (error) { errorResponse(res, error, 500); }
   });
-  // The app writes the token and script at start so `sinawi-mcp` finds them; tests and embedders make them on demand.
+  // "Connect to Claude Desktop / Cursor" (server/mcp-clients.ts). GET shows what would be merged; POST
+  // writes it, only for a browser request from the app itself (an Origin header from the app's own
+  // window) and only with the exact JSON the user confirmed. Neither route is an MCP tool.
+  const clientEntry = async () => {
+    await ensureAppMcpToken(mcpDataDir);
+    const script = await installAppMcpScript(mcpDataDir);
+    if (!script) throw new Error("Sinawi: 연결 스크립트를 찾지 못했습니다. / The bridge script was not found.");
+    return connectEntry(script, appMcpTokenPath(mcpDataDir));
+  };
+  const clientError = (res: Response, error: unknown) => {
+    if (error instanceof McpClientConfigError) { res.status(409).json({ error: error.message, code: error.code, path: error.path }); return; }
+    errorResponse(res, error, 500);
+  };
+  app.get("/api/app-mcp/clients/:client", async (req, res) => {
+    const client = routeParam(req.params.client);
+    if (!isMcpClient(client)) { res.status(404).json({ error: `Unknown client ${client}` }); return; }
+    try { res.json(await planMcpClient(client, await clientEntry())); }
+    catch (error) { clientError(res, error); }
+  });
+  app.post("/api/app-mcp/clients/:client", async (req, res) => {
+    const client = routeParam(req.params.client);
+    if (!isMcpClient(client)) { res.status(404).json({ error: `Unknown client ${client}` }); return; }
+    if (!req.headers.origin || !isAllowedOrigin(req.headers.origin)) {
+      res.status(403).json({ error: "Sinawi: 앱의 설정 화면에서만 연결할 수 있습니다. / Only Sinawi's settings page can connect a client." });
+      return;
+    }
+    try {
+      const plan = await planMcpClient(client, await clientEntry());
+      if (typeof req.body?.merge !== "string" || req.body.merge !== plan.merge) {
+        res.status(409).json({ error: "Sinawi: 확인한 내용과 지금 쓸 내용이 다릅니다. 다시 시도하세요. / The confirmed JSON is out of date; try again.", code: "stale" });
+        return;
+      }
+      res.json({ ...(await applyMcpClient(client, plan.entry)), name: plan.name });
+    } catch (error) { clientError(res, error); }
+  });
+  // The app writes the token and script at start so `sinawi mcp` finds them; tests and embedders make them on demand.
   if (options.appMcp) void ensureAppMcpToken(mcpDataDir).then(() => installAppMcpScript(mcpDataDir)).catch(() => undefined);
   // Pending approvals (app-approvals.ts): the cards in the app read and answer these.
   const approvalStatuses = new Set<ApprovalStatus>(["pending", "approved", "rejected", "failed"]);

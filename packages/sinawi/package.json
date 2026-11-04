@@ -1,0 +1,46 @@
+{
+  "name": "sinawi",
+  "version": "1.4.0",
+  "description": "Install the Sinawi macOS app (npx sinawi) and connect MCP clients such as Claude Desktop and Cursor to it (npx sinawi mcp).",
+  "type": "module",
+  "bin": {
+    "sinawi": "bin/sinawi.mjs"
+  },
+  "files": [
+    "bin/sinawi.mjs",
+    "lib/install.mjs",
+    "lib/mcp.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "author": "Won Rak Choi (rakm)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rakmlabs/sinawi.git",
+    "directory": "packages/sinawi"
+  },
+  "homepage": "https://github.com/Rakmlabs/sinawi#readme",
+  "bugs": {
+    "url": "https://github.com/Rakmlabs/sinawi/issues"
+  },
+  "keywords": [
+    "sinawi",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "claude-desktop",
+    "cursor",
+    "codex",
+    "grok",
+    "ai-agents",
+    "macos",
+    "installer"
+  ]
+}

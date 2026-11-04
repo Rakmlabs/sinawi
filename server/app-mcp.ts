@@ -5,11 +5,17 @@ import { envVar } from "./runtime.js";
 
 /**
  * The external MCP surface (server/app-tools.ts, surface "external"): Claude Desktop or any other
- * MCP client starts scripts/sinawi-mcp.mjs, which posts to /api/app-mcp with this token. The token
- * lives in the app's data folder (0600); the settings page shows it with a ready-made config.
+ * MCP client starts the stdio bridge (packages/sinawi/lib/mcp.mjs: `npx -y sinawi mcp`, the copy in the app
+ * bundle, or the copy in <data>/hooks), which posts to
+ * /api/app-mcp with this token. The token lives in the app's data folder (0600); the settings page
+ * shows it with a ready-made config.
  */
 export const APP_MCP_SERVER = "sinawi";
 export const APP_MCP_SCRIPT = "sinawi-mcp.mjs";
+/** The npm package whose `mcp` command is the bridge: `npx -y sinawi mcp`. */
+export const APP_MCP_PACKAGE = "sinawi";
+/** The bridge's source in a checkout. */
+const BRIDGE_SOURCE = join("packages", "sinawi", "lib", "mcp.mjs");
 
 export const appMcpTokenPath = (dataDir: string) => join(dataDir, "app-mcp-token");
 
@@ -65,13 +71,13 @@ export function tokenMatches(expected: string, given: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** The bundled server carries the script (scripts/build-server.mjs `define`); a checkout reads scripts/. */
+/** The bundled server carries the script (scripts/build-server.mjs `define`); a checkout reads packages/sinawi. */
 declare const __SINAWI_MCP_SCRIPT__: string | undefined;
 
 async function scriptSource(): Promise<string | undefined> {
   if (typeof __SINAWI_MCP_SCRIPT__ === "string") return __SINAWI_MCP_SCRIPT__;
   const entry = process.argv[1] ? dirname(resolve(process.argv[1])) : process.cwd();
-  for (const candidate of [join(entry, "..", "scripts", APP_MCP_SCRIPT), join(process.cwd(), "scripts", APP_MCP_SCRIPT)]) {
+  for (const candidate of [join(entry, "..", BRIDGE_SOURCE), join(process.cwd(), BRIDGE_SOURCE)]) {
     const text = await readFile(candidate, "utf8").catch(() => undefined);
     if (text) return text;
   }
@@ -95,7 +101,24 @@ export async function installAppMcpScript(dataDir: string): Promise<string | und
 
 export const appUrl = () => `http://127.0.0.1:${envVar("PORT") || "3001"}`;
 
-/** The `mcpServers` entry for claude_desktop_config.json (and other clients that take the same shape). */
-export function clientConfig(script: string, token: string, command = process.execPath) {
+/**
+ * The `mcpServers` entry for claude_desktop_config.json (and other clients that take the same shape):
+ * the npm package through npx. Needs npx on the client's PATH and, the first time, the network.
+ */
+export function clientConfig(token: string) {
+  return { mcpServers: { [APP_MCP_SERVER]: { command: "npx", args: ["-y", APP_MCP_PACKAGE, "mcp"], env: { SINAWI_URL: appUrl(), SINAWI_MCP_TOKEN: token } } } };
+}
+
+/** The same entry without npx: this Node runs the copy of the bridge the app keeps in <data>/hooks. */
+export function scriptClientConfig(script: string, token: string, command = process.execPath) {
   return { mcpServers: { [APP_MCP_SERVER]: { command, args: [script], env: { SINAWI_URL: appUrl(), SINAWI_MCP_TOKEN: token } } } };
+}
+
+/**
+ * The entry the settings page's "Connect to Claude Desktop / Cursor" writes: this Node runs the app's
+ * copy of the bridge, and the token is read from its file on every call, so no secret is copied into
+ * the client's config and a renewed token keeps working.
+ */
+export function connectEntry(script: string, tokenFile: string, command = process.execPath) {
+  return { command, args: [script], env: { SINAWI_URL: appUrl(), SINAWI_MCP_TOKEN_FILE: tokenFile } };
 }

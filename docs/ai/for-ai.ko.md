@@ -33,29 +33,32 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 | 표면 | 서버 이름 | 엔드포인트 | 인증 | 누가 |
 |---|---|---|---|---|
 | 담당 | `sinawi_lead` | `POST /api/lead-mcp` | 그 실행의 토큰(`x-sinawi-token`), 담당 본인 실행만 | Claude·Codex 담당의 CLI 실행(*Plan* 모드 제외, Grok 제외). 담당 전용 도구 + 앱 도구. |
-| 외부 | `sinawi` | `POST /api/app-mcp` | `Authorization: Bearer <토큰>` (또는 `x-sinawi-mcp-token`) | stdio 브리지 `scripts/sinawi-mcp.mjs`를 띄우는 Claude Desktop 등 MCP 클라이언트. 앱 도구만. |
+| 외부 | `sinawi` | `POST /api/app-mcp` | `Authorization: Bearer <토큰>` (또는 `x-sinawi-mcp-token`) | stdio 브리지(`sinawi mcp`, `packages/sinawi`)를 띄우는 Claude Desktop, Cursor 등 MCP 클라이언트. 앱 도구만. |
 
 ### MCP 클라이언트 연결
 
-1. 시나위가 켜져 있어야 합니다.
-2. 앱에서 **설정 → 일반 → 외부 AI 연결 (MCP) → 구성 복사**. 앱이 브리지를 `<데이터 폴더>/hooks/sinawi-mcp.mjs`에 써 두고(앱 업데이트 후에도 유지) 토큰이 들어간 구성을 보여 줍니다.
-3. 클라이언트에 넣습니다. Claude Desktop(`claude_desktop_config.json`, **설정 → 개발자 → 구성 편집**):
+시나위가 켜져 있어야 합니다. 권장 순서:
+
+1. **앱 안의 버튼**(Claude Desktop, Cursor): **설정 → 일반 → 외부 AI 연결 (MCP) → Claude Desktop에 연결 / Cursor에 연결**. 사용자가 JSON을 확인하면 앱이 `~/Library/Application Support/Claude/claude_desktop_config.json` 또는 `~/.cursor/mcp.json`에 `mcpServers.sinawi`를 합칩니다(다른 항목 유지, `.bak` 사본). 항목은 `"command": "<node>", "args": ["<데이터 폴더>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<데이터 폴더>/app-mcp-token"}`입니다(토큰은 복사하지 않음). 경로: `GET`/`POST /api/app-mcp/clients/:client`(`claude`, `cursor`). MCP 도구가 아니고, `POST`는 앱 자신의 Origin과 확인한 JSON이 있어야 합니다. 테스트는 `SINAWI_CLAUDE_DESKTOP_CONFIG`, `SINAWI_CURSOR_MCP_CONFIG`로 경로를 옮깁니다.
+2. **npx**(npm 패키지 `sinawi`가 올라간 뒤부터): 같은 화면의 **구성 복사**가 다음을 줍니다.
 
 ```json
 {
   "mcpServers": {
     "sinawi": {
-      "command": "/path/to/node",
-      "args": ["/Users/<you>/Library/Application Support/dev.sinawi.app/.data/hooks/sinawi-mcp.mjs"],
+      "command": "npx",
+      "args": ["-y", "sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
     }
   }
 }
 ```
 
-저장소에서는 `npm run sinawi-mcp`(= `node scripts/sinawi-mcp.mjs`, package bin `sinawi-mcp`)로 같은 stdio 브리지를 띄웁니다. 의존성이 없습니다.
+3. **앱에 든 브리지**: `"command": "node"`, `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, `env`는 같음. 설정 화면의 "npx 없이 쓰는 구성"은 대신 `<데이터 폴더>/hooks/sinawi-mcp.mjs` 사본을 가리킵니다(앱 업데이트·이동 후에도 유지).
 
-### 브리지 환경변수 (`scripts/sinawi-mcp.mjs`)
+저장소에서는 `npm run sinawi-mcp`(= `node scripts/sinawi-mcp.mjs`)로 같은 stdio 브리지를 띄웁니다. 모든 형태가 하나의 구현 `packages/sinawi/lib/mcp.mjs`를 실행하며, 의존성이 없습니다(Node 18 이상). 같은 npm 패키지가 앱도 설치합니다: `npx sinawi`(macOS, 최신 릴리즈를 받아 `codesign --verify --deep --strict`와 `spctl -a -t exec`로 확인하고, `/Applications/Sinawi.app`을 바꾸기 전에 묻습니다).
+
+### 브리지 환경변수 (`sinawi mcp`)
 
 | 변수 | 뜻 |
 |---|---|
