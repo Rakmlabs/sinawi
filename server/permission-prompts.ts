@@ -42,6 +42,8 @@ const pending = new Map<string, Pending>();
 const activity = new Map<string, () => void>();
 
 export function registerRunActivity(token: string, onActivity: () => void) { activity.set(token, onActivity); }
+/** Tells the run it is still working (a lead waiting on its workers through a tool call). */
+export function touchRunActivity(token: string) { activity.get(token)?.(); }
 export function unregisterRunActivity(token: string) {
   activity.delete(token);
   // The run is over: nothing is waiting for these answers any more.

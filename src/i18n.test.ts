@@ -7,7 +7,7 @@ import { applyAppearance, cleanFontName, defaultLang, fontStack, readAppearance 
 import { WindowHeader } from "./WindowHeader";
 import { Beat } from "./Beat";
 
-const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
+const placeholders = (text: string) => [...text.matchAll(/\{(\w+)(?::[^{}]+)?\}/g)].map((match) => match[1]).sort();
 const tags = (text: string) => [...text.matchAll(/<\/?(?:b|strong)>/g)].map((match) => match[0]);
 
 test("ko and en dictionaries share keys, placeholders and markup", () => {
@@ -99,4 +99,18 @@ test("appearance preferences map onto the shared CSS contract", () => {
   } finally {
     setLang(before);
   }
+});
+
+test("{name:이/가} picks the particle from the value, so a title never reads 담당가", () => {
+  const before = getLang();
+  try {
+    setLang("ko");
+    assert.equal(t("approval.title", { source: t("approval.lead") }), "담당이 승인을 기다립니다");
+    assert.equal(t("approval.title", { source: t("approval.external") }), "외부 AI가 승인을 기다립니다");
+    assert.equal(t("approval.title", { source: t("approval.leadNamed", { name: "백엔드" }) }), "담당 '백엔드'가 승인을 기다립니다");
+    assert.equal(t("steward.skillCard.created", { name: "리뷰" }), "담당이 스킬 리뷰를 만들었습니다");
+    assert.equal(t("quota.returnTo", { agent: "Grok" }), "Grok으로 돌아가기");
+    setLang("en");
+    assert.equal(t("approval.title", { source: t("approval.lead") }), "A lead is waiting for your approval");
+  } finally { setLang(before); }
 });

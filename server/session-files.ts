@@ -204,9 +204,12 @@ function fail(res: Response, error: unknown) {
   res.status(status).json(body);
 }
 
+export type SessionFolders = { cwd: string; worktrees?: Array<{ path: string }> };
+
 export type SessionFileDeps = {
-  lookup?: (id: string) => { cwd: string } | undefined;
-  extraRoots?: () => string[];
+  lookup?: (id: string) => SessionFolders | undefined;
+  /** Folders besides the session's own it may show files from (uploads, its workers' worktrees, screenshots). */
+  extraRoots?: (session?: SessionFolders) => string[];
   previewRoot?: () => string;
   cacheDir: () => string;
   converter?: () => string | undefined;
@@ -285,20 +288,20 @@ function handleOpen(req: Request, res: Response, cwd: string, extraRoots: string
 }
 
 export function registerSessionFileRoutes(app: Express, deps: SessionFileDeps) {
-  const extra = () => deps.extraRoots?.() ?? [];
+  const extra = (session?: SessionFolders) => deps.extraRoots?.(session) ?? [];
   if (deps.lookup) {
     app.get("/api/sessions/:id/file", async (req, res) => {
       try {
         const session = deps.lookup?.(String(req.params.id));
         if (!session) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
-        await handleGet(req, res, session.cwd, extra(), deps);
+        await handleGet(req, res, session.cwd, extra(session), deps);
       } catch (error) { fail(res, error); }
     });
     app.post("/api/sessions/:id/file/open", async (req, res) => {
       try {
         const session = deps.lookup?.(String(req.params.id));
         if (!session) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
-        await handleOpen(req, res, session.cwd, extra(), deps);
+        await handleOpen(req, res, session.cwd, extra(session), deps);
       } catch (error) { fail(res, error); }
     });
   }

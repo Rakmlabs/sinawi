@@ -30,6 +30,11 @@ export function sessionNotifications(session: Session): NotificationInput[] {
     }
     let type: NotificationInput["type"] | undefined;
     let title = "";
+    // A lead's finished work held back from the main checkout: the user has to approve it, or merge it by hand.
+    if (event.metadata?.mergeHold && session.steward) {
+      notes.push({ workspaceId: session.workspaceId, key: `event:${event.id}`, type: "lead", title: `「${stewardName(session)}」 ${event.metadata.mergeHold === "ask" ? "병합 승인 대기" : "작업 브랜치에 남김"}`, body: event.text.slice(0, 2000), action });
+      continue;
+    }
     if (/권한 거부|permission denied/i.test(event.text)) { type = "permission"; title = "명령 실행 권한이 필요합니다"; }
     else if (event.metadata?.quotaFallback || /quota|한도.*소진|rate.limit/i.test(event.text)) { type = "quota"; title = "사용 한도 · 에이전트 전환"; }
     else if (event.type === "error") { type = "error"; title = /응답|정체|inactiv|stalled/i.test(event.text) ? "작업 응답이 멈췄습니다" : "작업 오류"; }

@@ -60,7 +60,7 @@ export interface SessionEvent {
   reasoningEffort?: string;
   workerId?: string;
   workerLabel?: string;
-  metadata?: { auto?: boolean; from?: AgentId; to?: AgentId; reason?: string; previousConfig?: UpdateTeamInput; previousPlanner?: AgentSelection; undone?: boolean; deletedWorker?: boolean; quotaFallback?: boolean; resetsAt?: number; live?: "status" | "directive"; ambiguous?: boolean; promoted?: boolean; prompt?: string; targetWorkerId?: string; briefAutofilled?: string[]; phase?: "verify" | "replan" | "self-work" | "worker-report" | "verify-cut"; round?: number; stall?: "repeated-error" | "repeated-command" | "no-progress" | "tool-family-loop" | "no-success" };
+  metadata?: { auto?: boolean; from?: AgentId; to?: AgentId; reason?: string; previousConfig?: UpdateTeamInput; previousPlanner?: AgentSelection; undone?: boolean; deletedWorker?: boolean; quotaFallback?: boolean; resetsAt?: number; live?: "status" | "directive"; ambiguous?: boolean; promoted?: boolean; prompt?: string; targetWorkerId?: string; briefAutofilled?: string[]; phase?: "verify" | "replan" | "self-work" | "worker-report" | "verify-cut"; round?: number; stall?: "repeated-error" | "repeated-command" | "no-progress" | "tool-family-loop" | "no-success"; mergeHold?: "ask" | "never"; addedWorker?: AgentId; schedule?: ScheduleCard; leadSkill?: { name: string; scope: "lead" | "project"; action: "created" | "updated" } };
 }
 
 export interface PendingInstruction {
@@ -145,13 +145,58 @@ export interface CommanderGoal {
   endedAt?: string;
 }
 
+/** What happens to a lead's finished worker branches at the end of a turn (server/steward.ts). */
+export type MergePolicy = "auto" | "ask" | "never";
+
+/**
+ * A project lead as its own thing, like a Bot: its name, instructions, skills, default team and
+ * merge policy. Chats are its threads (`Session.steward.id`). Stored in stewards.json.
+ * `agent`/`model`/`reasoningEffort` are the lead's own CLI; `workers` uses the workerConfigs form.
+ */
+export interface Steward extends Bot {
+  reasoningEffort?: string;
+  workers: AgentSelection[];
+  mergePolicy: MergePolicy;
+  /** Project folders this lead works in; its threads start in the first one by default. */
+  cwds: string[];
+  /** A daily report at this local time ("HH:MM"), one per lead, opened in its latest chat (server/steward.ts reportDue). */
+  report?: string;
+  reportedAt?: string;
+  /** The lead's projects' git state when the last report opened: unchanged and quiet, the next is skipped. */
+  reportState?: string;
+  /** Made from a lead chat saved before leads were entities (Orchestra.restore). */
+  migrated?: true;
+  /** The user picked this lead's merge policy (here or for all leads): the legacy default no longer moves it. */
+  mergePolicyChosen?: true;
+  updatedAt?: string;
+}
+
+/** App-wide lead settings, kept in workspaces.json. */
+export interface StewardSettings {
+  /** Merge policy of leads migrated from older lead chats; unset means "auto" (how they always worked). */
+  legacyMergePolicy?: Exclude<MergePolicy, "never">;
+}
+
+/** Worker branches a lead finished, held for the user to approve (mergePolicy "ask"). */
+export interface PendingMerge {
+  branches: { workerId: string; workerLabel?: string; branch: string; path: string }[];
+  createdAt: string;
+}
+
 export interface StewardState {
+  /** The Steward entity this chat is a thread of; set on every lead chat once loaded (old ones migrate). */
+  id?: string;
+  /** Worker branches waiting for the user's approval before they go into the main checkout. */
+  pendingMerge?: PendingMerge;
   /** Lead turns on the current CLI session; at STEWARD_ROLLOVER_TURNS the app starts a fresh one. */
   turns: number;
   since: string;
   /** What other leads and the sidebar call it; the project folder's name when unset. */
   name?: string;
-  /** A daily report at this local time ("HH:MM"), opened by the app (server/steward.ts reportDue). */
+  /**
+   * Before reports were per lead: this chat's own report time. Moved to the Steward on load
+   * (Orchestra.restore) and removed here; kept in the type so older files still read.
+   */
   report?: string;
   reportedAt?: string;
   /** The project's git state when the last report opened: an unchanged, quiet project skips the next. */
@@ -270,6 +315,8 @@ export interface WorkspaceState {
   defaults: Record<string, WorkspaceDefaults>;
   /** Policy of every listed workspace. The store always fills it in; older payloads may lack it. */
   settings?: Record<string, WorkspacePolicy>;
+  /** App-wide project lead settings (server/steward.ts). */
+  stewardSettings?: StewardSettings;
 }
 
 export interface ToolWorkspaceSettings {
@@ -300,7 +347,10 @@ export interface ConversationSettings {
 }
 
 export interface StartSessionInput extends ConversationSettings {
+  /** Empty: an empty chat that starts with its first follow-up. */
   prompt: string;
+  /** Title to open with (otherwise from the prompt). */
+  title?: string;
   agent: AgentId;
   workers?: AgentId[];
   cwd: string;
@@ -317,8 +367,8 @@ export interface StartSessionInput extends ConversationSettings {
   goal?: boolean;
   /** Starts as a commander that only splits the request into goal chats (server/goals.ts). */
   commander?: boolean;
-  /** Starts as the project lead (server/steward.ts). */
-  steward?: { name?: string };
+  /** Starts as the project lead (server/steward.ts): a new one, or a new thread of Steward `id`. */
+  steward?: { name?: string; id?: string };
   parentId?: string;
 }
 
@@ -329,6 +379,8 @@ export interface ConversationInput {
   prompt: string;
   cwd: string;
   workspaceId?: WorkspaceId;
+  /** Left out: the workspace's switch decides (the app's own screen). MCP tools always send one. */
+  permissionMode?: PermissionMode;
 }
 
 /** A message an agent is still writing, streamed to the app as it grows (never stored; see NormalizedLine.draft). */
@@ -350,4 +402,17 @@ export interface NormalizedLine {
   /** A fragment of a message still being written: shown live in the app, never stored (the whole message follows). */
   draft?: boolean;
   sessionId?: string;
+}
+
+/** A schedule change or run shown as a small card in the lead's chat (SessionEvent.metadata.schedule). */
+export interface ScheduleCard {
+  id: string;
+  title: string;
+  action: "created" | "updated" | "deleted" | "fired" | "missed";
+  by: "user" | "lead" | "app";
+  at?: string;
+  cron?: string;
+  timezone?: string;
+  nextRunAt?: string;
+  enabled?: boolean;
 }

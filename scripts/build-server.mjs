@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
-import { chmod, cp, mkdir, rm } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 // All runtime dependencies are included; the installed app only needs Node.
@@ -15,6 +15,8 @@ await build({
   target: "node22",
   // ws uses these optional native addons only as performance accelerators.
   external: ["bufferutil", "utf-8-validate", "node-pty"],
+  // The outside-AI MCP entry (scripts/sinawi-mcp.mjs) rides inside server.cjs; the server writes it to <data>/hooks.
+  define: { __SINAWI_MCP_SCRIPT__: JSON.stringify(await readFile(new URL("sinawi-mcp.mjs", import.meta.url), "utf8")) },
 });
 await rm(new URL("dist/", resources), { recursive: true, force: true });
 await cp(new URL("../dist/", import.meta.url), new URL("dist/", resources), { recursive: true });

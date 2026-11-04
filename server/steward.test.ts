@@ -6,7 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 import type { RunCliOptions } from "./cli.js";
 import { Orchestra } from "./orchestra.js";
-import { notesPath, parseAsks, parseNotes, reportDue, reportTime, STEWARD_ROLLOVER_TURNS, transcriptPath } from "./steward.js";
+import { mergeRule, mergeThreadReports, notesPath, parseAsks, parseNotes, reportDue, reportTime, saveNotes, saveUserPreferences, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardRules, transcriptPath } from "./steward.js";
+import type { Session, Steward } from "./types.js";
 
 const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env }).trim();
@@ -54,6 +55,7 @@ test("a project lead keeps its notes and transcript, merges each turn's work and
   const chat = await orchestra.create({ prompt: "첫 일", agent: "codex", workers: ["claude"], cwd: repo });
   await waitFor(() => chat.status === "done");
   orchestra.setSteward(chat.id, true);
+  orchestra.patchSteward(chat.steward!.id!, { mergePolicy: "auto" });
   // Close to the rollover: the next turn is the last on this CLI session.
   chat.steward!.turns = STEWARD_ROLLOVER_TURNS - 1;
 
@@ -119,6 +121,7 @@ test("a lead's merge that fails keeps the branch and tries again after the next 
   const chat = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: repo });
   await waitFor(() => chat.status === "done");
   orchestra.setSteward(chat.id, true);
+  orchestra.patchSteward(chat.steward!.id!, { mergePolicy: "auto" });
   // The user commits a change to the same line meanwhile: the worker's branch now conflicts.
   await writeFile(join(repo, "README.md"), "user\n");
   git(repo, "commit", "-qam", "user edit");
@@ -202,7 +205,7 @@ test("a lead's daily report opens a turn once its time has passed", async (t) =>
   assert.equal(chat.steward!.name, "주식");
   orchestra.stewardTick(new Date(Date.now() + 60_000));
   assert.equal(prompts.length, 1, "set today: the first report waits for the next 08:00");
-  chat.steward!.reportedAt = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  orchestra.getSteward(chat.steward!.id!)!.reportedAt = new Date(Date.now() - 2 * 86_400_000).toISOString();
   orchestra.stewardTick();
   await waitFor(() => chat.status === "done" && prompts.length === 2);
   assert.match(prompts[1], /정기 보고/u);
@@ -317,4 +320,387 @@ test("a daily report is skipped when the project and the chat are unchanged", as
   await orchestra.stewardTick(day(3));
   await waitFor(() => chat.status === "done" && prompts.length === 3);
   assert.match(prompts[2], /정기 보고/u);
+});
+
+// --- Leads as entities, merge policy, preferences, CLI switch, rollover, summary -----------------
+
+/** A lead whose worker writes `file` in its worktree each turn. */
+async function leadWithWorker(t: test.TestContext, file = "work.txt") {
+  const { repo, dataDir } = await setup(t);
+  const leadPrompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      await writeFile(join(options.cwd, file), "work\n");
+      return { exitCode: 0, finalText: "상태: 완료" };
+    }
+    leadPrompts.push(options.prompt);
+    return { exitCode: 0, finalText: options.prompt.includes("사용자 요청:\n준비") ? "준비" : `<<DELEGATE to="claude">>${file} 만들기<</DELEGATE>>` };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.worktreeDataDir = dataDir;
+  orchestra.stewardDataDir = dataDir;
+  const chat = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: repo, steward: { name: "앱" } });
+  await waitFor(() => chat.status === "done");
+  return { repo, dataDir, orchestra, chat, leadPrompts };
+}
+
+test("a lead chat saved before leads were entities gets one on load, keeping its notes, team and merging", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const legacy = {
+    id: "old-lead", title: "옛 담당", agent: "codex", workers: ["claude"], cwd: repo, status: "done", createdAt: "2026-01-01T00:00:00.000Z", events: [],
+    workspaceId: "personal", skills: ["review"], systemPrompt: "한국어로 답해", model: "gpt-5", workerConfigs: [{ id: "claude", agent: "claude", model: "opus" }],
+    steward: { turns: 3, since: "2026-01-01T00:00:00.000Z", name: "옛것", report: "08:00" },
+  } as unknown as Session;
+  await saveNotes(dataDir, legacy.id, "- 결정: 옛 노트");
+  const saved: Steward[][] = [];
+  const prompts: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => { prompts.push(options.prompt); return { exitCode: 0, finalText: "네" }; });
+  orchestra.stewardDataDir = dataDir;
+  orchestra.persistStewards = (list) => { saved.push(structuredClone(list)); };
+  orchestra.restore([legacy]);
+  const steward = orchestra.getSteward("old-lead")!;
+  assert.ok(steward, "the entity takes the chat's id, so its notes stay where they are");
+  assert.equal(legacy.steward!.id, "old-lead");
+  assert.equal(steward.name, "옛것");
+  assert.equal(steward.systemPrompt, "한국어로 답해");
+  assert.deepEqual(steward.skills, ["review"]);
+  assert.equal(steward.agent, "codex");
+  assert.equal(steward.model, "gpt-5");
+  assert.deepEqual(steward.workers, [{ id: "claude", label: "Claude", agent: "claude", model: "opus" }]);
+  assert.equal(steward.mergePolicy, "auto", "a lead that merged every turn keeps doing so");
+  assert.deepEqual(steward.cwds, [repo]);
+  assert.equal(steward.report, "08:00", "the chat's report time is now its lead's");
+  assert.equal(legacy.steward!.report, undefined);
+  assert.equal(legacy.steward!.turns, 3, "nothing else on the chat changes");
+  assert.equal(saved.length, 1, "the new entity is written");
+  await orchestra.followup(legacy.id, "이어서");
+  await waitFor(() => legacy.status === "done");
+  assert.match(prompts[0], /결정: 옛 노트/u, "the old notes still come with the turn");
+  assert.match(prompts[0], /한국어로 답해/u);
+
+  // Loaded again with its entity: nothing more is made.
+  const again = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "네" }));
+  again.persistStewards = () => { throw new Error("no write expected"); };
+  again.restore([structuredClone(legacy)], saved[0]);
+  assert.equal(again.listStewards().length, 1);
+});
+
+test("mergePolicy ask holds the branches until the user approves, and a rejection keeps them", async (t) => {
+  const { repo, orchestra, chat } = await leadWithWorker(t);
+  assert.equal(orchestra.stewardOf(chat)!.mergePolicy, "ask", "new leads ask by default");
+  await orchestra.followup(chat.id, "만들어");
+  await waitFor(() => chat.status === "done" && Boolean(chat.steward!.pendingMerge), 10_000);
+  await assert.rejects(readFile(join(repo, "work.txt"), "utf8"), "nothing in the main checkout yet");
+  assert.equal(chat.steward!.pendingMerge!.branches.length, 1);
+  assert.ok(chat.events.some((event) => event.metadata?.mergeHold === "ask"), "the user is told, and notified");
+
+  orchestra.rejectMerge(chat.id);
+  assert.equal(chat.steward!.pendingMerge, undefined);
+  assert.equal(chat.worktrees?.length, 1, "a rejected branch stays");
+  assert.match(chat.steward!.appNotes!.join("\n"), /거절/u, "the lead hears about it next turn");
+  await assert.rejects(orchestra.approveMerge(chat.id), /기다리는 작업이 없습니다/u);
+
+  await orchestra.followup(chat.id, "다시");
+  await waitFor(() => chat.status === "done" && Boolean(chat.steward!.pendingMerge), 10_000);
+  await orchestra.approveMerge(chat.id);
+  assert.equal(await readFile(join(repo, "work.txt"), "utf8"), "work\n", "approved: merged into the main checkout");
+  assert.equal(chat.steward!.pendingMerge, undefined);
+  assert.equal(chat.worktrees, undefined);
+  assert.ok(chat.events.some((event) => event.text.startsWith("사용자가 승인해 이번 턴의 작업을 메인 폴더에 병합했습니다")));
+});
+
+test("mergePolicy never leaves the work on its branch and says so", async (t) => {
+  const { repo, orchestra, chat, leadPrompts } = await leadWithWorker(t);
+  orchestra.patchSteward(chat.steward!.id!, { mergePolicy: "never" });
+  await orchestra.followup(chat.id, "만들어");
+  await waitFor(() => chat.status === "done" && chat.events.some((event) => event.metadata?.mergeHold === "never"), 10_000);
+  await assert.rejects(readFile(join(repo, "work.txt"), "utf8"));
+  assert.equal(chat.steward!.pendingMerge, undefined, "nothing waits for approval");
+  assert.equal(chat.worktrees?.length, 1, "the branch is kept");
+  assert.ok(leadPrompts.at(-1)!.includes(mergeRule("never")), "the lead is told the app does not merge");
+});
+
+test("the merge rule the lead reads follows its policy", () => {
+  assert.match(stewardRules("", "/t", [], [], { mergePolicy: "auto" }), /턴이 끝날 때 앱이 메인 폴더에 병합합니다/u);
+  assert.match(stewardRules("", "/t", [], [], { mergePolicy: "ask" }), /사용자가 승인할 때까지/u);
+  assert.match(stewardRules("", "/t", [], [], { mergePolicy: "never" }), /병합하지 않습니다/u);
+  assert.doesNotMatch(stewardRules("", "/t", [], [], { mergePolicy: "never" }), /턴이 끝날 때 앱이 메인 폴더에 병합합니다/u);
+});
+
+test("a lead's instructions and skills changed after its chat began apply from the next turn", async (t) => {
+  const { orchestra, chat, leadPrompts } = await leadWithWorker(t);
+  assert.doesNotMatch(leadPrompts[0], /항상 존댓말/u);
+  orchestra.patchSteward(chat.steward!.id!, { systemPrompt: "항상 존댓말로 답하세요." });
+  await orchestra.followup(chat.id, "준비");
+  await waitFor(() => chat.status === "done" && leadPrompts.length === 2);
+  assert.match(leadPrompts[1], /^항상 존댓말로 답하세요\./u);
+  orchestra.patchSteward(chat.steward!.id!, { skills: ["review"] });
+  assert.deepEqual(orchestra.summary(chat.id).steward?.skills, ["review"], "the thread reads the lead's skills, not the ones it began with");
+});
+
+test("the user's common preferences come with every lead turn, next to the notes", async (t) => {
+  const { dataDir, orchestra, chat, leadPrompts } = await leadWithWorker(t);
+  await saveUserPreferences(dataDir, "- 커밋 메시지는 영어로\n- 테스트 먼저");
+  await orchestra.followup(chat.id, "준비");
+  await waitFor(() => chat.status === "done" && leadPrompts.length === 2);
+  assert.match(leadPrompts[1], /### 사용자 공통 선호[\s\S]*커밋 메시지는 영어로[\s\S]*테스트 먼저/u);
+  assert.doesNotMatch(leadPrompts[0], /사용자 공통 선호/u, "nothing is added while the file is empty");
+});
+
+test("a lead hands work to an allowed CLI its team lacks, and is refused one the workspace forbids", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const workerAgents: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") { workerAgents.push(options.agent); return { exitCode: 0, finalText: "상태: 완료" }; }
+    if (options.prompt.includes("사용자 요청:\n클로드로 해")) return { exitCode: 0, finalText: '<<DELEGATE to="claude">>확인<</DELEGATE>>' };
+    if (options.prompt.includes("사용자 요청:\n그록으로 해")) return { exitCode: 0, finalText: '<<DELEGATE to="grok">>확인<</DELEGATE>>' };
+    return { exitCode: 0, finalText: "준비" };
+  };
+  const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, () => ["codex", "claude"]);
+  orchestra.stewardDataDir = dataDir;
+  const chat = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["codex"], cwd: repo, steward: {} });
+  await waitFor(() => chat.status === "done");
+  await orchestra.followup(chat.id, "클로드로 해");
+  await waitFor(() => chat.status === "done" && workerAgents.length === 1);
+  assert.deepEqual(workerAgents, ["claude"], "the claude worker ran");
+  assert.deepEqual(chat.workers, ["codex", "claude"], "and stays on the team");
+  assert.ok(chat.events.some((event) => event.metadata?.addedWorker === "claude"), "the user is told");
+
+  await orchestra.followup(chat.id, "그록으로 해");
+  await waitFor(() => chat.status === "done" && chat.events.some((event) => event.type === "warning" && event.text.includes("허용되지 않은 에이전트")));
+  assert.deepEqual(workerAgents, ["claude"], "no grok worker ran");
+  assert.deepEqual(chat.workers, ["codex", "claude"]);
+});
+
+test("the rollover gives the lead a fresh CLI session but keeps the workers' sessions", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const workerResumes: (string | undefined)[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") { workerResumes.push(options.resumeSessionId); return { exitCode: 0, sessionId: "worker-cli", finalText: "상태: 완료" }; }
+    return { exitCode: 0, sessionId: "lead-cli", finalText: options.prompt.includes("사용자 요청:\n준비") ? "준비" : '<<DELEGATE to="claude">>일<</DELEGATE>>' };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.stewardDataDir = dataDir;
+  const chat = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: repo, steward: {} });
+  await waitFor(() => chat.status === "done");
+  chat.steward!.turns = STEWARD_ROLLOVER_TURNS - 1;
+  await orchestra.followup(chat.id, "일해");
+  await waitFor(() => chat.status === "done" && chat.events.some((event) => event.text.includes("새 세션으로 이어 갑니다")));
+  assert.equal(chat.cliSessionId, undefined, "the lead starts fresh");
+  assert.deepEqual(chat.workerSessionIds, { claude: "worker-cli" }, "the worker keeps its session");
+  await orchestra.followup(chat.id, "또 일해");
+  await waitFor(() => chat.status === "done" && workerResumes.length === 2);
+  assert.equal(workerResumes[1], "worker-cli", "the next delegation resumes it");
+});
+
+test("a chat's summary has its status, the lead's last answer without app blocks, its checklist and a waiting merge", async (t) => {
+  const { orchestra, chat } = await leadWithWorker(t);
+  await orchestra.followup(chat.id, "만들어");
+  await waitFor(() => chat.status === "done" && Boolean(chat.steward!.pendingMerge), 10_000);
+  const summary = orchestra.summary(chat.id);
+  assert.equal(summary.status, "done");
+  assert.equal(summary.pendingMerge?.branches.length, 1);
+  assert.equal(summary.steward?.name, "앱");
+  assert.equal(summary.steward?.mergePolicy, "ask");
+  assert.throws(() => orchestra.summary("missing"), /세션을 찾을 수 없습니다/u);
+
+  const pure = sessionSummary({
+    id: "s", title: "t", status: "running", cwd: "/w", agent: "codex", workers: [], createdAt: "", workspaceId: "w",
+    goal: { items: [{ text: "a", status: "done" }], startedAt: "", autoTurns: 0, idleTurns: 0 },
+    events: [
+      { id: "1", sessionId: "s", agent: "codex", type: "message", role: "orchestrator", text: "답입니다\n<<NOTES>>\n- x\n<</NOTES>>", time: "" },
+      { id: "2", sessionId: "s", agent: "claude", type: "message", role: "worker", text: "워커 보고", time: "" },
+    ],
+  } as Session);
+  assert.equal(pure.lastAnswer, "답입니다");
+  assert.deepEqual(pure.checklist, [{ text: "a", status: "done" }]);
+  assert.equal(pure.steward, null);
+  assert.equal(pure.pendingMerge, null);
+});
+
+test("a new thread of a lead runs with the lead's team and shares its notes", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const leads: RunCliOptions[] = [];
+  const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => { leads.push(options); return { exitCode: 0, finalText: "네" }; });
+  orchestra.stewardDataDir = dataDir;
+  const steward = orchestra.createSteward({ name: "백엔드", agent: "claude", systemPrompt: "백엔드 담당입니다.", workers: [{ agent: "codex", model: "gpt-5" }], cwds: [repo] });
+  assert.equal(steward.mergePolicy, "ask");
+  assert.deepEqual(steward.workers, [{ id: "codex", label: "Codex", agent: "codex", model: "gpt-5" }]);
+  assert.throws(() => orchestra.createSteward({ name: "백엔드" }), /이미 「백엔드」/u);
+  await saveNotes(dataDir, steward.id, "- 공유 노트");
+  const thread = await orchestra.create({ prompt: "시작", agent: "codex", workers: ["claude"], cwd: repo, steward: { id: steward.id } });
+  await waitFor(() => thread.status === "done");
+  assert.equal(thread.agent, "claude");
+  assert.deepEqual(thread.workers, ["codex"]);
+  assert.equal(thread.steward!.name, "백엔드");
+  assert.match(leads[0].prompt, /^백엔드 담당입니다\./u);
+  assert.match(leads[0].prompt, /공유 노트/u);
+  await assert.rejects(orchestra.create({ prompt: "x", agent: "codex", workers: ["claude"], cwd: repo, steward: { id: "nope" } }), /담당을 찾을 수 없습니다/u);
+
+  const plain = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: repo });
+  await waitFor(() => plain.status === "done");
+  orchestra.setSteward(plain.id, true);
+  orchestra.patchSteward(plain.id, { mergePolicy: "never", systemPrompt: "고친 지침" });
+  orchestra.setSteward(plain.id, false);
+  orchestra.setSteward(plain.id, true);
+  assert.equal(orchestra.getSteward(plain.id)!.mergePolicy, "never", "made a lead again: its edited entity comes back");
+  assert.equal(orchestra.getSteward(plain.id)!.systemPrompt, "고친 지침");
+
+  orchestra.patchSteward(steward.id, { name: "서버" });
+  assert.equal(thread.steward!.name, "서버", "a new name shows in every thread");
+  orchestra.deleteSteward(steward.id);
+  assert.equal(thread.steward, undefined, "its chats stay, as ordinary chats");
+  assert.equal(orchestra.getSteward(steward.id), undefined);
+  assert.equal(stewardFromSession({ ...thread, steward: { turns: 0, since: "" } } as Session).name.length > 0, true);
+});
+
+// --- Migrated leads' merge policy: the legacy default, the app-wide setting and the one-click change ---
+
+const legacyChat = (id: string, cwd: string) => ({
+  id, title: "옛 담당", agent: "codex", workers: ["claude"], cwd, status: "done", createdAt: "2026-01-01T00:00:00.000Z", events: [],
+  workspaceId: "personal", steward: { turns: 1, since: "2026-01-01T00:00:00.000Z", name: id },
+}) as unknown as Session;
+
+test("migrated leads keep merging by default, or ask when the user chose so for them", async (t) => {
+  const { repo } = await setup(t);
+  const kept = new Orchestra();
+  kept.restore([legacyChat("a", repo)]);
+  assert.equal(kept.getSteward("a")!.mergePolicy, "auto");
+  assert.equal(kept.getSteward("a")!.migrated, true);
+  const asking = new Orchestra();
+  asking.restore([legacyChat("a", repo)], [], { legacyMergePolicy: "ask" });
+  assert.equal(asking.getSteward("a")!.mergePolicy, "ask");
+});
+
+test("the legacy setting moves migrated leads nobody set by hand; the one-click change moves every lead", async (t) => {
+  const { repo } = await setup(t);
+  const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "네" }));
+  const writes: Steward[][] = [];
+  orchestra.persistStewards = (list) => { writes.push(list); };
+  orchestra.restore([legacyChat("a", repo), legacyChat("b", repo)]);
+  const fresh = orchestra.createSteward({ name: "새것" });
+  orchestra.patchSteward("b", { mergePolicy: "never" });
+  assert.equal(orchestra.getSteward("b")!.mergePolicyChosen, true);
+  assert.equal(orchestra.setLegacyMergePolicy("ask"), 1);
+  assert.equal(orchestra.getSteward("a")!.mergePolicy, "ask", "a migrated lead on the default follows the setting");
+  assert.equal(orchestra.getSteward("b")!.mergePolicy, "never", "a policy picked by hand stays");
+  assert.equal(orchestra.getSteward(fresh.id)!.mergePolicy, "ask", "a new lead is not a migrated one");
+  assert.equal(orchestra.setLegacyMergePolicy("auto"), 1);
+  assert.equal(orchestra.getSteward("a")!.mergePolicy, "auto");
+
+  const before = writes.length;
+  assert.equal(orchestra.setAllMergePolicies("never"), 2, "two leads were not on never yet");
+  assert.deepEqual(orchestra.listStewards().map((item) => item.mergePolicy), ["never", "never", "never"]);
+  assert.ok(writes.length > before, "the change is written");
+  assert.equal(orchestra.setLegacyMergePolicy("ask"), 0, "after the one-click change every policy counts as chosen");
+});
+
+test("a migrated lead's own merge policy, picked in its panel, decides its next turn", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") { await writeFile(join(options.cwd, "legacy.txt"), "x\n"); return { exitCode: 0, finalText: "상태: 완료" }; }
+    return { exitCode: 0, finalText: '<<DELEGATE to="claude">>legacy.txt 만들기<</DELEGATE>>' };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.worktreeDataDir = dataDir;
+  orchestra.stewardDataDir = dataDir;
+  const chat = legacyChat("legacy", repo);
+  orchestra.restore([chat]);
+  assert.equal(orchestra.getSteward("legacy")!.mergePolicy, "auto");
+  orchestra.patchSteward("legacy", { mergePolicy: "ask" });
+  await orchestra.followup(chat.id, "만들어");
+  await waitFor(() => chat.status === "done" && Boolean(chat.steward!.pendingMerge), 10_000);
+  await assert.rejects(readFile(join(repo, "legacy.txt"), "utf8"), "ask: not merged without approval");
+  await orchestra.approveMerge(chat.id);
+  assert.equal(await readFile(join(repo, "legacy.txt"), "utf8"), "x\n");
+});
+
+// --- A new chat picked from the lead list, and reports per lead --------------------------------
+
+test("a chat started from the lead picker takes the lead's folder, team, instructions, skills and merge policy", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const prompts: RunCliOptions[] = [];
+  const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => { prompts.push(options); return { exitCode: 0, finalText: "네" }; });
+  orchestra.stewardDataDir = dataDir;
+  const steward = orchestra.createSteward({ name: "웹", agent: "grok", systemPrompt: "웹 담당입니다.\n둘째 줄", skills: ["review"], workers: [{ agent: "claude" }], mergePolicy: "never", cwds: [repo] });
+  // What the picker sends: the lead's id, and no folder of its own.
+  const chat = await orchestra.create({ prompt: "시작", agent: "codex", workers: ["codex"], cwd: "", steward: { id: steward.id } });
+  await waitFor(() => chat.status === "done");
+  assert.equal(chat.cwd, repo, "the lead's first folder");
+  assert.equal(chat.agent, "grok");
+  assert.deepEqual(chat.workers, ["claude"]);
+  assert.deepEqual(chat.skills, ["review"]);
+  assert.equal(chat.steward!.id, steward.id, "the chat says which lead it belongs to");
+  assert.equal(orchestra.stewardOf(chat)!.mergePolicy, "never");
+  assert.match(prompts[0].prompt, /^웹 담당입니다\./u);
+  assert.match(prompts[0].prompt, /앱은 워커 브랜치를 메인 폴더에 병합하지 않습니다/u);
+  const empty = orchestra.createSteward({ name: "폴더 없음" });
+  await assert.rejects(orchestra.create({ prompt: "x", agent: "codex", workers: ["codex"], cwd: "", steward: { id: empty.id } }), /작업 폴더가 올바르지 않습니다/u);
+});
+
+test("chats' report times become their lead's: the earliest time, the latest report", () => {
+  assert.deepEqual(mergeThreadReports([
+    { report: "09:00", reportedAt: "2026-11-01T00:00:00.000Z", reportState: "old" },
+    { report: "08:30", reportedAt: "2026-11-02T00:00:00.000Z", reportState: "new" },
+    { report: "09:00" },
+  ]), { report: "08:30", reportedAt: "2026-11-02T00:00:00.000Z", reportState: "new", times: ["08:30", "09:00"] });
+  assert.deepEqual(mergeThreadReports([{}]), { times: [] });
+});
+
+test("on load, a lead's chats with different report times leave it the earliest, and the latest chat says so", async (t) => {
+  const { repo } = await setup(t);
+  const chat = (id: string, report: string, last: string, reportedAt?: string) => ({
+    id, title: id, agent: "codex", workers: ["claude"], cwd: repo, status: "done", createdAt: "2026-01-01T00:00:00.000Z", workspaceId: "personal",
+    events: [{ id: `${id}-e`, sessionId: id, agent: "user", type: "message", text: "hi", time: last }],
+    steward: { id: "L", turns: 1, since: "", name: "앱", report, ...(reportedAt ? { reportedAt } : {}) },
+  }) as unknown as Session;
+  const lead: Steward = { id: "L", name: "앱", agent: "codex", skills: [], systemPrompt: "", workers: [{ agent: "claude" }], mergePolicy: "auto", cwds: [repo], createdAt: "2026-01-01T00:00:00.000Z" };
+  const older = chat("older", "09:00", "2026-03-01T00:00:00.000Z", "2026-11-02T09:00:00.000Z");
+  const newer = chat("newer", "07:30", "2026-04-01T00:00:00.000Z");
+  const writes: Steward[][] = [];
+  const orchestra = new Orchestra();
+  orchestra.persistStewards = (list) => { writes.push(structuredClone(list)); };
+  orchestra.restore([older, newer], [lead]);
+  const moved = orchestra.getSteward("L")!;
+  assert.equal(moved.report, "07:30", "the earliest of the chats' times");
+  assert.equal(moved.reportedAt, "2026-11-02T09:00:00.000Z", "the last report counts, so nothing reports twice");
+  assert.equal(older.steward!.report, undefined);
+  assert.equal(newer.steward!.report, undefined);
+  assert.match(newer.events.at(-1)!.text, /07:30, 09:00[\s\S]*가장 이른 07:30/u, "the lead's latest chat tells the user");
+  assert.equal(older.events.length, 1);
+  assert.equal(writes.length, 1, "the lead is saved with its report");
+  // Loaded again: nothing is left to move.
+  const again = new Orchestra();
+  again.restore([structuredClone(older), structuredClone(newer)], writes[0]);
+  assert.equal(again.getSteward("L")!.report, "07:30");
+});
+
+test("a lead with several chats reports once a day, in the chat it used last, covering the others", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  const prompts: { session: string; prompt: string }[] = [];
+  const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => { prompts.push({ session: options.usageContext?.sessionId ?? "", prompt: options.prompt }); return { exitCode: 0, finalText: "보고" }; });
+  orchestra.stewardDataDir = dataDir;
+  const steward = orchestra.createSteward({ name: "보고", workers: [{ agent: "claude" }], cwds: [repo] });
+  const first = await orchestra.create({ prompt: "첫 채팅", agent: "codex", workers: ["claude"], cwd: repo, steward: { id: steward.id } });
+  await waitFor(() => first.status === "done");
+  const second = await orchestra.create({ prompt: "둘째 채팅", agent: "codex", workers: ["claude"], cwd: repo, steward: { id: steward.id } });
+  await waitFor(() => second.status === "done");
+  orchestra.updateSteward(first.id, { report: "00:00" });
+  assert.equal(orchestra.getSteward(steward.id)!.report, "00:00", "the old per-chat API sets the lead's report");
+  assert.equal(first.steward!.report, undefined);
+  const before = prompts.length;
+  await orchestra.stewardTick(new Date(Date.now() + 86_400_000));
+  await waitFor(() => second.status === "done" && prompts.length === before + 1);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(prompts.length, before + 1, "one report for the lead, not one per chat");
+  const report = prompts.at(-1)!;
+  assert.match(report.prompt, /정기 보고/u);
+  assert.match(report.prompt, /다른 채팅도 함께 보고[\s\S]*「첫 채팅」/u, "it covers the lead's other chat");
+  assert.ok(second.events.some((event) => event.text.startsWith("[앱 — 정기 보고]")), "it opens in the chat used last");
+  assert.ok(!first.events.some((event) => event.text.startsWith("[앱 — 정기 보고]")));
+  await orchestra.stewardTick(new Date(Date.now() + 86_400_000 + 60_000));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(prompts.length, before + 1, "once a day");
+  orchestra.setStewardReport(steward.id, null);
+  assert.equal(orchestra.getSteward(steward.id)!.report, undefined);
 });

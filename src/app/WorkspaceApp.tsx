@@ -39,7 +39,8 @@ import { ViewerContext } from "../media-ui";
 import { FileViewer } from "../FileViewer";
 import type { MediaRef } from "../viewer-model";
 import { ToolsPanel, toolsShortcut } from "../ToolsPanel";
-import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SessionDraft, SkillInfo as Skill, Bot as Preset } from "../../server/types";
+import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SessionDraft, SkillInfo as Skill, Bot as Preset, Steward } from "../../server/types";
+import { stewardDescription } from "../lead";
 import { scopedApi, workspaceApi, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
@@ -69,6 +70,7 @@ import { SessionsView } from "./SessionsView";
 import { TeamBarSlot } from "./TeamBarSlot";
 import { t } from "../i18n";
 import { PermissionPrompts, PERMISSIONS_EVENT } from "../PermissionPrompts";
+import { AppApprovals, APP_APPROVALS_EVENT } from "../AppApprovals";
 import { ComputerUseLayer } from "../ComputerUse";
 import { handleComputerMessage } from "../computer-use";
 
@@ -107,8 +109,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const scopedWorkspaces = useMemo(() => ({ ...workspacesApi, running: allSessions.length ? liveRunning : workspacesApi.running }), [workspacesApi, liveRunning, allSessions.length]);
   const [workerSelection, setWorkerSelection] = useState<{ sessionId: string; taskId: string }>();
   const [selected, setSelected] = useState<string>();
-  /** The next new chat starts as a project lead (sidebar "New project lead"). */
-  const [stewardDraft, setStewardDraft] = useState(false);
+  /** The next new chat starts as a project lead (sidebar "New project lead"): a new one, or a new chat of lead `id`. */
+  const [stewardDraft, setStewardDraft] = useState<false | { id?: string }>(false);
   const [tab, setTab] = useState(() => isUsageCommand(window.location.pathname) ? "usage" : "workspace");
   const [toolsTab, setToolsTab] = useState<{ tab: "mcp" | "skills"; n: number }>({ tab: "mcp", n: 0 });
   const [terminalHeight, setTerminalHeight] = useState(0);
@@ -382,6 +384,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     }
     if (message.type === "notifications") window.dispatchEvent(new Event("orchestra:notifications"));
     if (message.type === "permissions") window.dispatchEvent(new CustomEvent(PERMISSIONS_EVENT, { detail: message.requests }));
+    if (message.type === "app-approvals") window.dispatchEvent(new CustomEvent(APP_APPROVALS_EVENT, { detail: message.approvals }));
     if (message.type === "browser-command") window.dispatchEvent(new CustomEvent("orchestra:browser-command", { detail: message }));
     // An agent launched an app on a simulator: show that device in the simulator window.
     if (message.type === "sim-open" && typeof message.udid === "string") {
@@ -405,8 +408,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     (sessionRunning || !busy) &&
     allowedAgents.length >= 1 &&
     !(mode === "manual" && unavailableWarning) &&
-    connected &&
-    (active || mode === "auto" || workers.length),
+    // No workers picked is fine: the server uses the lead's team, else the workspace's (withWorkspaceTeam).
+    connected,
   );
   const canSend = Boolean((prompt.trim() || attachments.some((item) => item.kind === "element" || item.screenshotPath)) && canSendBase && attachmentsReady);
   const { bottom, chatBody, showChatBottom, scrollToChatBottom, onChatScroll } = useChatScroll({
@@ -535,7 +538,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
             skills: [...new Set([...skills, ...messageSkills])], groupId: groupId || undefined,
             systemPrompt, mode, autoSwitch, workspaceId, permissionMode: sendMode,
             autoRun: autoRunEnabled(),
-            ...(stewardDraft ? { steward: {} } : {}),
+            // A chat of an existing lead: the server gives it the lead's instructions, skills, team and merge policy.
+            ...(stewardDraft ? { steward: stewardDraft.id ? { id: stewardDraft.id } : {} } : {}),
           }, executeRecommendation ? pendingRecommendation : undefined, setRouting);
           setSessions((old) => [s, ...old.filter((x) => x.id !== s.id)]);
           setSelected(s.id);
@@ -585,6 +589,21 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   };
   const closeModal = useCallback(() => setModal(undefined), []);
   useModalFocusTrap(modal, closeModal);
+  // Leads as entities, for the sidebar's lead list and the new-chat lead picker.
+  const [stewards, setStewards] = useState<Steward[]>([]);
+  const stewardKey = sessions.filter((session) => session.steward).map((session) => `${session.steward!.id}:${session.steward!.name}`).join("|");
+  useEffect(() => {
+    let live = true;
+    api<Steward[]>("/stewards").then((list) => { if (live) setStewards(list); }, () => undefined);
+    return () => { live = false; };
+  }, [api, stewardKey, stewardDraft !== false]);
+  const chosenSteward = stewardDraft && stewardDraft.id ? stewards.find((item) => item.id === stewardDraft.id) : undefined;
+  /** A new chat of an existing lead, opened in the lead's first folder. */
+  const pickSteward = (id: string) => {
+    setStewardDraft({ id });
+    const folder = stewards.find((item) => item.id === id)?.cwds[0];
+    if (folder) setCwd(folder);
+  };
   const newSession = () => {
     setStewardDraft(false);
     setSelected(undefined);
@@ -735,7 +754,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} tab={tab}
           onNavigate={(next) => { setTab(next); closeSidebarOverlay(); }} onSkills={() => { closeSidebarOverlay(); openTools("skills"); }} onSettings={() => { closeSidebarOverlay(); openSettingsAt(); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
           onNew={(id) => { newSession(); setGroupId(id ?? ""); closeSidebarOverlay(); }}
-          onNewSteward={() => { newSession(); setStewardDraft(true); closeSidebarOverlay(); window.setTimeout(() => composerInput.current?.focus(), 0); }} selectedWorker={selectedWorker?.id} onSelectWorker={(sessionId, taskId) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); }} onSelect={(id) => { selectConversation(id); closeSidebarOverlay(); }}
+          onNewSteward={() => { newSession(); setStewardDraft({}); closeSidebarOverlay(); window.setTimeout(() => composerInput.current?.focus(), 0); }}
+          stewards={stewards} onNewStewardThread={(id) => { newSession(); pickSteward(id); closeSidebarOverlay(); window.setTimeout(() => composerInput.current?.focus(), 0); }} selectedWorker={selectedWorker?.id} onSelectWorker={(sessionId, taskId) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); }} onSelect={(id) => { selectConversation(id); closeSidebarOverlay(); }}
           onHelp={() => { closeSidebarOverlay(); openSettingsAt("environment", "env-onboarding"); }} onUsage={() => { closeSidebarOverlay(); openUsage(); }}
           onCreateGroup={(name) => safe(async () => {
             const group = await api<Group>("/groups", { name, workspaceId });
@@ -829,10 +849,14 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                       </div> : <div className="minimal-empty">
                         {activeProject && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
                         {stewardDraft ? <>
-                          <h2><UserCheck size={20} aria-hidden="true" /> {t("steward.newTitle")}</h2>
-                          <p className="minimal-empty-note">{t("steward.newBody")}</p>
+                          <h2><UserCheck size={20} aria-hidden="true" /> {chosenSteward ? t("steward.threadTitle", { name: chosenSteward.name }) : t("steward.newTitle")}</h2>
+                          <p className="minimal-empty-note">{chosenSteward ? t("steward.pickHint") : t("steward.newBody")}</p>
+                          {stewards.length > 0 && <div className="steward-picker" role="radiogroup" aria-label={t("steward.pickTitle")}>
+                            <button type="button" role="radio" aria-checked={!chosenSteward} onClick={() => setStewardDraft({})}><strong>{t("steward.pickNew")}</strong><small>{t("steward.pickNewHint")}</small></button>
+                            {stewards.map((item) => <button type="button" role="radio" key={item.id} aria-checked={chosenSteward?.id === item.id} onClick={() => pickSteward(item.id)}><strong>{item.name}</strong><small>{stewardDescription(item) || "\u00a0"}</small></button>)}
+                          </div>}
                           <div className="prompt-chips">
-                            <button onClick={() => { setPrompt(t("steward.newChipText")); composerInput.current?.focus(); }}>{t("steward.newChip")}</button>
+                            {!chosenSteward && <button onClick={() => { setPrompt(t("steward.newChipText")); composerInput.current?.focus(); }}>{t("steward.newChip")}</button>}
                             <button onClick={() => setStewardDraft(false)}>{t("steward.newCancel")}</button>
                           </div>
                         </> : <>
@@ -857,6 +881,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                   {showChatBottom && !selectedWorker && <button type="button" className="chat-bottom-button" onClick={() => scrollToChatBottom()}><ArrowDown size={15} />{t("ws.toBottom")}</button>}
                   <PermissionPrompts workspaceId={workspaceId} activeSessionId={active?.id} sessionTitle={(id) => sessions.find((item) => item.id === id)?.title}
                     onOpenSession={(id) => setSelected(id)} />
+                  <AppApprovals activeSessionId={active?.id} sessionTitle={(id) => sessions.find((item) => item.id === id)?.title} onOpenSession={(id) => setSelected(id)} />
                   {!selectedWorker && <Composer completion={completion} attachments={attachmentState} prompt={prompt} setPrompt={setPrompt}
                     skills={skills} messageSkills={messageSkills} setMessageSkills={setMessageSkills} availableSkills={boot.skills}
                     active={active} sessionRunning={sessionRunning} busy={busy} routing={routing} liveNote={liveNote} chatError={chatError} unavailableWarning={unavailableWarning} onOpenWorkspaceSettings={openWorkspaceSettings}

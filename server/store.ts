@@ -1,14 +1,16 @@
 import { readdir, rename, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isArray, isPlainObject, readJsonFile, writeJsonFile } from "./json-file.js";
-import type { Bot, Group, Session, ToolSettings, ToolWorkspaceSettings, WorkspaceDefaults, WorkspaceInfo, WorkspacePolicy, WorkspaceState } from "./types.js";
+import type { Bot, Group, Steward, StewardSettings, Session, ToolSettings, ToolWorkspaceSettings, WorkspaceDefaults, WorkspaceInfo, WorkspacePolicy, WorkspaceState } from "./types.js";
 import { defaultWorkspacePolicy, normalizeWorkspacePolicy } from "./workspace-policy.js";
 import { normalizeWorkerConfigs } from "./workers.js";
 import { defaultDataDir } from "./runtime.js";
 
 const dataDir = defaultDataDir;
 const botsFile = (directory: string) => resolve(directory, "bots.json");
+const stewardsFile = (directory: string) => resolve(directory, "stewards.json");
 let botMutationQueue: Promise<void> = Promise.resolve();
+let stewardMutationQueue: Promise<void> = Promise.resolve();
 let groupMutationQueue: Promise<void> = Promise.resolve();
 let sessionMutationQueue: Promise<void> = Promise.resolve();
 let workspaceMutationQueue: Promise<void> = Promise.resolve();
@@ -36,6 +38,18 @@ export async function loadBots(directory = dataDir): Promise<Bot[]> {
 
 async function saveBots(bots: Bot[], directory: string): Promise<void> {
   await saveArray(botsFile(directory), bots);
+}
+
+/** Project leads as their own entities (server/steward.ts); chats point at them by `steward.id`. */
+export async function loadStewards(directory = dataDir): Promise<Steward[]> {
+  return loadArray<Steward>(stewardsFile(directory));
+}
+
+/** Writes the whole list, in order with any other write of it. */
+export function saveStewards(stewards: Steward[], directory = dataDir): Promise<void> {
+  const operation = stewardMutationQueue.then(() => saveArray(stewardsFile(directory), stewards));
+  stewardMutationQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 async function readGroups(directory: string): Promise<Group[]> {
@@ -185,6 +199,13 @@ function legacyPolicies(workspaces: readonly WorkspaceInfo[], defaults: Record<s
   return settings;
 }
 
+/** App-wide lead settings as stored; junk values are dropped. */
+export function normalizeStewardSettings(value: unknown): StewardSettings | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const policy = (value as Record<string, unknown>).legacyMergePolicy;
+  return policy === "auto" || policy === "ask" ? { legacyMergePolicy: policy } : undefined;
+}
+
 async function readWorkspaceState(directory: string): Promise<{ state: WorkspaceState; migrated: boolean }> {
   const stored = await loadObject<Partial<WorkspaceState>>(resolve(directory, "workspaces.json"));
   let workspaces = sanitizeWorkspaces(stored?.workspaces);
@@ -207,7 +228,8 @@ async function readWorkspaceState(directory: string): Promise<{ state: Workspace
     migrated = true;
   }
   const current = workspaces.some((item) => item.id === stored?.currentWorkspaceId) ? stored!.currentWorkspaceId! : workspaces[0].id;
-  return { state: { currentWorkspaceId: current, workspaces, defaults, settings }, migrated };
+  const stewardSettings = normalizeStewardSettings(stored?.stewardSettings);
+  return { state: { currentWorkspaceId: current, workspaces, defaults, settings, ...(stewardSettings ? { stewardSettings } : {}) }, migrated };
 }
 
 /** Loads the workspace list, migrating (and persisting) files written before workspaces were configurable. */

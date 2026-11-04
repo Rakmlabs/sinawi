@@ -1,18 +1,24 @@
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes } from "./setup.js";
 import { BrowserBridge, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
-import { ComputerBridge, registerComputerRoutes, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
+import { ComputerBridge, registerComputerRoutes, SHOT_DIR, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
+import { findTool, handleToolMcp, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
+import { withJosa } from "./korean.js";
+import { ApprovalStore, approvalRequester, type AppApproval, type ApprovalStatus } from "./app-approvals.js";
+import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, ensureAppMcpToken, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
+import { LEAD_MCP_SERVER } from "./lead-tools.js";
+import { loadSchedules, saveSchedules, type ScheduleInput } from "./schedules.js";
 import { isComputerUseAllowed } from "./workspace-policy.js";
-import { computerContextForToken, computerDir, pruneComputerTokens } from "./computer-tokens.js";
+import { computerContextForToken, computerDir, pruneComputerTokens, resolveComputerToken } from "./computer-tokens.js";
 import { DevServerManager, devServerEnv } from "./dev-servers.js";
 import { registerOpenExternalRoute } from "./open-external.js";
-import { registerPermissionRoutes } from "./permission-prompts.js";
+import { registerPermissionRoutes, touchRunActivity } from "./permission-prompts.js";
 import { registerServeRoutes, watchServeQueue } from "./serve-tool.js";
 import { registerSimRoutes, watchSimQueue } from "./sim-tool.js";
 import { registerSimViewRoutes, SimScreen } from "./sim-view.js";
 import { cliChildEnv } from "./supervision.js";
 import { fullPath } from "./cli-path.js";
-import { envVar } from "./runtime.js";
+import { dataDirFor, envVar } from "./runtime.js";
 import { createServer as createHttpServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -37,7 +43,7 @@ import { Orchestra } from "./orchestra.js";
 import { discoverFiles } from "./files.js";
 import { enabledPublicSkills, publicSkills } from "./skills.js";
 import { RoutingService, type ModelCommandRunner, type PlannerRunner } from "./routing.js";
-import { workspaceIdPattern, createCoalescedSaver, loadBots, loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, workspaceToolSettings, mutateBots, mutateGroups, mutateToolSettings, mutateWorkspaceState, saveSessions } from "./store.js";
+import { workspaceIdPattern, createCoalescedSaver, loadBots, loadGroups, loadSessions, loadStewards, loadToolSettings, loadWorkspaceState, workspaceToolSettings, mutateBots, mutateGroups, mutateToolSettings, mutateWorkspaceState, saveSessions, saveStewards } from "./store.js";
 import { discoverMcpTools, updateMcpTool, type ToolCommandRunner } from "./tools.js";
 import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, Session, SessionDraft, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
 import { randomUUID } from "node:crypto";
@@ -45,7 +51,7 @@ import { registerSessionFileRoutes } from "./session-files.js";
 import { registerLinkPreviewRoute } from "./link-preview.js";
 import { registerWorktreeRoutes } from "./worktree-routes.js";
 import { cleanupSessionWorktrees } from "./worktrees.js";
-import { readNotes, reportTime, STEWARD_ROLLOVER_TURNS, stewardName, transcriptPath } from "./steward.js";
+import { isMergePolicy, LEGACY_MERGE_POLICY, readNotes, readUserPreferences, reportTime, saveNotes, saveUserPreferences, STEWARD_ROLLOVER_TURNS, stewardName, stewardNotesId, transcriptPath, USER_PREFERENCES_LIMIT, type StewardPatch } from "./steward.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -208,11 +214,33 @@ function conversationSettings(body: any): ConversationSettings {
   return { mode: body?.mode, autoSwitch: body?.autoSwitch, permissionMode: body?.permissionMode, autoRun: body?.autoRun };
 }
 
-function startInput(body: any, workspace: WorkspaceResolver, fallbackWorkspace: WorkspaceId): StartSessionInput {
+/** Schedule fields from a request body; schedules.ts checks the values. */
+function scheduleInput(body: any): ScheduleInput {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("일정 값이 올바르지 않습니다.");
+  const out: ScheduleInput = {};
+  for (const key of ["title", "prompt", "at", "cron", "timezone"] as const) {
+    if (body[key] === undefined) continue;
+    if (body[key] !== null && typeof body[key] !== "string") throw new Error(`일정 ${key} 값이 올바르지 않습니다.`);
+    out[key] = body[key] ?? "";
+  }
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean") throw new Error("일정 enabled 값이 올바르지 않습니다.");
+    out.enabled = body.enabled;
+  }
+  return out;
+}
+
+export function startInput(body: any, workspace: WorkspaceResolver, fallbackWorkspace: WorkspaceId): StartSessionInput {
   return {
     ...conversationSettings(body),
-    prompt: string(body?.prompt), agent: agent(body?.agent),
-    workers: agents(body?.workers, 3), cwd: string(body?.cwd, 4_096),
+    // A new thread of a lead may leave the team out: Orchestra.create fills it from the lead (or the workspace).
+    // No prompt opens an empty chat (Orchestra.create); the first message comes later as a follow-up.
+    prompt: body?.prompt == null || body.prompt === "" ? "" : string(body.prompt),
+    ...(body?.title == null || body.title === "" ? {} : { title: string(body.title, 100) }),
+    // Left out: the lead's agent, else the workspace's default (filled in the route and Orchestra.create).
+    agent: body?.agent == null || body.agent === "" ? undefined as unknown as AgentId : agent(body.agent),
+    // A new thread of a lead may leave the folder out: it opens in the lead's (Orchestra.create).
+    workers: agents(body?.workers, 3), cwd: body?.steward?.id && (body?.cwd == null || body.cwd === "") ? "" : string(body?.cwd, 4_096),
     model: optionalString(body?.model, 200), reasoningEffort: optionalReasoningEffort(body?.reasoningEffort),
     workerConfigs: agentSelections(body?.workerConfigs), planner: body?.planner == null ? undefined : agentSelection(body.planner),
     skills: ids(body?.skills),
@@ -221,8 +249,24 @@ function startInput(body: any, workspace: WorkspaceResolver, fallbackWorkspace: 
     workspaceId: workspace(body?.workspaceId, fallbackWorkspace),
     // A commander's goal sessions are started by the app (parentId), never from a request.
     ...(body?.commander === true ? { commander: true } : body?.goal === true ? { goal: true } : {}),
-    ...(body?.steward === true || body?.steward && typeof body.steward === "object" ? { steward: { name: optionalString(body.steward?.name, 80) } } : {}),
+    ...(body?.steward === true || body?.steward && typeof body.steward === "object" ? { steward: { name: optionalString(body.steward?.name, 80), ...(body.steward?.id ? { id: string(body.steward.id, 100) } : {}) } } : {}),
   };
+}
+
+/**
+ * A chat asked for without workers (or a lead agent): the workspace's default team, else every
+ * agent it allows. A lead's own team still wins in Orchestra.create, so only the gaps are filled.
+ */
+export function withWorkspaceTeam(input: StartSessionInput, defaults: WorkspaceDefaults, allowed: AgentId[]): StartSessionInput {
+  if (input.workers?.length && input.agent) return input;
+  const usable = (list: AgentId[] | undefined) => (list ?? []).filter((id) => allowed.includes(id));
+  const workers = input.workers?.length ? input.workers : usable(defaults.workers).length ? usable(defaults.workers) : [...allowed];
+  // The default team's own worker settings only fit when the workers are that team's.
+  const workerConfigs = input.workers?.length || input.workerConfigs?.length ? input.workerConfigs
+    : defaults.workerConfigs?.length && usable(defaults.workers).length === (defaults.workers?.length ?? 0) ? structuredClone(defaults.workerConfigs) : undefined;
+  // A lead's thread keeps its gap for the lead's agent (Orchestra.create).
+  const agentId = input.agent || (input.steward?.id ? input.agent : usable(defaults.agent ? [defaults.agent] : [])[0] ?? (allowed.includes("claude") ? "claude" : allowed[0]));
+  return { ...input, agent: agentId, workers, ...(workerConfigs ? { workerConfigs } : {}) };
 }
 
 export function workspaceDefaults(value: unknown): WorkspaceDefaults {
@@ -252,6 +296,27 @@ export function workspaceDefaults(value: unknown): WorkspaceDefaults {
     ...(input.reasoningEffort == null || input.reasoningEffort === "" ? {} : { reasoningEffort: optionalReasoningEffort(input.reasoningEffort) }),
     ...(input.workerConfigs == null ? {} : { workerConfigs: agentSelections(input.workerConfigs) }),
   };
+}
+
+/** A Steward's fields from a request; only the ones sent. `create` requires the name. */
+export function stewardInput(body: any, create = false): StewardPatch {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("담당 설정이 올바르지 않습니다.");
+  if (body.mergePolicy !== undefined && !isMergePolicy(body.mergePolicy)) throw new Error("병합 정책은 auto, ask, never 중 하나여야 합니다.");
+  if (body.systemPrompt !== undefined && typeof body.systemPrompt !== "string") throw new Error("담당 지침이 올바르지 않습니다.");
+  if (typeof body.systemPrompt === "string" && body.systemPrompt.length > 50_000) throw new Error("담당 지침이 너무 깁니다.");
+  const patch: StewardPatch = {
+    ...(create || body.name !== undefined ? { name: string(body.name, 80) } : {}),
+    ...(body.systemPrompt !== undefined ? { systemPrompt: body.systemPrompt.trim() } : {}),
+    ...(body.skills !== undefined ? { skills: ids(body.skills) } : {}),
+    ...(body.agent !== undefined ? { agent: agent(body.agent) } : {}),
+    ...(body.model !== undefined ? { model: optionalString(body.model, 200) ?? "" } : {}),
+    ...(body.reasoningEffort !== undefined ? { reasoningEffort: optionalReasoningEffort(body.reasoningEffort) ?? "" } : {}),
+    ...(body.workers !== undefined ? { workers: agentSelections(body.workers) } : {}),
+    ...(body.mergePolicy !== undefined ? { mergePolicy: body.mergePolicy } : {}),
+    ...(body.cwds !== undefined ? { cwds: ids(body.cwds, 20).map((cwd) => resolve(string(cwd, 4_096))) } : {}),
+  };
+  if (!create && !Object.keys(patch).length && body.notes === undefined && body.report === undefined) throw new Error("담당 설정이 올바르지 않습니다.");
+  return patch;
 }
 
 function teamInput(body: any): UpdateTeamInput {
@@ -296,7 +361,7 @@ export function withWorkspaceMcpBlocks(runner: PlannerRunner, dataDir?: string, 
   };
 }
 
-export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean } = {}) {
+export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean } = {}) {
   const app = express();
   app.disable("x-powered-by");
   const smallJson = express.json({ limit: "1mb" });
@@ -409,7 +474,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   (prompt) => routing.loadSettings().then((settings) => mediaRouteRequired(prompt, settings.rules)), options.inactivityTimeoutMs, policyFor);
   // Per-worker git worktrees (server/worktrees.ts). Opt-in so tests and embedders never create branches.
   if (options.worktrees) orchestra.worktreeDataDir = options.dataDir ?? join(homedir(), ".sinawi");
-  orchestra.stewardDataDir = options.dataDir ?? join(homedir(), ".sinawi");
+  // Leads' notes, transcripts and the user's preferences live in the data folder the stores use
+  // (SINAWI_DATA_DIR when set), never in ~/.sinawi behind a custom one's back.
+  orchestra.stewardDataDir = dataDirFor(options.dataDir);
   // Leads' daily reports: checked every minute, and once shortly after start for a report missed while closed.
   const stewardTimer = setInterval(() => void orchestra.stewardTick().catch(() => undefined), 60_000);
   stewardTimer.unref();
@@ -422,10 +489,16 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const availability = await Promise.all(ids.map(commandAvailable));
     return ids.filter((_id, index) => availability[index]);
   };
-  const ready = Promise.all([loadSessions(options.dataDir), loadWorkspaceState(options.dataDir)]).then(async ([sessions, state]) => {
+  orchestra.persistStewards = (stewards) => saveStewards(stewards, options.dataDir);
+  const schedulesDir = dataDirFor(options.dataDir);
+  orchestra.persistSchedules = (schedules) => saveSchedules(schedulesDir, schedules);
+  const ready = Promise.all([loadSessions(options.dataDir), loadWorkspaceState(options.dataDir), loadStewards(options.dataDir), loadSchedules(schedulesDir)]).then(async ([sessions, state, stewards, schedules]) => {
     workspaceState = state;
     await recoverStaleSessions(sessions, persistAllSessions);
-    orchestra.restore(sessions);
+    // Lead chats saved before leads were entities get one here (Orchestra.restore).
+    orchestra.restore(sessions, stewards, { legacyMergePolicy: state.stewardSettings?.legacyMergePolicy });
+    // Missed while the app was off: the first stewardTick runs or skips them (MISSED_GRACE_MS).
+    orchestra.restoreSchedules(schedules);
   });
   // Start discovery even when settings were saved by an earlier app version.
   // Settings errors remain visible through the API without blocking session recovery.
@@ -867,8 +940,10 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   app.post("/api/sessions", async (req, res) => {
     try {
-      const input = startInput(req.body, workspace, currentWorkspace());
-      await assertMediaAvailable(input.prompt, input.workspaceId ?? currentWorkspace());
+      const parsed = startInput(req.body, workspace, currentWorkspace());
+      const workspaceId = parsed.workspaceId ?? currentWorkspace();
+      const input = withWorkspaceTeam(parsed, workspaceState.defaults[workspaceId] ?? {}, allowedFor(workspaceId));
+      if (input.prompt) await assertMediaAvailable(input.prompt, input.workspaceId ?? currentWorkspace());
       if (input.groupId && !(await loadGroups(options.dataDir)).some((group) => group.id === input.groupId && group.workspaceId === input.workspaceId)) throw new Error("그룹을 찾을 수 없습니다.");
       res.status(201).json(await orchestra.create(input));
     }
@@ -877,7 +952,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   // Chat attachments and results, scoped to the session work folder (plus pasted/dropped uploads).
   registerSessionFileRoutes(app, {
     lookup: (id) => orchestra.get(id),
-    extraRoots: () => [previewAssetsDir(options.dataDir)],
+    // A worker's result (a design screenshot copied into its worktree) shows in the chat too.
+    extraRoots: (session) => [previewAssetsDir(options.dataDir), ...(session?.worktrees?.map((item) => item.path) ?? []), SHOT_DIR],
     previewRoot: () => previewAssetsDir(options.dataDir),
     cacheDir: () => join(options.dataDir ?? join(homedir(), ".sinawi"), "file-previews"),
   });
@@ -928,13 +1004,16 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   app.get("/api/sessions/:id/steward", async (req, res) => {
     try {
+      await ready;
       const session = orchestra.get(routeParam(req.params.id));
       if (!session?.steward) throw new Error("담당 채팅이 아닙니다.");
       const dir = orchestra.stewardDataDir;
       res.json({
-        notes: dir ? await readNotes(dir, session.id) : "", transcript: dir ? transcriptPath(dir, session.id) : undefined,
+        steward: orchestra.stewardOf(session) ?? null, pendingMerge: session.steward.pendingMerge ?? null,
+        threads: orchestra.stewardThreads(session.steward.id ?? session.id).length,
+        notes: dir ? await readNotes(dir, stewardNotesId(session)) : "", transcript: dir ? transcriptPath(dir, session.id) : undefined,
         turns: session.steward.turns, rolloverAt: STEWARD_ROLLOVER_TURNS,
-        name: stewardName(session), report: session.steward.report ?? null, acceptWork: Boolean(session.steward.acceptWork),
+        name: stewardName(session), report: orchestra.stewardOf(session)?.report ?? session.steward.report ?? null, acceptWork: Boolean(session.steward.acceptWork),
         peers: orchestra.list().filter((item) => item.steward && item.id !== session.id).map((item) => ({ id: item.id, name: stewardName(item), cwd: item.cwd })),
       });
     } catch (error) { errorResponse(res, error, 404); }
@@ -952,6 +1031,277 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       await persistSessions(orchestra.list());
       res.json(session);
     } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }
+  });
+  // One chat at a glance: status, the lead's last answer, its checklist, a merge waiting for approval
+  // and the lead. Meant for tools that drive the app from outside (an MCP layer).
+  app.get("/api/sessions/:id/summary", async (req, res) => {
+    try { await ready; res.json(orchestra.summary(routeParam(req.params.id))); }
+    catch (error) { errorResponse(res, error, 404); }
+  });
+  app.post("/api/sessions/:id/merge/approve", async (req, res) => {
+    try {
+      const session = await orchestra.approveMerge(routeParam(req.params.id));
+      await persistSessions(orchestra.list());
+      res.json(session);
+    } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }
+  });
+  app.post("/api/sessions/:id/merge/reject", async (req, res) => {
+    try {
+      const session = orchestra.rejectMerge(routeParam(req.params.id));
+      await persistSessions(orchestra.list());
+      res.json(session);
+    } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "세션을 찾을 수 없습니다." ? 404 : 400); }
+  });
+
+  // Project leads as entities (server/steward.ts): chats are their threads (`steward.id`).
+  const stewardPayload = async (id: string) => {
+    const steward = orchestra.getSteward(id);
+    if (!steward) throw new Error("담당을 찾을 수 없습니다.");
+    const dir = orchestra.stewardDataDir;
+    return { ...steward, notes: dir ? await readNotes(dir, id) : "", threads: orchestra.stewardThreads(id).map((session) => ({ id: session.id, title: session.title, status: session.status, cwd: session.cwd })) };
+  };
+  const stewardStatus = (error: unknown) => error instanceof Error && error.message === "담당을 찾을 수 없습니다." ? 404 : 400;
+  // App-wide lead settings (workspaces.json `stewardSettings`) and the one-click policy change.
+  app.get("/api/stewards/settings", async (_req, res) => {
+    try { await ready; res.json({ legacyMergePolicy: workspaceState.stewardSettings?.legacyMergePolicy ?? LEGACY_MERGE_POLICY }); }
+    catch (error) { errorResponse(res, error, 500); }
+  });
+  app.put("/api/stewards/settings", async (req, res) => {
+    try {
+      await ready;
+      const policy = req.body?.legacyMergePolicy;
+      if (policy !== "auto" && policy !== "ask") throw new Error("이전된 담당의 병합 정책은 auto 또는 ask여야 합니다.");
+      workspaceState = await mutateWorkspaceState((state) => { state.stewardSettings = { ...state.stewardSettings, legacyMergePolicy: policy }; return state; }, options.dataDir);
+      const updated = orchestra.setLegacyMergePolicy(policy);
+      await saveStewards(orchestra.listStewards(), options.dataDir);
+      res.json({ legacyMergePolicy: policy, updated });
+    } catch (error) { errorResponse(res, error); }
+  });
+  app.post("/api/stewards/merge-policy/bulk", async (req, res) => {
+    try {
+      await ready;
+      const policy = req.body?.policy;
+      if (!isMergePolicy(policy)) throw new Error("병합 정책은 auto, ask, never 중 하나여야 합니다.");
+      const updated = orchestra.setAllMergePolicies(policy);
+      await saveStewards(orchestra.listStewards(), options.dataDir);
+      res.json({ policy, updated, stewards: orchestra.listStewards() });
+    } catch (error) { errorResponse(res, error); }
+  });
+  app.get("/api/stewards", async (_req, res) => {
+    try { await ready; res.json(orchestra.listStewards()); } catch (error) { errorResponse(res, error, 500); }
+  });
+  app.post("/api/stewards", async (req, res) => {
+    try {
+      await ready;
+      const report = req.body?.report == null || req.body.report === "" ? undefined : reportTime(req.body.report);
+      if (req.body?.report != null && req.body.report !== "" && !report) throw new Error("보고 시각은 HH:MM 형식이어야 합니다.");
+      const steward = orchestra.createSteward(stewardInput(req.body, true) as StewardPatch & { name: string });
+      if (report) orchestra.setStewardReport(steward.id, report);
+      await saveStewards(orchestra.listStewards(), options.dataDir);
+      res.status(201).json(await stewardPayload(steward.id));
+    } catch (error) { errorResponse(res, error); }
+  });
+  app.get("/api/stewards/:id", async (req, res) => {
+    try { await ready; res.json(await stewardPayload(routeParam(req.params.id))); } catch (error) { errorResponse(res, error, stewardStatus(error)); }
+  });
+  app.patch("/api/stewards/:id", async (req, res) => {
+    try {
+      await ready;
+      const id = routeParam(req.params.id);
+      if (!orchestra.getSteward(id)) throw new Error("담당을 찾을 수 없습니다.");
+      const patch = stewardInput(req.body);
+      if (req.body.notes !== undefined && typeof req.body.notes !== "string") throw new Error("담당 노트가 올바르지 않습니다.");
+      const report = req.body.report === null || req.body.report === "" ? null : req.body.report === undefined ? undefined : reportTime(req.body.report);
+      if (report === undefined && req.body.report !== undefined) throw new Error("보고 시각은 HH:MM 형식이어야 합니다.");
+      if (Object.keys(patch).length) orchestra.patchSteward(id, patch);
+      if (report !== undefined) orchestra.setStewardReport(id, report);
+      // The user edits the notes by hand: the lead reads them at the start of its next turn.
+      if (typeof req.body.notes === "string" && orchestra.stewardDataDir) await saveNotes(orchestra.stewardDataDir, id, req.body.notes.slice(0, 20_000));
+      await saveStewards(orchestra.listStewards(), options.dataDir);
+      await persistSessions(orchestra.list());
+      res.json(await stewardPayload(id));
+    } catch (error) { errorResponse(res, error, stewardStatus(error)); }
+  });
+  app.delete("/api/stewards/:id", async (req, res) => {
+    try {
+      await ready;
+      orchestra.deleteSteward(routeParam(req.params.id));
+      await saveStewards(orchestra.listStewards(), options.dataDir);
+      await persistSessions(orchestra.list());
+      res.status(204).end();
+    } catch (error) { errorResponse(res, error, stewardStatus(error)); }
+  });
+  // A lead's schedules (schedules.ts). The lead makes them with its tools; the user here.
+  app.get("/api/stewards/:id/schedules", async (req, res) => {
+    try {
+      await ready;
+      const id = routeParam(req.params.id);
+      if (!orchestra.getSteward(id)) throw new Error("담당을 찾을 수 없습니다.");
+      res.json(orchestra.listSchedules(id));
+    } catch (error) { errorResponse(res, error, stewardStatus(error)); }
+  });
+  app.post("/api/stewards/:id/schedules", async (req, res) => {
+    try {
+      await ready;
+      const schedule = orchestra.createLeadSchedule(routeParam(req.params.id), scheduleInput(req.body), "user");
+      await Promise.all([saveSchedules(schedulesDir, orchestra.listSchedules()), persistSessions(orchestra.list())]);
+      res.status(201).json(schedule);
+    } catch (error) { errorResponse(res, error, stewardStatus(error)); }
+  });
+  app.patch("/api/schedules/:id", async (req, res) => {
+    try {
+      await ready;
+      const schedule = orchestra.updateLeadSchedule(routeParam(req.params.id), scheduleInput(req.body), "user");
+      await Promise.all([saveSchedules(schedulesDir, orchestra.listSchedules()), persistSessions(orchestra.list())]);
+      res.json(schedule);
+    } catch (error) { errorResponse(res, error, /찾을 수 없/u.test(error instanceof Error ? error.message : "") ? 404 : 400); }
+  });
+  app.delete("/api/schedules/:id", async (req, res) => {
+    try {
+      await ready;
+      orchestra.deleteLeadSchedule(routeParam(req.params.id), "user");
+      await Promise.all([saveSchedules(schedulesDir, orchestra.listSchedules()), persistSessions(orchestra.list())]);
+      res.status(204).end();
+    } catch (error) { errorResponse(res, error, /찾을 수 없/u.test(error instanceof Error ? error.message : "") ? 404 : 400); }
+  });
+  // ---------- app tools over MCP (app-tools.ts) ----------
+  // One registry, two surfaces: a lead's run (/api/lead-mcp, its run token) and outside AIs
+  // (/api/app-mcp, the app's external token). Tools run the routes above in-process.
+  const dispatch = routeDispatcher(app as never);
+  const mcpDataDir = dataDirFor(options.dataDir);
+  const sendApprovals = async () => {
+    const message = JSON.stringify({ type: "app-approvals", approvals: await approvals.list({ status: "pending" }) });
+    for (const client of openClients()) client.send(message);
+  };
+  const approvals = new ApprovalStore(mcpDataDir, (item) => {
+    const key = `approval:${item.id}`;
+    if (item.status === "pending") {
+      notify({ workspaceId: item.workspaceId, type: "permission", key, title: `AI가 승인을 기다립니다: ${item.summary}`, body: `${withJosa(approvalRequester(item), "이/가")} 요청한 '${item.tool}'입니다. 앱의 승인 카드에서 승인하거나 거절하세요.`, ...(item.sessionId ? { action: { label: "세션 열기", sessionId: item.sessionId } } : {}) });
+      if (item.sessionId) orchestra.note(item.sessionId, `승인 대기: ${item.summary} (${item.tool})`);
+    } else {
+      void notifications.resolve(item.workspaceId, key).catch(() => undefined);
+      const verdict = item.status === "approved" ? "승인되어 실행했습니다" : item.status === "rejected" ? "거절했습니다" : "승인했지만 실행에 실패했습니다";
+      const detail = item.status === "failed" ? item.error ?? "" : item.status === "approved" ? item.result ?? "" : "";
+      notify({ workspaceId: item.workspaceId, type: item.status === "failed" ? "error" : "info", key: `approval-result:${item.id}`, title: `${item.summary}: ${verdict}`, body: detail.slice(0, 2000), ...(item.sessionId ? { action: { label: "세션 열기", sessionId: item.sessionId } } : {}) });
+      if (item.sessionId) orchestra.note(item.sessionId, `${verdict}: ${item.summary} (${item.tool}, approvalId ${item.id})${detail ? `\n${detail.slice(0, 1500)}` : ""}`);
+    }
+    void sendApprovals().catch(() => undefined);
+  });
+  type CallerContext = { surface: ToolSurface; sessionId?: string; workspaceId: string; touch?: () => void };
+  /** Names for the IDs an approval's line mentions, read when it is asked for. */
+  const approvalNames = async () => {
+    const [groups, bots] = await Promise.all([loadGroups(options.dataDir).catch(() => []), loadBots(options.dataDir).catch(() => [])]);
+    return nameLookup({
+      session: (id) => orchestra.get(id)?.title,
+      lead: (id) => orchestra.getSteward(id)?.name,
+      workspace: (id) => workspaceState.workspaces.find((item) => item.id === id)?.name,
+      schedule: (id) => orchestra.listSchedules().find((item) => item.id === id)?.title,
+      group: (id) => groups.find((item) => item.id === id)?.name,
+      bot: (id) => bots.find((item) => item.id === id)?.name,
+    });
+  };
+  /** Who asked and where, by name, for the approval card. */
+  const approvalContext = (caller: CallerContext) => {
+    const session = caller.sessionId ? orchestra.get(caller.sessionId) : undefined;
+    const workspaceName = workspaceState.workspaces.find((item) => item.id === caller.workspaceId)?.name;
+    return {
+      ...(session?.steward ? { requester: stewardName(session) } : {}),
+      ...(session?.title ? { sessionTitle: session.title } : {}),
+      ...(workspaceName ? { workspaceName } : {}),
+    };
+  };
+  const toolContext = (caller: CallerContext): ToolContext => ({
+    dispatch, workspaceId: caller.workspaceId,
+    ...(caller.surface === "lead" && caller.sessionId ? { leadCall: (name: string, args: Record<string, unknown>) => orchestra.leadToolCall(caller.sessionId!, name, args, caller.touch) } : {}),
+  });
+  /** A tool call from either surface: reads and creations run, the rest wait for the user. */
+  const callTool = async (caller: CallerContext, name: string, args: Record<string, unknown>) => {
+    const tool = findTool(caller.surface, name);
+    if (!tool) throw new Error(`알 수 없는 도구: ${name}`);
+    if (tool.risk !== "approval") return tool.run(args, toolContext(caller));
+    const item = await approvals.create({ tool: name, args, summary: tool.summary?.(args, await approvalNames()) ?? name, source: caller.surface, ...(caller.sessionId ? { sessionId: caller.sessionId } : {}), workspaceId: caller.workspaceId, ...approvalContext(caller) });
+    return { status: "pending_approval", approvalId: item.id, summary: item.summary, next: "사용자가 앱의 승인 카드에서 승인하면 실행됩니다. 결과는 list_approvals(approval_id)로 확인하세요. 같은 요청을 다시 보내지 마세요." };
+  };
+  const runApproved = (item: AppApproval) => {
+    const tool = findTool(item.source, item.tool);
+    if (!tool) throw new Error(`도구가 더 이상 없습니다: ${item.tool}`);
+    return tool.run(item.args, toolContext({ surface: item.source, sessionId: item.sessionId, workspaceId: item.workspaceId }));
+  };
+  // Only that run's own token works: it names the chat, and only the lead's run (not a worker's) may call.
+  app.post("/api/lead-mcp", async (req, res) => {
+    const token = req.get("x-sinawi-token") ?? "";
+    const run = resolveComputerToken(token);
+    const session = run ? orchestra.get(run.sessionId) : undefined;
+    if (!run || run.owner !== `${run.sessionId}:orchestrator` || !session?.steward) {
+      res.status(403).json({ error: "Sinawi: 담당 실행의 토큰이 아닙니다." });
+      return;
+    }
+    try {
+      await ready;
+      const caller: CallerContext = { surface: "lead", sessionId: run.sessionId, workspaceId: session.workspaceId, touch: () => touchRunActivity(token) };
+      const answer = await handleToolMcp(req.body ?? {}, "lead", LEAD_MCP_SERVER, (name, args) => callTool(caller, name, args));
+      if (!answer) { res.status(202).end(); return; }
+      res.json(answer);
+    } catch (error) { errorResponse(res, error, 500); }
+  });
+  // Outside AIs (scripts/sinawi-mcp.mjs): the token in <data>/app-mcp-token.
+  app.post("/api/app-mcp", async (req, res) => {
+    try {
+      if (!tokenMatches(await ensureAppMcpToken(mcpDataDir), presentedToken(req.headers))) {
+        res.status(401).json({ error: "Sinawi: MCP 토큰이 없거나 틀렸습니다. 설정 → 일반 → 외부 AI 연결에서 확인하세요." });
+        return;
+      }
+      await ready;
+      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace() };
+      const answer = await handleToolMcp(req.body ?? {}, "external", APP_MCP_SERVER, (name, args) => callTool(caller, name, args));
+      if (!answer) { res.status(202).end(); return; }
+      res.json(answer);
+    } catch (error) { errorResponse(res, error, 500); }
+  });
+  const connectionPayload = async (token: string) => {
+    const script = await installAppMcpScript(mcpDataDir).catch(() => undefined);
+    return { token, tokenFile: appMcpTokenPath(mcpDataDir), script: script ?? null, server: APP_MCP_SERVER, config: script ? clientConfig(script, token) : null };
+  };
+  // For the settings page: how to connect Claude Desktop (shows the token, so not a tool).
+  app.get("/api/app-mcp/connection", async (_req, res) => {
+    try { res.json(await connectionPayload(await ensureAppMcpToken(mcpDataDir))); }
+    catch (error) { errorResponse(res, error, 500); }
+  });
+  app.post("/api/app-mcp/token", async (_req, res) => {
+    try { res.json(await connectionPayload(await rotateAppMcpToken(mcpDataDir))); }
+    catch (error) { errorResponse(res, error, 500); }
+  });
+  // The app writes the token and script at start so `sinawi-mcp` finds them; tests and embedders make them on demand.
+  if (options.appMcp) void ensureAppMcpToken(mcpDataDir).then(() => installAppMcpScript(mcpDataDir)).catch(() => undefined);
+  // Pending approvals (app-approvals.ts): the cards in the app read and answer these.
+  const approvalStatuses = new Set<ApprovalStatus>(["pending", "approved", "rejected", "failed"]);
+  app.get("/api/app-approvals", async (req, res) => {
+    try {
+      const status = typeof req.query.status === "string" && req.query.status ? req.query.status as ApprovalStatus : undefined;
+      if (status && !approvalStatuses.has(status)) throw new Error("승인 상태가 올바르지 않습니다.");
+      const id = typeof req.query.id === "string" && req.query.id ? req.query.id : undefined;
+      res.json({ approvals: await approvals.list({ status, id }) });
+    } catch (error) { errorResponse(res, error); }
+  });
+  const decide = (approve: boolean) => async (req: Request, res: Response) => {
+    try { res.json(await approvals.decide(routeParam(req.params.id), approve, runApproved)); }
+    catch (error) { errorResponse(res, error, (error as { status?: number }).status ?? 400); }
+  };
+  app.post("/api/app-approvals/:id/approve", decide(true));
+  app.post("/api/app-approvals/:id/reject", decide(false));
+  // What the user wants from every lead, in user-preferences.md next to the leads' notes.
+  app.get("/api/user-preferences", async (_req, res) => {
+    try { res.json({ text: orchestra.stewardDataDir ? await readUserPreferences(orchestra.stewardDataDir) : "", limit: USER_PREFERENCES_LIMIT }); }
+    catch (error) { errorResponse(res, error, 500); }
+  });
+  app.put("/api/user-preferences", async (req, res) => {
+    try {
+      if (typeof req.body?.text !== "string") throw new Error("선호 내용이 올바르지 않습니다.");
+      if (req.body.text.length > USER_PREFERENCES_LIMIT) throw new Error(`선호는 ${USER_PREFERENCES_LIMIT}자까지 쓸 수 있습니다.`);
+      if (!orchestra.stewardDataDir) throw new Error("데이터 폴더가 없습니다.");
+      await saveUserPreferences(orchestra.stewardDataDir, req.body.text);
+      res.json({ text: await readUserPreferences(orchestra.stewardDataDir), limit: USER_PREFERENCES_LIMIT });
+    } catch (error) { errorResponse(res, error); }
   });
   app.patch("/api/sessions/:id/auto-switch", async (req, res) => {
     try {
@@ -1148,7 +1498,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try {
       const requestedTurns = Number(req.body?.turns);
       if (!Number.isFinite(requestedTurns) || !Number.isInteger(requestedTurns)) throw new Error("대화 턴 수는 정수여야 합니다.");
-      const input: ConversationInput = { botA: string(req.body?.botA, 100), botB: string(req.body?.botB, 100), turns: Math.min(Math.max(requestedTurns, 1), 20), prompt: string(req.body?.prompt), cwd: string(req.body?.cwd, 4_096), workspaceId: workspace(req.body?.workspaceId, currentWorkspace()) };
+      const input: ConversationInput = { botA: string(req.body?.botA, 100), botB: string(req.body?.botB, 100), turns: Math.min(Math.max(requestedTurns, 1), 20), prompt: string(req.body?.prompt), cwd: string(req.body?.cwd, 4_096), workspaceId: workspace(req.body?.workspaceId, currentWorkspace()), ...(conversationSettings(req.body).permissionMode ? { permissionMode: conversationSettings(req.body).permissionMode } : {}) };
       res.status(201).json(await orchestra.conversation(input, await loadBots(options.dataDir)));
     } catch (error) { errorResponse(res, error); }
   });

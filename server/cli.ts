@@ -1,4 +1,5 @@
 import { ensurePermissionServerScript, PERMISSION_TOOL, PROMPT_TIMEOUT_MS, permissionMcpConfig, registerRunActivity, unregisterRunActivity } from "./permission-prompts.js";
+import { claudeLeadServer, codexLeadArgs, ensureLeadServerScript, LEAD_MCP_RULE, LEAD_MCP_SERVER, LEAD_TOOL_TIMEOUT_MS, leadMcpLaunch, type LeadMcpLaunch } from "./lead-tools.js";
 import { cliChildEnv, DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
 import { envVar } from "./runtime.js";
@@ -56,6 +57,10 @@ export interface RunCliOptions {
    * for writable Claude runs. Claude then asks the user through the app instead of refusing.
    */
   permissionMcp?: string;
+  /** Attach the project lead's tools (lead-tools.ts) to this run; runCli turns it into `leadMcp`. */
+  leadTools?: boolean;
+  /** How this run starts the lead tool server (Claude `--mcp-config`, Codex `-c mcp_servers…`). Grok has no per-run MCP. */
+  leadMcp?: LeadMcpLaunch;
   /** `--settings` JSON for Claude (the Bash pre-approval hook); set by prepareCliInvocation. */
   claudeSettings?: string;
   /**
@@ -133,6 +138,7 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     }
     if (model) args.push("--model", model);
     if (reasoningEffort) args.push("-c", `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`);
+    if (options.leadMcp && !readOnly) args.push(...codexLeadArgs(options.leadMcp));
     if (resumeSessionId) args.push("resume", resumeSessionId, prompt);
     else args.push(prompt);
     return { command: cliName("codex"), args, cwd };
@@ -160,7 +166,15 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     }
     for (const pattern of new Set(blockedMcp ?? [])) args.push("--disallowedTools", pattern);
     // A hidden (SDK) flag, so `--help` never lists it; every Claude Code that has --settings has it.
-    if (!readOnly && !full && options.permissionMcp) args.push("--mcp-config", options.permissionMcp, "--permission-prompt-tool", PERMISSION_TOOL);
+    // One --mcp-config holds both Sinawi servers (permission prompts, lead tools); the user's own MCP config still loads.
+    const lead = !readOnly && options.leadMcp ? claudeLeadServer(options.leadMcp) : undefined;
+    const permission = !readOnly && !full && options.permissionMcp ? options.permissionMcp : undefined;
+    if (permission || lead) {
+      const servers = { ...(permission ? (JSON.parse(permission) as { mcpServers?: Record<string, unknown> }).mcpServers : {}), ...(lead ? { [LEAD_MCP_SERVER]: lead } : {}) };
+      args.push("--mcp-config", JSON.stringify({ mcpServers: servers }));
+      if (permission) args.push("--permission-prompt-tool", PERMISSION_TOOL);
+      if (lead && !full) args.push("--allowedTools", LEAD_MCP_RULE);
+    }
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     return { command: cliName("claude"), args, cwd };
   }
@@ -565,6 +579,11 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     const script = await ensurePermissionServerScript(options.usageContext.dataDir).catch(() => undefined);
     if (script) options = { ...options, permissionMcp: permissionMcpConfig(script, token) };
   }
+  // A project lead's own run gets its tools; the run token tells the app which chat is calling.
+  if (options.leadTools && token && !options.readOnly && !options.leadMcp && options.agent !== "grok" && options.usageContext?.dataDir) {
+    const script = await ensureLeadServerScript(options.usageContext.dataDir).catch(() => undefined);
+    if (script) options = { ...options, leadMcp: leadMcpLaunch(script, token) };
+  }
   if (token && options.onActivity) registerRunActivity(token, options.onActivity);
   const invocation = await prepareCliInvocation(options);
   return new Promise((resolve, reject) => {
@@ -577,7 +596,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     const child = spawn(invocation.command, invocation.args, {
       cwd: invocation.cwd,
       // A permission question waits for the user; Claude must not give up on that MCP call first.
-      env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv, ...(options.permissionMcp ? { MCP_TOOL_TIMEOUT: String(PROMPT_TIMEOUT_MS + 60_000) } : {}) }),
+      env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv, ...(options.permissionMcp || options.leadMcp ? { MCP_TOOL_TIMEOUT: String(Math.max(options.permissionMcp ? PROMPT_TIMEOUT_MS : 0, options.leadMcp ? LEAD_TOOL_TIMEOUT_MS : 0) + 60_000) } : {}) }),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });

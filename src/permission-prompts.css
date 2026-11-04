@@ -9,3 +9,5 @@
 .perm-deny { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .perm-allow { border: 0; background: var(--accent); color: var(--accent-text); }
 .perm-actions button:disabled { opacity: .6; cursor: default; }
+.perm-meta { color: var(--text-muted); font-size: var(--text-title); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-id { font-family: var(--font-mono); opacity: .75; }

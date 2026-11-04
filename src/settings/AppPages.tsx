@@ -5,13 +5,15 @@ import { updateAppearance, useAppearance } from "../appearance";
 import { GlassSelect } from "../GlassSelect";
 import { SHORTCUTS } from "../onboarding-state";
 import { UpdateSettings } from "../updates/UpdateSettings";
-import { t, type Lang } from "../i18n";
+import { t, type Lang, type MessageKey } from "../i18n";
 import { APPEARANCE_DEFAULTS } from "../app/AppearanceSettings";
 import { ConfirmDialog, SettingRow, SettingsPage, SettingsSection, StatusBadge, SwitchRow, useSaveStatus } from "./controls";
 import { NOTIFICATION_TYPES, resetToastTypes, setToastType, TOAST_PREFS_EVENT, toastTypes } from "./notification-prefs";
 import { translatedMap } from "../i18n";
 import { AUTO_RUN_KEY, autoRunEnabled, writePreference } from "../preferences";
 import type { NotificationType } from "../../server/notification-types";
+import { workspaceApi } from "../app/api";
+import { CopyButton } from "../CopyButton";
 
 const typeLabels = translatedMap<NotificationType>({ auth: "noti.auth", quota: "noti.quota", permission: "noti.permission", "run-finished": "noti.runFinished", lead: "noti.lead", error: "noti.error", info: "noti.info" });
 const typeHints = translatedMap<NotificationType>({ auth: "set.noti.authDesc", quota: "set.noti.quotaDesc", permission: "set.noti.permissionDesc", "run-finished": "set.noti.runFinishedDesc", lead: "set.noti.leadDesc", error: "set.noti.errorDesc", info: "set.noti.infoDesc" });
@@ -32,7 +34,10 @@ export function GeneralPage() {
     </SettingsSection>
     <SettingsSection title={t("set.general.work")}>
       <SwitchRow id="autoRun" label={t("set.general.autoRun")} description={t("set.general.autoRunDesc")} value={autoRun} save={saveAutoRun} />
+      <UserPreferencesRow />
     </SettingsSection>
+    <LeadSettingsSection />
+    <AppMcpSection />
     <SettingsSection title={t("set.danger")} danger>
       <SettingRow id="reset" label={t("set.general.reset")} description={t("set.general.resetDesc")}>
         <button type="button" className="settings-button danger-outline" onClick={() => setConfirm(true)}>{t("set.general.resetAction")}</button>
@@ -52,6 +57,117 @@ function useToastTypes() {
     return () => window.removeEventListener(TOAST_PREFS_EVENT, sync);
   }, []);
   return types;
+}
+
+type Policy = "auto" | "ask" | "never";
+const policyLabel = (policy: Policy) => t(`steward.merge.${policy}` as MessageKey);
+
+/** App-wide lead settings: the merge policy migrated leads get, and one click to set every lead's. */
+function LeadSettingsSection() {
+  const { track } = useSaveStatus();
+  const [legacy, setLegacy] = useState<"auto" | "ask">();
+  const [confirm, setConfirm] = useState<Policy>();
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    workspaceApi<{ legacyMergePolicy: "auto" | "ask" }>("/stewards/settings").then((next) => { if (live) setLegacy(next.legacyMergePolicy); }, (reason) => { if (live) setError(String(reason instanceof Error ? reason.message : reason)); });
+    return () => { live = false; };
+  }, []);
+  const fail = (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason));
+  const saveLegacy = (value: "auto" | "ask") => {
+    setError(""); setNote("");
+    void track(async () => {
+      const next = await workspaceApi<{ legacyMergePolicy: "auto" | "ask"; updated: number }>("/stewards/settings", { legacyMergePolicy: value }, "PUT");
+      setLegacy(next.legacyMergePolicy);
+      setNote(t("set.general.legacyMergeDone", { count: next.updated }));
+    }).catch(fail);
+  };
+  const applyAll = (policy: Policy) => {
+    setConfirm(undefined); setError(""); setNote("");
+    void track(async () => {
+      const next = await workspaceApi<{ updated: number }>("/stewards/merge-policy/bulk", { policy });
+      setNote(t("set.general.bulkMergeDone", { count: next.updated }));
+    }).catch(fail);
+  };
+  return <SettingsSection title={t("set.general.leads")}>
+    <SettingRow id="legacyMergePolicy" label={t("set.general.legacyMerge")} description={t("set.general.legacyMergeDesc")} error={error || undefined}>
+      <GlassSelect className="settings-select" label={t("set.general.legacyMerge")} value={legacy ?? "auto"} disabled={!legacy}
+        onChange={(value) => saveLegacy(value as "auto" | "ask")} options={(["auto", "ask"] as const).map((policy) => ({ value: policy, label: policyLabel(policy) }))} />
+    </SettingRow>
+    <SettingRow id="bulkMergePolicy" block label={t("set.general.bulkMerge")} description={note || t("set.general.bulkMergeDesc")}>
+      <div className="settings-advanced-actions">
+        {(["auto", "ask", "never"] as const).map((policy) => <button key={policy} type="button" className="settings-button" onClick={() => setConfirm(policy)}>{t("set.general.bulkMergeApply", { policy: policyLabel(policy) })}</button>)}
+      </div>
+    </SettingRow>
+    {confirm && <ConfirmDialog title={t("set.general.bulkMergeConfirm", { policy: policyLabel(confirm) })} body={t("set.general.bulkMergeConfirmBody")} confirmLabel={t("set.general.bulkMergeApply", { policy: policyLabel(confirm) })} onConfirm={() => applyAll(confirm)} onCancel={() => setConfirm(undefined)} />}
+  </SettingsSection>;
+}
+
+type McpConnection = { token: string; tokenFile: string; script: string | null; config: unknown };
+
+/** How an outside AI (Claude Desktop) connects: the ready config for scripts/sinawi-mcp.mjs (server/app-mcp.ts). */
+function AppMcpSection() {
+  const [connection, setConnection] = useState<McpConnection>();
+  const [confirm, setConfirm] = useState(false);
+  const [error, setError] = useState("");
+  const fail = (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason));
+  useEffect(() => {
+    let live = true;
+    workspaceApi<McpConnection>("/app-mcp/connection").then((next) => { if (live) setConnection(next); }, (reason) => { if (live) fail(reason); });
+    return () => { live = false; };
+  }, []);
+  const rotate = () => {
+    setConfirm(false); setError("");
+    workspaceApi<McpConnection>("/app-mcp/token", {}).then(setConnection, fail);
+  };
+  const config = connection?.config ? JSON.stringify(connection.config, null, 2) : "";
+  return <SettingsSection title={t("set.general.mcp")}>
+    <SettingRow id="appMcp" block label={t("set.general.mcp")} description={t("set.general.mcpDesc")} error={error || undefined}>
+      <div className="settings-json">
+        <p>{t("set.general.mcpSteps")}</p>
+        {connection && !connection.script && <p>{t("set.general.mcpNoScript")}</p>}
+        {config && <textarea rows={10} readOnly value={config} aria-label={t("set.general.mcp")} />}
+        <div className="settings-advanced-actions">
+          {config && <CopyButton text={config} ariaLabel={t("set.general.mcpCopy")} className="settings-button" showLabel />}
+          <button type="button" className="settings-button" disabled={!connection} onClick={() => setConfirm(true)}>{t("set.general.mcpRotate")}</button>
+        </div>
+      </div>
+    </SettingRow>
+    {confirm && <ConfirmDialog title={t("set.general.mcpRotateConfirm")} body={t("set.general.mcpRotateBody")} confirmLabel={t("set.general.mcpRotate")} onConfirm={rotate} onCancel={() => setConfirm(false)} />}
+  </SettingsSection>;
+}
+
+/** user-preferences.md: what every project lead reads with its notes (server/steward.ts). */
+function UserPreferencesRow() {
+  const { track } = useSaveStatus();
+  const [saved, setSaved] = useState<string>();
+  const [text, setText] = useState("");
+  const [limit, setLimit] = useState(8_000);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    workspaceApi<{ text: string; limit: number }>("/user-preferences").then((next) => {
+      if (!live) return;
+      setSaved(next.text); setText(next.text); setLimit(next.limit);
+    }).catch((reason) => { if (live) setError(reason instanceof Error ? reason.message : String(reason)); });
+    return () => { live = false; };
+  }, []);
+  const save = () => {
+    setError("");
+    void track(async () => {
+      const next = await workspaceApi<{ text: string }>("/user-preferences", { text }, "PUT");
+      setSaved(next.text); setText(next.text);
+    }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+  };
+  return <SettingRow id="userPreferences" block label={t("set.general.userPrefs")} description={t("set.general.userPrefsDesc")} error={error || undefined}>
+    <div className="settings-json">
+      <textarea rows={6} maxLength={limit} value={text} disabled={saved === undefined} placeholder={t("set.general.userPrefsPlaceholder")} aria-label={t("set.general.userPrefs")} onChange={(event) => setText(event.target.value)} />
+      <div className="settings-advanced-actions">
+        <button type="button" className="settings-button primary" disabled={saved === undefined || text.trim() === saved} onClick={save}>{t("set.general.userPrefsSave")}</button>
+      </div>
+    </div>
+  </SettingRow>;
 }
 
 export function NotificationsPage({ openSystemSettings }: { openSystemSettings: () => void }) {

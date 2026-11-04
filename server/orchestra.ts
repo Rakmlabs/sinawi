@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import { killSessionProcessGroups, runCli } from "./cli.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
 import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
-import { enabledPublicSkills, filterEnabledSkills, loadSkills, resolveSkillPrompt } from "./skills.js";
+import { clearSkillsCache, enabledPublicSkills, filterEnabledSkills, formatSkillPrompt, loadSkills, resolveSkillPrompt, scanSkillRoot, type SkillRecord } from "./skills.js";
+import { applySchedulePatch, createSchedule, describeSchedule, dueSchedules, SCHEDULE_LIMIT, type Schedule, type ScheduleInput } from "./schedules.js";
+import { LEAD_TOOLS_GUIDE, LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
 import { skillCatalog, workerSkillSection } from "./skill-routing.js";
-import type { AgentId, AgentSelection, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery } from "./types.js";
+import type { AgentId, AgentSelection, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
@@ -16,10 +18,11 @@ import { allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, ful
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
-import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeWorkerNote } from "./worktrees.js";
-import { askPrompt, isReportPrompt, MAX_ASK_DEPTH, parseAsks, parseNotes, projectState, readNotes, replyPrompt, reportDue, reportPrompt, rolloverContext, saveNotes, saveTranscript, STEWARD_ROLLOVER_TURNS, stewardName, stewardRules, stripLeadBlocks, transcriptPath, type StewardAsk } from "./steward.js";
+import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeStatus, worktreeWorkerNote } from "./worktrees.js";
+import { applyStewardPatch, askPrompt, DEFAULT_MERGE_POLICY, mergeThreadReports, isReportPrompt, LEGACY_MERGE_POLICY, MAX_ASK_DEPTH, mergeRule, parseAsks, parseNotes, projectState, readNotes, readUserPreferences, replyPrompt, reportDue, reportPrompt, rolloverContext, saveNotes, saveTranscript, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardName, stewardNotesId, stewardRules, stewardStartText, stripLeadBlocks, transcriptPath, type SessionSummary, type StewardAsk, type StewardPatch } from "./steward.js";
 import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
+import { withJosa } from "./korean.js";
 
 const delegationPattern = /<<DELEGATE\s+to=["']([\w.-]{1,100})["']>>(.*?)<<\/DELEGATE>>/gis;
 const maxEvents = 2_000;
@@ -30,6 +33,48 @@ const stallCheckMs = 15_000;
 /** A worker's run ended because the session was stopped. */
 const STOPPED = Symbol("stopped");
 const guardKey = (sessionId: string, workerId: string) => `${sessionId}:${workerId}`;
+
+/** What a lead's tools need from the turn that is running (Orchestra.leadTurns). */
+interface LeadTurn {
+  controller: AbortController;
+  userPrompt: string;
+  systemPrompt: string;
+  skills: string;
+  installedSkills: SkillRecord[];
+  requiresGrokMedia: boolean;
+  mediaPrompt?: string;
+  /** The turn's team; delegate_task adds to it like a <<DELEGATE>> to a missing CLI does. */
+  workers: AgentSelection[];
+  answerOnly: boolean;
+  tasks: LeadTask[];
+  /** Worktrees the tool-delegated briefs ran in, by worker id. */
+  worktrees: Map<string, NonNullable<Session["worktrees"]>[number]>;
+}
+
+/** One delegate_task call. */
+interface LeadTask {
+  id: string;
+  workerId: string;
+  label: string;
+  agent: AgentId;
+  brief: string;
+  group?: string;
+  kind?: string;
+  status: "running" | "done" | "error" | "stopped";
+  result?: string;
+  collected: boolean;
+  startedAt: string;
+  endedAt?: string;
+  done: Promise<void>;
+}
+
+const skillSlug = (name: string) => name.trim().toLowerCase().replace(/[^a-z0-9-]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 60);
+
+/** delegate_task kind "design": the worker shows its result, so the lead (and the chat) can see it. */
+export const DESIGN_BRIEF = `## 디자인 작업
+- 화면을 만들거나 고친 뒤 실제로 띄워 브라우저(orchestra-browser 스킬, ao-browser)로 열고 확인하세요.
+- 확인한 화면의 스크린샷을 저장하고, 보고 끝에 한 줄씩 \`![무엇을 찍었는지](스크린샷 절대 경로)\` 형식으로 붙이세요. 채팅에서 그 이미지가 보입니다.
+- 색·간격·글꼴은 프로젝트에 있는 디자인 토큰과 컴포넌트를 먼저 쓰고, 바꾼 이유를 한 줄로 적으세요.`;
 const agentNames: Record<AgentId, string> = {
   codex: "Codex",
   claude: "Claude",
@@ -78,6 +123,9 @@ export function parseDelegations(text: string): DelegationRequest[] {
   return requests;
 }
 
+/** An empty chat's title until its first message names it (followup). */
+const EMPTY_TITLE = "새 채팅";
+
 function titleFrom(prompt: string) {
   const compact = prompt.replace(/\s+/g, " ").trim();
   return compact.length > 48 ? `${compact.slice(0, 47)}…` : compact || "새 세션";
@@ -118,6 +166,10 @@ export class Orchestra {
   private goalAutoTurn = new Set<string>();
   /** Where project leads keep their notes and transcripts (server/steward.ts); unset: no files. */
   stewardDataDir?: string;
+  /** Project leads as entities (Steward), by id; their chats point at them with `steward.id`. */
+  private stewardEntities = new Map<string, Steward>();
+  /** Set by the server: writes the lead entities (stewards.json) after the app changed them. */
+  persistStewards?: (stewards: Steward[]) => void | Promise<void>;
   /** `<<ASK>>` blocks a lead wrote this turn, sent when the turn ends. */
   private stewardAsks = new Map<string, StewardAsk[]>();
   /** Leads whose next waiting message is being started (followup sets "running" only after an await). */
@@ -131,6 +183,14 @@ export class Orchestra {
   /** Per-session kill switch + stall detector for the worker currently running. */
   /** One per running worker (`guardKey`): workers of a session run at the same time. */
   private workerGuards = new Map<string, { kill: AbortController; detector: StallDetector; stall?: StallSignal }>();
+  /** Briefs waiting for a busy worker (`guardKey`): one CLI session runs one brief at a time. */
+  private workerChains = new Map<string, Promise<unknown>>();
+  /** The lead turn running now, for its tools (delegate_task and friends); by session id. */
+  private leadTurns = new Map<string, LeadTurn>();
+  /** Lead schedules (schedules.ts), by id. */
+  private schedules = new Map<string, Schedule>();
+  /** Set by the server: writes schedules.json after a change. */
+  persistSchedules?: (schedules: Schedule[]) => void | Promise<void>;
   /** Sessions whose already-published events were edited or removed since the last publish. */
   private rewrittenEvents = new Set<string>();
   /** Tunable stall thresholds (tests shorten these). */
@@ -276,11 +336,34 @@ export class Orchestra {
     this.assertPolicy(session.workspaceId, [session.agent, ...session.workers, ...(session.planner ? [session.planner.agent] : [])]);
   }
 
-  restore(sessions: Session[]) {
+  /** `legacyMergePolicy`: what migrated leads get (StewardSettings); "auto" when unset. */
+  restore(sessions: Session[], stewards: Steward[] = [], options: { legacyMergePolicy?: MergePolicy } = {}) {
+    for (const steward of stewards) this.stewardEntities.set(steward.id, steward);
     for (const session of sessions) {
       session.workerConfigs = normalizeWorkerConfigs(session.workers, session.workerConfigs);
       this.sessions.set(session.id, session);
       this.configs.set(session.id, { skills: session.skills ?? [], systemPrompt: session.systemPrompt ?? "" });
+    }
+    // Lead chats from before leads were entities (or whose entity is gone) get one made from what the
+    // chat was started with, under the chat's own id so its notes stay where they are.
+    const migrated: string[] = [];
+    for (const session of sessions) {
+      if (!session.steward) continue;
+      let entity = session.steward.id ? this.stewardEntities.get(session.steward.id) : undefined;
+      if (!entity) {
+        entity = { ...stewardFromSession(session, { mergePolicy: options.legacyMergePolicy ?? LEGACY_MERGE_POLICY }), migrated: true };
+        this.stewardEntities.set(entity.id, entity);
+        session.steward.id = entity.id;
+        migrated.push(session.id);
+      }
+      if (entity.name) session.steward.name = entity.name;
+    }
+    // Report times used to be per chat: each lead now has one, the earliest its chats had.
+    const reportsMoved = this.moveThreadReports();
+    if (reportsMoved.length) migrated.push(...reportsMoved.filter((id) => !migrated.includes(id)));
+    if (migrated.length) {
+      void Promise.resolve(this.persistStewards?.(this.listStewards())).catch(() => undefined);
+      void Promise.resolve(this.persist(this.list(), migrated)).catch(() => undefined);
     }
     // A lead that was answering another lead when the app quit: tell the asker. Waiting messages run
     // on the first stewardTick.
@@ -344,48 +427,77 @@ export class Orchestra {
     return event;
   }
 
-  async create(input: StartSessionInput): Promise<Session> {
-    if (!input.workers?.length) throw new Error("워커를 한 명 이상 선택하세요.");
-    if (input.steward?.name?.trim()) this.assertStewardNameFree(input.steward.name.trim().slice(0, 80));
+  async create(requested: StartSessionInput): Promise<Session> {
+    // A new thread of an existing lead runs with the lead's own team, instructions and skills.
+    const entity = requested.steward?.id ? this.stewardEntities.get(requested.steward.id) : undefined;
+    if (requested.steward?.id && !entity) throw new Error("담당을 찾을 수 없습니다.");
+    if (requested.parentId && entity) throw new Error("나눠 맡긴 채팅은 담당이 될 수 없습니다.");
+    let input: StartSessionInput = entity ? {
+      ...requested, agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort,
+      ...(entity.workers.length ? { workers: entity.workers.map((worker) => worker.agent), workerConfigs: structuredClone(entity.workers) } : {}),
+      systemPrompt: entity.systemPrompt, skills: [...new Set([...entity.skills, ...(requested.skills ?? [])])],
+    } : requested;
+    // A lead's chat started with just `steward: {id}` (API, scripts): the lead's team, else the workspace's agents.
+    // No workers picked (any chat): the lead's team above, else every agent the workspace allows.
+    // The HTTP route fills the workspace's default team first (server.ts withWorkspaceTeam).
+    if (!input.agent || !input.workers?.length) {
+      const fallback = this.defaultTeam(input.workspaceId ?? "personal", input.agent || undefined);
+      input = { ...input, agent: input.agent || fallback.agent, ...(input.workers?.length ? {} : { workers: fallback.workers, workerConfigs: undefined }) };
+    }
+    if (!entity && input.steward?.name?.trim()) this.assertStewardNameFree(input.steward.name.trim().slice(0, 80));
     const workspaceId = input.workspaceId ?? "personal";
-    const mediaRequest = await this.isMediaRequest(input.prompt, input.skills, workspaceId);
+    // No first message: an empty chat that waits for one (followup starts its first turn).
+    const empty = !input.prompt.trim();
+    const mediaRequest = !empty && await this.isMediaRequest(input.prompt, input.skills, workspaceId);
     if (mediaRequest) assertMediaAllowed(this.workspacePolicyResolver?.(workspaceId));
     // Media requests move the lead to Grok only in auto mode; a manually chosen team is kept as is.
     const mediaLead = mediaRequest && (input.mode ?? "manual") === "auto";
     if (mediaLead && !this.allowedAgents({ workspaceId }).includes("grok")) throw new Error(mediaUnavailableMessage);
     const agent = mediaLead ? "grok" : input.agent;
-    const workers: AgentId[] = [...input.workers];
+    const workers: AgentId[] = [...(input.workers ?? [])];
     const model = mediaLead ? "grok-4.7" : input.model;
     const reasoningEffort = mediaLead ? undefined : input.reasoningEffort;
     const workerConfigs = normalizeWorkerConfigs(workers, input.workerConfigs);
     this.assertPolicy(workspaceId, [agent, ...workers, ...(input.planner ? [input.planner.agent] : [])]);
     this.assertPermissionMode(workspaceId, input.permissionMode);
-    const cwd = resolve(input.cwd);
+    // A new thread of a lead opens in the lead's first folder unless the user picked another.
+    const folder = input.cwd || entity?.cwds[0];
+    if (!folder) throw new Error("작업 폴더가 올바르지 않습니다.");
+    const cwd = resolve(folder);
     if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
     const selectedSkills = [...new Set([...(input.skills ?? []), ...mediaSkills(input.prompt, await enabledPublicSkills(cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), workspaceId).disabledSkills))])];
     const session: Session = {
-      id: randomUUID(), title: titleFrom(input.prompt), agent,
+      id: randomUUID(), title: input.title?.trim().slice(0, 100) || (empty ? EMPTY_TITLE : titleFrom(input.prompt)), agent,
       workers, cwd, model,
       reasoningEffort,
       workerConfigs,
       planner: input.planner,
-      mode: input.mode ?? "manual", autoSwitch: input.autoSwitch ?? true, turnCount: 1,
+      mode: input.mode ?? "manual", autoSwitch: input.autoSwitch ?? true, turnCount: empty ? 0 : 1,
       ...(input.permissionMode ? { permissionMode: input.permissionMode } : {}),
-      status: "running", createdAt: new Date().toISOString(), events: [],
+      status: empty ? "done" : "running", createdAt: new Date().toISOString(), events: [],
       cliSessionId: agent === input.agent ? input.resumeSessionId : undefined,
       groupId: input.groupId,
       workspaceId,
       skills: selectedSkills, systemPrompt: input.systemPrompt ?? "",
       ...(input.commander ? { commander: { goals: [], forced: true } } : input.goal || input.autoRun || input.steward ? { goal: freshGoal() } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
-      ...(input.steward && !input.parentId ? { steward: { turns: 0, since: new Date().toISOString(), ...(input.steward.name?.trim() ? { name: input.steward.name.trim().slice(0, 80) } : {}) } } : {}),
+      ...(input.steward && !input.parentId ? { steward: { turns: 0, since: new Date().toISOString(), ...(entity ? { id: entity.id, name: entity.name } : input.steward.name?.trim() ? { name: input.steward.name.trim().slice(0, 80) } : {}) } } : {}),
     };
     this.sessions.set(session.id, session);
+    if (session.steward) {
+      if (entity && !entity.cwds.includes(cwd)) this.saveStewardEntity({ ...entity, cwds: [...entity.cwds, cwd] });
+      if (!entity) this.adoptSteward(session);
+    }
     this.configs.set(session.id, { skills: selectedSkills, systemPrompt: input.systemPrompt ?? "" });
+    if (empty) {
+      this.event(session, agent, "status", `빈 채팅을 열었습니다. 메시지를 보내면 ${withJosa(agentNames[agent], "으로/로")} 시작합니다.`);
+      if (session.steward) this.event(session, agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
+      return session;
+    }
     const controller = new AbortController();
     this.controllers.set(session.id, controller);
     this.event(session, agent, "status", `${agentNames[agent]} 세션을 시작했습니다.`);
-    if (session.steward) this.event(session, agent, "status", "이 채팅을 프로젝트 담당으로 정했습니다. 담당 노트와 전체 기록을 이어 가며, 끝낸 작업은 메인 폴더에 병합합니다.");
+    if (session.steward) this.event(session, agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
     this.event(session, "user", "message", input.prompt);
     void this.execute(session, input.prompt, selectedSkills, input.systemPrompt ?? "", controller, mediaLead || (mediaRequest && agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
@@ -393,6 +505,15 @@ export class Orchestra {
   }
 
   private async execute(session: Session, userPrompt: string, skillIds: string[], systemPrompt: string, controller: AbortController, requiresGrokMedia: boolean) {
+    try {
+      return await this.executeTurn(session, userPrompt, skillIds, systemPrompt, controller, requiresGrokMedia);
+    } finally {
+      // The lead's tools belong to one turn: later calls with an old token find nothing to act on.
+      if (this.leadTurns.get(session.id)?.controller === controller) this.leadTurns.delete(session.id);
+    }
+  }
+
+  private async executeTurn(session: Session, userPrompt: string, skillIds: string[], systemPrompt: string, controller: AbortController, requiresGrokMedia: boolean) {
     if (!this.isCurrentRun(session, controller.signal)) return;
     const runStartedAt = Date.now();
     this.turnChecklists.delete(session.id);
@@ -434,7 +555,13 @@ export class Orchestra {
     const board = commanderBoard(session, (id) => this.sessions.get(id));
     const goalContext = session.goal ? `\n\n${goalRules(split)}${session.goal.items.length ? `\n\n지금 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}${board ? `\n\n이 채팅이 앞서 나눠 맡긴 목표:\n${board}` : ""}` : "";
     const stewardContext = await this.stewardContext(session);
-    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${stewardContext}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
+    // Answering another lead without the user's leave to work for it: look and answer only.
+    const answerOnly = Boolean(session.steward?.answering && !session.steward.acceptWork);
+    const turn: LeadTurn = { controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt, workers, answerOnly, tasks: [], worktrees: new Map() };
+    // A lead's own run gets its tools (lead-tools.ts) where the CLI can load MCP; Grok keeps the tags.
+    const toolsGuide = session.steward && !planMode && this.stewardDataDir && session.agent !== "grok" ? `\n\n${LEAD_TOOLS_GUIDE}` : "";
+    if (session.steward && !planMode) this.leadTurns.set(session.id, turn);
+    const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${stewardContext}${toolsGuide}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
     const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     if (first.sessionId) session.cliSessionId = first.sessionId;
@@ -450,8 +577,6 @@ export class Orchestra {
       return this.finish(session);
     }
 
-    // Answering another lead without the user's leave to work for it: look and answer only.
-    const answerOnly = Boolean(session.steward?.answering && !session.steward.acceptWork);
     let refused = false;
     const resolveRequests = (text: string) => parseDelegations(text).flatMap((request) => {
       if (answerOnly) {
@@ -461,87 +586,26 @@ export class Orchestra {
       }
       const exact = workers.find((candidate) => candidate.id === request.target);
       const legacyAgent = request.target.toLowerCase();
-      const worker = exact ?? (legacyAgent === "codex" || legacyAgent === "claude" || legacyAgent === "grok"
-        ? workers.find((candidate) => candidate.agent === legacyAgent)
-        : undefined);
+      const named = legacyAgent === "codex" || legacyAgent === "claude" || legacyAgent === "grok" ? legacyAgent : undefined;
+      const worker = exact ?? (named ? workers.find((candidate) => candidate.agent === named) : undefined)
+        // A lead asked for a CLI its team lacks ("코덱스 말고 클로드로 해"): add that worker when the workspace allows it.
+        ?? (named && session.steward ? this.addStewardWorker(session, workers, named) : undefined);
       return worker ? [{ request, worker }] : [];
     });
     let requests = resolveRequests(first.finalText);
-    if (!requests.length) return this.finish(session);
+    // Work the lead handed out with delegate_task and has not collected: the review checks it like a round.
+    const uncollected = turn.tasks.filter((item) => !item.collected);
+    if (uncollected.length) await Promise.all(uncollected.map((item) => item.done));
+    if (controller.signal.aborted || uncollected.some((item) => item.status === "stopped")) return this.finishStopped(session, controller);
+    const toolResults = uncollected.map((item) => { item.collected = true; return item.result ?? ""; }).filter(Boolean);
+    if (!requests.length && !toolResults.length) return this.finish(session);
 
     for (let round = 0; ; round++) {
-      const workerResults: string[] = [];
-      const roundWorktrees = new Map<string, NonNullable<Session["worktrees"]>[number]>();
+      const workerResults: string[] = round === 0 ? [...toolResults] : [];
+      const roundWorktrees = round === 0 ? new Map(uncollected.flatMap((item) => { const info = turn.worktrees.get(item.workerId); return info ? [[item.workerId, info] as const] : []; })) : new Map<string, NonNullable<Session["worktrees"]>[number]>();
       // Different workers run at once (each has its own worktree and CLI session); one worker's
       // briefs run in order inside its session. Reports keep the lead's delegation order.
-      const runRequest = async ({ request, worker }: (typeof requests)[number]): Promise<string | typeof STOPPED> => {
-        if (controller.signal.aborted) return STOPPED;
-        const brief = ensureBrief(request.task, userPrompt);
-        const workerId = worker.id!;
-        const resumeIdForBrief = worker.sessionMode === "new" ? undefined : workerSessionId(session, workerId);
-        const workerResume = resumeIdForBrief ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events, workerId)}` : "";
-        const label = workerLabel(worker);
-        const worktree = await this.prepareWorktree(session, workerId, label);
-        if (controller.signal.aborted) return STOPPED;
-        if (worktree.info) roundWorktrees.set(workerId, worktree.info);
-        const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${workerSkillSection(request.task, installedSkills, worker.agent)}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${workerResume}`;
-        const delegation = this.event(session, worker.agent, "delegation", request.task, { role: "worker", workerId, workerLabel: label, taskStatus: "running", model: worker.model, reasoningEffort: worker.reasoningEffort, ...(brief.missing.length ? { metadata: { briefAutofilled: brief.missing } } : {}) });
-        const delegationId = delegation?.id;
-        if (worktree.info) this.event(session, worker.agent, "status", `작업 브랜치 ${worktree.info.branch} — ${worktree.info.path}${worktree.info.mainDirty ? " (메인 폴더의 커밋되지 않은 변경은 포함되지 않음)" : ""}`, { role: "worker", workerId, workerLabel: label, delegationId });
-        else if (worktree.error) this.event(session, worker.agent, "warning", `worktree를 만들지 못해 세션 폴더에서 실행합니다: ${worktree.error}`, { role: "worker", workerId, workerLabel: label, delegationId });
-        const resumeId = resumeIdForBrief;
-        if (!resumeId) setWorkerSessionId(session, workerId);
-        const guard = { kill: new AbortController(), detector: new StallDetector(this.stallOptions) } as { kill: AbortController; detector: StallDetector; stall?: StallSignal };
-        this.workerGuards.set(guardKey(session.id, workerId), guard);
-        const idleTimer = setInterval(() => {
-          const stall = guard.detector.checkIdle();
-          if (stall && !guard.stall) this.tripStall(session, guard, stall, worker.agent, workerId, label, delegationId);
-        }, Math.min(stallCheckMs, Math.max(50, Math.floor(guard.detector.idleMs / 4))));
-        idleTimer.unref();
-        const runWorker = (id?: string) => this.runAgent(session, worker.agent, workerPrompt, worker.model, worker.reasoningEffort, id, controller.signal, false, false, "worker", delegationId, workerId, label, requiresGrokMedia);
-        let result;
-        const eventStart = session.events.length;
-        try {
-          try {
-            result = await runWorker(resumeId);
-          } catch (error) {
-            if (!resumeId || controller.signal.aborted || isQuotaExhaustion(error) || guard.stall) throw error;
-          }
-          if (resumeId && !controller.signal.aborted && !guard.stall && (!result || result.exitCode !== 0 && !result.quotaFailure)) {
-            setWorkerSessionId(session, workerId);
-            this.event(session, worker.agent, "status", "이전 세션에 연결하지 못해 새 세션으로 다시 시작합니다.", { role: "worker", workerId, workerLabel: label, delegationId });
-            result = await runWorker();
-          }
-        } catch (error) {
-          if (!guard.stall) throw error;
-        } finally {
-          clearInterval(idleTimer);
-          if (this.workerGuards.get(guardKey(session.id, workerId)) === guard) this.workerGuards.delete(guardKey(session.id, workerId));
-        }
-        if (controller.signal.aborted) return STOPPED;
-        if (guard.stall) {
-          if (result?.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
-          const partial = result?.finalText?.trim();
-          const out = `[${label} 결과 — 앱이 정체를 감지해 중단함]\n원인: ${guard.stall.reason}\n최근 기록:\n${guard.stall.evidence.map((line) => `- ${line}`).join("\n")}${partial ? `\n중단 전 마지막 응답:\n${partial.slice(-1_500)}` : ""}\n→ 같은 방법을 반복하지 말고 원인을 진단해 다른 접근으로 다시 계획하세요.`;
-          return out;
-        }
-        if (!result) throw new Error("작업자 세션을 시작할 수 없습니다.");
-        if (result.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
-        if (result.exitCode !== 0) {
-          this.event(session, result.agent, "error", `${label} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.`, { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
-          throw new Error(`${agentNames[result.agent]} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.`);
-        }
-        const report = result.finalText || `${agentNames[result.agent]}가 결과 없이 종료되었습니다(코드 ${result.exitCode}).`;
-        // Exit code 0 but the CLI reported it stopped early (e.g. Grok "cancelled"): not a success.
-        const interrupted = session.events.slice(eventStart).find((event) => event.type === "error" && event.delegationId === delegationId && /중단되었습니다 \(/.test(event.text));
-        if (interrupted) {
-          const out = `[${label} 결과 — 중단됨: ${interrupted.text} 아래 내용은 불완전할 수 있다]\n${report}`;
-          this.event(session, result.agent, "status", `작업이 중간에 중단되었습니다. ${interrupted.text}`, { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
-          return out;
-        }
-        this.event(session, result.agent, "status", "작업을 완료했습니다.", { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "done", model: result.model, reasoningEffort: result.reasoningEffort });
-        return `[${label} 결과]\n${report}`;
-      };
+      const runRequest = (item: (typeof requests)[number]) => this.runBrief(session, turn, item.request.task, item.worker, roundWorktrees);
       const queues = new Map<string, Array<{ index: number; item: (typeof requests)[number] }>>();
       requests.forEach((item, index) => queues.set(item.worker.id!, [...(queues.get(item.worker.id!) ?? []), { index, item }]));
       const outcomes: Array<string | typeof STOPPED | undefined> = new Array(requests.length);
@@ -573,7 +637,7 @@ export class Orchestra {
       this.event(session, session.agent, "status", round === 0 ? "총괄이 워커 결과를 검증하고 있습니다." : `총괄이 재계획 ${round}회차 결과를 검증하고 있습니다.`, { role: "orchestrator", metadata: { phase: "verify", round } });
       const roundFailed = workerResults.some((text) => CUT_REPORT.test(text));
       const strict = roundFailed && roundsLeft > 0 && session.agent === "grok";
-      const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()], Boolean(session.parentId || session.steward)).catch(() => "");
+      const worktreeNote = await worktreeReviewNote([...roundWorktrees.values()], session.steward ? mergeRule(this.stewardOf(session)?.mergePolicy) : Boolean(session.parentId)).catch(() => "");
       const gitFacts = await repoSnapshot(session.cwd).catch(() => "");
       const goalReview = session.goal ? `\n\n${goalRules(false)}${session.goal.items.length ? `\n\n이번 턴 시작 때의 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
       // The review is a fresh CLI session too: a lead needs its notes and transcript here as well.
@@ -611,6 +675,91 @@ export class Orchestra {
     }
   }
 
+  /**
+   * One brief for one worker: worktree, prompt, stall guard, resume and retry. Briefs for the same
+   * worker wait for each other (one CLI session each); different workers run at once. Used by the
+   * <<DELEGATE>> rounds and by the lead's delegate_task tool.
+   */
+  private runBrief(session: Session, turn: LeadTurn, task: string, worker: AgentSelection, roundWorktrees: Map<string, NonNullable<Session["worktrees"]>[number]>, extra = ""): Promise<string | typeof STOPPED> {
+    const key = guardKey(session.id, worker.id!);
+    const previous = this.workerChains.get(key) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(() => this.runBriefNow(session, turn, task, worker, roundWorktrees, extra));
+    const tail = run.catch(() => undefined);
+    this.workerChains.set(key, tail);
+    void tail.then(() => { if (this.workerChains.get(key) === tail) this.workerChains.delete(key); });
+    return run;
+  }
+
+  private async runBriefNow(session: Session, turn: LeadTurn, task: string, worker: AgentSelection, roundWorktrees: Map<string, NonNullable<Session["worktrees"]>[number]>, extra: string): Promise<string | typeof STOPPED> {
+    const { controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt } = turn;
+    if (controller.signal.aborted) return STOPPED;
+    const brief = ensureBrief(task, userPrompt);
+    const workerId = worker.id!;
+    const resumeIdForBrief = worker.sessionMode === "new" ? undefined : workerSessionId(session, workerId);
+    const workerResume = resumeIdForBrief ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events, workerId)}` : "";
+    const label = workerLabel(worker);
+    const worktree = await this.prepareWorktree(session, workerId, label);
+    if (controller.signal.aborted) return STOPPED;
+    if (worktree.info) roundWorktrees.set(workerId, worktree.info);
+    const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${workerSkillSection(task, installedSkills, worker.agent)}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${extra}${workerResume}`;
+    const delegation = this.event(session, worker.agent, "delegation", task, { role: "worker", workerId, workerLabel: label, taskStatus: "running", model: worker.model, reasoningEffort: worker.reasoningEffort, ...(brief.missing.length ? { metadata: { briefAutofilled: brief.missing } } : {}) });
+    const delegationId = delegation?.id;
+    if (worktree.info) this.event(session, worker.agent, "status", `작업 브랜치 ${worktree.info.branch} — ${worktree.info.path}${worktree.info.mainDirty ? " (메인 폴더의 커밋되지 않은 변경은 포함되지 않음)" : ""}`, { role: "worker", workerId, workerLabel: label, delegationId });
+    else if (worktree.error) this.event(session, worker.agent, "warning", `worktree를 만들지 못해 세션 폴더에서 실행합니다: ${worktree.error}`, { role: "worker", workerId, workerLabel: label, delegationId });
+    const resumeId = resumeIdForBrief;
+    if (!resumeId) setWorkerSessionId(session, workerId);
+    const guard = { kill: new AbortController(), detector: new StallDetector(this.stallOptions) } as { kill: AbortController; detector: StallDetector; stall?: StallSignal };
+    this.workerGuards.set(guardKey(session.id, workerId), guard);
+    const idleTimer = setInterval(() => {
+      const stall = guard.detector.checkIdle();
+      if (stall && !guard.stall) this.tripStall(session, guard, stall, worker.agent, workerId, label, delegationId);
+    }, Math.min(stallCheckMs, Math.max(50, Math.floor(guard.detector.idleMs / 4))));
+    idleTimer.unref();
+    const runWorker = (id?: string) => this.runAgent(session, worker.agent, workerPrompt, worker.model, worker.reasoningEffort, id, controller.signal, false, false, "worker", delegationId, workerId, label, requiresGrokMedia);
+    let result;
+    const eventStart = session.events.length;
+    try {
+      try {
+        result = await runWorker(resumeId);
+      } catch (error) {
+        if (!resumeId || controller.signal.aborted || isQuotaExhaustion(error) || guard.stall) throw error;
+      }
+      if (resumeId && !controller.signal.aborted && !guard.stall && (!result || result.exitCode !== 0 && !result.quotaFailure)) {
+        setWorkerSessionId(session, workerId);
+        this.event(session, worker.agent, "status", "이전 세션에 연결하지 못해 새 세션으로 다시 시작합니다.", { role: "worker", workerId, workerLabel: label, delegationId });
+        result = await runWorker();
+      }
+    } catch (error) {
+      if (!guard.stall) throw error;
+    } finally {
+      clearInterval(idleTimer);
+      if (this.workerGuards.get(guardKey(session.id, workerId)) === guard) this.workerGuards.delete(guardKey(session.id, workerId));
+    }
+    if (controller.signal.aborted) return STOPPED;
+    if (guard.stall) {
+      if (result?.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
+      const partial = result?.finalText?.trim();
+      const out = `[${label} 결과 — 앱이 정체를 감지해 중단함]\n원인: ${guard.stall.reason}\n최근 기록:\n${guard.stall.evidence.map((line) => `- ${line}`).join("\n")}${partial ? `\n중단 전 마지막 응답:\n${partial.slice(-1_500)}` : ""}\n→ 같은 방법을 반복하지 말고 원인을 진단해 다른 접근으로 다시 계획하세요.`;
+      return out;
+    }
+    if (!result) throw new Error("작업자 세션을 시작할 수 없습니다.");
+    if (result.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
+    if (result.exitCode !== 0) {
+      this.event(session, result.agent, "error", `${label} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.`, { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
+      throw new Error(`${agentNames[result.agent]} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.`);
+    }
+    const report = result.finalText || `${agentNames[result.agent]}가 결과 없이 종료되었습니다(코드 ${result.exitCode}).`;
+    // Exit code 0 but the CLI reported it stopped early (e.g. Grok "cancelled"): not a success.
+    const interrupted = session.events.slice(eventStart).find((event) => event.type === "error" && event.delegationId === delegationId && /중단되었습니다 \(/.test(event.text));
+    if (interrupted) {
+      const out = `[${label} 결과 — 중단됨: ${interrupted.text} 아래 내용은 불완전할 수 있다]\n${report}`;
+      this.event(session, result.agent, "status", `작업이 중간에 중단되었습니다. ${interrupted.text}`, { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
+      return out;
+    }
+    this.event(session, result.agent, "status", "작업을 완료했습니다.", { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "done", model: result.model, reasoningEffort: result.reasoningEffort });
+    return `[${label} 결과]\n${report}`;
+  }
+
   /** Creates or reuses the worker's git worktree; `{}` when worktrees are off or the folder is not in git. */
   private async prepareWorktree(session: Session, workerId: string, label: string): Promise<{ info?: NonNullable<Session["worktrees"]>[number]; error?: string }> {
     if (!this.worktreeDataDir) return {};
@@ -638,7 +787,7 @@ export class Orchestra {
     const checkouts = await userWorktrees(session.cwd, this.worktreeDataDir).catch(() => []);
     const siblings = checkouts.length > 1 ? `\n\n## 이 저장소의 사용자 작업 폴더 (git worktree)\n같은 저장소를 사용자가 여러 폴더로 나눠 쓰고 있습니다. 세션 폴더는 \`${session.cwd}\`입니다.\n${checkouts.map((item) => `- \`${item.path}\` — ${item.branch ? `브랜치 \`${item.branch}\`` : "detached"} @ ${item.head}`).join("\n")}\n사용자가 "기존꺼", "다른 폴더/워크트리", 브랜치 이름을 말하면 이 목록에서 찾아 확인하고 쓰세요. 배포·롤백 대상이 어느 폴더·브랜치인지 원격 브랜치와 비교해 정합니다.` : "";
     return `${siblings}\n\n## 워커 작업 위치 (git worktree)
-이 세션 폴더는 git 저장소입니다. 파일을 고치는 워커는 각자 전용 git worktree와 브랜치(\`sinawi/${session.id.slice(0, 8)}/<워커 ID>\`)에서 일하고, 메인 폴더는 바뀌지 않습니다. 같은 라운드의 워커들은 서로의 변경을 보지 못하므로, 서로 의존하는 일은 한 워커에게 맡기거나 다음 라운드로 나누세요. 같은 워커는 다음 라운드에도 자기 worktree를 이어 씁니다. 워커 결과와 함께 각 worktree의 경로·브랜치·바뀐 파일을 알려 드립니다. 검토는 그 경로에서 하세요. ${session.steward ? "이 채팅은 프로젝트 담당이라, 턴이 끝날 때마다 앱이 워커 브랜치를 메인 폴더에 병합합니다. 워커에게 작업 브랜치에 커밋하게 하세요." : session.parentId ? "이 세션은 총지휘의 목표라서, 체크리스트가 모두 끝나면 앱이 브랜치를 메인 폴더에 병합합니다." : "앱은 자동 병합하지 않습니다. 최종 답에 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요."}${dirty ? "\n메인 폴더에 커밋되지 않은 변경이 있습니다. worktree는 마지막 커밋(HEAD) 기준이라 그 변경이 들어 있지 않습니다. 워커 브리프의 맥락에 이 사실을 적으세요." : ""}`;
+이 세션 폴더는 git 저장소입니다. 파일을 고치는 워커는 각자 전용 git worktree와 브랜치(\`sinawi/${session.id.slice(0, 8)}/<워커 ID>\`)에서 일하고, 메인 폴더는 바뀌지 않습니다. 같은 라운드의 워커들은 서로의 변경을 보지 못하므로, 서로 의존하는 일은 한 워커에게 맡기거나 다음 라운드로 나누세요. 같은 워커는 다음 라운드에도 자기 worktree를 이어 씁니다. 워커 결과와 함께 각 worktree의 경로·브랜치·바뀐 파일을 알려 드립니다. 검토는 그 경로에서 하세요. ${session.steward ? `이 채팅은 프로젝트 담당입니다. ${mergeRule(this.stewardOf(session)?.mergePolicy)}` : session.parentId ? "이 세션은 총지휘의 목표라서, 체크리스트가 모두 끝나면 앱이 브랜치를 메인 폴더에 병합합니다." : "앱은 자동 병합하지 않습니다. 최종 답에 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요."}${dirty ? "\n메인 폴더에 커밋되지 않은 변경이 있습니다. worktree는 마지막 커밋(HEAD) 기준이라 그 변경이 들어 있지 않습니다. 워커 브리프의 맥락에 이 사실을 적으세요." : ""}`;
   }
 
   /** Runs `task` while holding the session's worktree mutex (queued behind earlier holders). */
@@ -894,6 +1043,8 @@ export class Orchestra {
       ...(permissionMode === "full" ? { fullAccess: true } : {}),
       extraDirs,
       ...(worktreeRoot ? { readOnlyDirs: [worktreeRoot] } : {}),
+      // The lead's own writable run carries its tools (lead-tools.ts); reviews and plans do not.
+      ...(role === "orchestrator" && !readOnly && session.steward && this.stewardDataDir && this.leadTurns.has(session.id) ? { leadTools: true } : {}),
       usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role, dataDir: this.usageDataDir, ...(role === "worker" && workerId ? { workerId } : {}) },
       onActivity: () => this.heartbeat(session, signal, guard && !guard.stall ? guard.detector : undefined),
       onDraft: (text) => {
@@ -1058,6 +1209,8 @@ export class Orchestra {
     if (settings.autoSwitch !== undefined) session.autoSwitch = settings.autoSwitch;
     if (settings.permissionMode !== undefined) session.permissionMode = settings.permissionMode;
     session.turnCount = (session.turnCount ?? session.events.filter((event) => event.agent === "user" && event.type === "message").length) + 1;
+    // An empty chat (create without a prompt) takes its title from its first message.
+    if (session.title === EMPTY_TITLE && !session.events.some((event) => event.agent === "user" && event.type === "message")) session.title = titleFrom(prompt);
     if (!alreadyLogged) this.event(session, "user", "message", prompt);
     const allowed = new Set(this.allowedAgents(session));
     // Media keywords pick Grok only while auto-switch is on: the user's own orchestrator choice wins.
@@ -1101,7 +1254,7 @@ export class Orchestra {
       return session;
     }
     if (controller.signal.aborted) return session;
-    const config = this.configs.get(id) ?? { skills: [], systemPrompt: "" };
+    const config = this.turnConfig(session);
     const selectedSkills = [...new Set([...config.skills, ...skills, ...mediaSkills(prompt, await enabledPublicSkills(session.cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills))])];
     void this.execute(session, carriedOverPrompt(carried, prompt), selectedSkills, config.systemPrompt, controller, mediaLead || (mediaRequest && session.agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
@@ -1374,9 +1527,10 @@ export class Orchestra {
     const conversationPolicy = this.workspacePolicyResolver?.(workspaceId);
     if (conversationPolicy && !conversationPolicy.mediaGeneration && await this.isMediaRequest(input.prompt, [...botA.skills, ...botB.skills], workspaceId)) assertMediaAllowed(conversationPolicy);
     this.assertPolicy(workspaceId, [botA.agent, botB.agent]);
+    this.assertPermissionMode(workspaceId, input.permissionMode);
     const cwd = resolve(input.cwd);
     if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
-    const session: Session = { id: randomUUID(), title: `${botA.name} ↔ ${botB.name}`, agent: botA.agent, workers: [botB.agent], cwd, status: "running", createdAt: new Date().toISOString(), events: [], workspaceId };
+    const session: Session = { id: randomUUID(), title: `${botA.name} ↔ ${botB.name}`, agent: botA.agent, workers: [botB.agent], cwd, status: "running", createdAt: new Date().toISOString(), events: [], workspaceId, ...(input.permissionMode ? { permissionMode: input.permissionMode } : {}) };
     this.sessions.set(session.id, session);
     const controller = new AbortController();
     this.controllers.set(session.id, controller);
@@ -1463,12 +1617,13 @@ export class Orchestra {
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.parentId) throw new Error("나눠 맡긴 채팅은 담당이 될 수 없습니다.");
     const newName = patch.name?.trim().slice(0, 80);
-    if (newName) this.assertStewardNameFree(newName, id);
+    if (newName) this.assertStewardNameFree(newName, session.steward?.id);
     const enabled = patch.enabled ?? Boolean(session.steward);
     if (enabled && !session.steward) {
-      session.steward = { turns: 0, since: new Date().toISOString() };
+      session.steward = { turns: 0, since: new Date().toISOString(), ...(newName ? { name: newName } : {}) };
       session.goal ??= freshGoal();
-      this.event(session, session.agent, "status", "이 채팅을 프로젝트 담당으로 정했습니다. 담당 노트와 전체 기록을 이어 가며, 끝낸 작업은 메인 폴더에 병합합니다.");
+      this.adoptSteward(session);
+      this.event(session, session.agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
     } else if (!enabled && session.steward) {
       if (session.steward.answering) this.settleStewardAnswer(session, "stopped");
       delete session.steward;
@@ -1477,36 +1632,591 @@ export class Orchestra {
     }
     const steward = session.steward;
     if (steward && patch.name !== undefined) {
-      if (newName) steward.name = newName;
+      const entity = this.stewardOf(session);
+      // The name is the entity's: every thread of the lead shows the new one.
+      if (entity) this.patchSteward(entity.id, { name: newName || basename(session.cwd) || session.cwd });
+      else if (newName) steward.name = newName;
       else delete steward.name;
     }
     if (steward && patch.acceptWork !== undefined) {
       if (patch.acceptWork) steward.acceptWork = true;
       else delete steward.acceptWork;
     }
+    // Reports are the lead's now: a chat's report time (the old API) sets its lead's.
     if (steward && patch.report !== undefined) {
-      if (patch.report) {
-        // From now on: a time already past today waits for tomorrow.
-        if (steward.report !== patch.report) steward.reportedAt = new Date().toISOString();
-        steward.report = patch.report;
-      } else {
-        delete steward.report;
-        delete steward.reportedAt;
-        delete steward.reportState;
-      }
+      const entity = this.stewardOf(session);
+      if (entity) this.setStewardReport(entity.id, patch.report);
     }
     this.broadcast(session);
     return session;
   }
 
+  /**
+   * Other leads, one chat each: a lead with several threads answers in its latest one. `except` is
+   * a chat; its own lead's other threads are not "other leads".
+   */
   private stewards(except?: string): Session[] {
-    return [...this.sessions.values()].filter((item) => item.steward && item.id !== except);
+    const own = except ? this.sessions.get(except)?.steward?.id : undefined;
+    const latest = new Map<string, Session>();
+    for (const item of this.sessions.values()) {
+      if (!item.steward || item.id === except) continue;
+      const key = item.steward.id ?? item.id;
+      if (own && key === own) continue;
+      const seen = latest.get(key);
+      if (!seen || item.createdAt > seen.createdAt) latest.set(key, item);
+    }
+    return [...latest.values()];
   }
 
-  /** Leads are found by name, so two may not share one. */
+  /** Every lead chat, threads included (daily reports and waiting messages are per chat). */
+  private stewardChats(): Session[] {
+    return [...this.sessions.values()].filter((item) => item.steward);
+  }
+
+  /** Leads are found by name, so two may not share one. `except` is a Steward id. */
   private assertStewardNameFree(name: string, except?: string): void {
-    const taken = this.stewards(except).find((peer) => stewardName(peer).toLowerCase() === name.toLowerCase());
-    if (taken) throw new Error(`이미 「${stewardName(taken)}」 담당이 있습니다. 다른 이름을 정하세요.`);
+    const wanted = name.toLowerCase();
+    const entity = [...this.stewardEntities.values()].find((item) => item.id !== except && item.name.toLowerCase() === wanted);
+    const chat = entity ? undefined : this.stewardChats().find((peer) => (peer.steward!.id ?? peer.id) !== except && stewardName(peer).toLowerCase() === wanted);
+    const taken = entity?.name ?? (chat ? stewardName(chat) : undefined);
+    if (taken) throw new Error(`이미 「${taken}」 담당이 있습니다. 다른 이름을 정하세요.`);
+  }
+
+  // Lead entities (Steward): what a lead is, apart from any one chat.
+
+  listStewards(): Steward[] {
+    return [...this.stewardEntities.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  getSteward(id: string): Steward | undefined { return this.stewardEntities.get(id); }
+
+  /** The lead a chat is a thread of. */
+  stewardOf(session: Session): Steward | undefined {
+    return session.steward ? this.stewardEntities.get(session.steward.id ?? session.id) : undefined;
+  }
+
+  /** The chats that are threads of a lead, newest first. */
+  stewardThreads(id: string): Session[] {
+    return this.list().filter((session) => session.steward && (session.steward.id ?? session.id) === id);
+  }
+
+  private saveStewardEntity(steward: Steward): Steward {
+    this.stewardEntities.set(steward.id, steward);
+    void Promise.resolve(this.persistStewards?.(this.listStewards())).catch(() => undefined);
+    return steward;
+  }
+
+  /** A chat that just became a lead: its own entity, made from what the chat runs with. */
+  private adoptSteward(session: Session): Steward {
+    const id = session.steward?.id ?? session.id;
+    // Made a lead again after it was unset: the entity it had (and its edits) comes back.
+    const existing = this.stewardEntities.get(id);
+    if (existing) {
+      session.steward!.id = id;
+      session.steward!.name = existing.name;
+      return existing;
+    }
+    const steward = stewardFromSession(session, { id, mergePolicy: DEFAULT_MERGE_POLICY });
+    session.steward!.id = steward.id;
+    session.steward!.name = steward.name;
+    return this.saveStewardEntity(steward);
+  }
+
+  createSteward(input: StewardPatch & { name: string }): Steward {
+    const name = input.name.trim().slice(0, 80);
+    if (!name) throw new Error("담당 이름이 필요합니다.");
+    this.assertStewardNameFree(name);
+    const now = new Date().toISOString();
+    const base: Steward = { id: randomUUID(), name, agent: input.agent ?? "claude", skills: [], systemPrompt: "", workers: [], mergePolicy: DEFAULT_MERGE_POLICY, cwds: [], createdAt: now };
+    const steward = applyStewardPatch(base, { ...input, name }, now);
+    delete steward.updatedAt;
+    steward.workers = normalizeWorkerConfigs(steward.workers.map((worker) => worker.agent), steward.workers);
+    return this.saveStewardEntity(steward);
+  }
+
+  /**
+   * Edits a lead. Instructions and skills apply from each thread's next turn (they are read when a
+   * turn starts); a new name shows in every thread; a new team goes to every thread not running now.
+   */
+  patchSteward(id: string, patch: StewardPatch): Steward {
+    const current = this.stewardEntities.get(id);
+    if (!current) throw new Error("담당을 찾을 수 없습니다.");
+    const name = patch.name?.trim().slice(0, 80);
+    if (patch.name !== undefined && !name) throw new Error("담당 이름이 필요합니다.");
+    if (name && name.toLowerCase() !== current.name.toLowerCase()) this.assertStewardNameFree(name, id);
+    const next = applyStewardPatch(current, { ...patch, ...(name ? { name } : {}) });
+    if (patch.workers) next.workers = normalizeWorkerConfigs(next.workers.map((worker) => worker.agent), next.workers);
+    if (patch.mergePolicy !== undefined) next.mergePolicyChosen = true;
+    const teamChanged = patch.agent !== undefined || patch.workers !== undefined || patch.model !== undefined || patch.reasoningEffort !== undefined;
+    this.saveStewardEntity(next);
+    for (const session of this.stewardThreads(id)) {
+      session.steward!.name = next.name;
+      if (teamChanged && session.status !== "running" && next.workers.length) {
+        try {
+          this.applyTeam(session, { agent: next.agent, model: next.model, reasoningEffort: next.reasoningEffort, workers: next.workers.map((worker) => worker.agent), workerConfigs: structuredClone(next.workers) });
+        } catch (error) {
+          this.event(session, session.agent, "warning", `담당의 기본 팀을 이 채팅에 적용하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      this.broadcast(session);
+    }
+    return next;
+  }
+
+  /**
+   * Moves report settings left on lead chats (from before reports were per lead) to their lead. When
+   * its chats had different times the earliest wins, and the latest chat says so. Returns the chats changed.
+   */
+  private moveThreadReports(): string[] {
+    const changed: string[] = [];
+    for (const steward of this.listStewards()) {
+      const threads = this.stewardThreads(steward.id);
+      const carrying = threads.filter((session) => session.steward!.report || session.steward!.reportedAt || session.steward!.reportState !== undefined);
+      if (!carrying.length) continue;
+      const merged = mergeThreadReports([...(steward.report ? [{ report: steward.report, reportedAt: steward.reportedAt, reportState: steward.reportState }] : []), ...carrying.map((session) => session.steward!)]);
+      const next: Steward = { ...steward };
+      for (const key of ["report", "reportedAt", "reportState"] as const) { if (merged[key] !== undefined) next[key] = merged[key]; }
+      this.stewardEntities.set(steward.id, next);
+      for (const session of carrying) {
+        delete session.steward!.report;
+        delete session.steward!.reportedAt;
+        delete session.steward!.reportState;
+        changed.push(session.id);
+      }
+      if (merged.times.length > 1) {
+        const latest = this.latestThread(steward.id) ?? carrying[0];
+        const text = `채팅마다 달랐던 정기 보고 시각(${merged.times.join(", ")})을 담당 「${steward.name}」 하나로 합쳐 가장 이른 ${merged.report}로 정했습니다. 담당 패널에서 바꿀 수 있습니다.`;
+        latest.events.push({ id: randomUUID(), sessionId: latest.id, agent: latest.agent, type: "status", text, time: new Date().toISOString() });
+        console.warn(`[steward] ${text}`);
+      }
+    }
+    return changed;
+  }
+
+  /** The lead's chat used last (latest event, else newest): where its report opens. */
+  latestThread(id: string): Session | undefined {
+    const at = (session: Session) => session.events.at(-1)?.time ?? session.createdAt;
+    return this.stewardThreads(id).sort((a, b) => at(b).localeCompare(at(a)) || b.createdAt.localeCompare(a.createdAt))[0];
+  }
+
+  /** Sets or clears a lead's daily report time ("HH:MM"); a time already past today waits for tomorrow. */
+  setStewardReport(id: string, report: string | null): Steward {
+    const steward = this.stewardEntities.get(id);
+    if (!steward) throw new Error("담당을 찾을 수 없습니다.");
+    const next: Steward = { ...steward, updatedAt: new Date().toISOString() };
+    if (report) {
+      if (steward.report !== report) next.reportedAt = new Date().toISOString();
+      next.report = report;
+    } else {
+      delete next.report;
+      delete next.reportedAt;
+      delete next.reportState;
+    }
+    this.saveStewardEntity(next);
+    for (const session of this.stewardThreads(id)) this.broadcast(session);
+    return next;
+  }
+
+  /** Sets every lead's merge policy at once (the settings' one-click action). Returns how many changed. */
+  setAllMergePolicies(policy: MergePolicy): number {
+    let changed = 0;
+    for (const steward of this.listStewards()) {
+      if (steward.mergePolicy !== policy) changed++;
+      this.stewardEntities.set(steward.id, { ...steward, mergePolicy: policy, mergePolicyChosen: true, updatedAt: new Date().toISOString() });
+    }
+    void Promise.resolve(this.persistStewards?.(this.listStewards())).catch(() => undefined);
+    return changed;
+  }
+
+  /**
+   * The user changed what migrated leads get: it applies to every migrated lead whose policy nobody
+   * picked by hand, and to leads migrated from now on. Returns how many changed.
+   */
+  setLegacyMergePolicy(policy: MergePolicy): number {
+    let changed = 0;
+    for (const steward of this.listStewards()) {
+      if (!steward.migrated || steward.mergePolicyChosen || steward.mergePolicy === policy) continue;
+      this.stewardEntities.set(steward.id, { ...steward, mergePolicy: policy, updatedAt: new Date().toISOString() });
+      changed++;
+    }
+    if (changed) void Promise.resolve(this.persistStewards?.(this.listStewards())).catch(() => undefined);
+    return changed;
+  }
+
+  /** Removes a lead; its chats stay as ordinary chats (their notes stay on disk). */
+  // ---------- the project lead's tools (lead-tools.ts, POST /api/lead-mcp) ----------
+
+  /** One tool call from a lead's CLI run. `touch` tells the run it is still working while it waits. */
+  async leadToolCall(sessionId: string, name: string, args: Record<string, unknown>, touch?: () => void): Promise<unknown> {
+    const session = this.sessions.get(sessionId);
+    if (!session?.steward) throw new Error("담당 채팅이 아닙니다.");
+    const stewardId = this.stewardOf(session)?.id;
+    const own = (id: unknown) => {
+      const schedule = typeof id === "string" ? this.schedules.get(id) : undefined;
+      if (!schedule || schedule.stewardId !== stewardId) throw new Error(`일정을 찾을 수 없습니다: ${String(id)}. schedule_list로 ID를 확인하세요.`);
+      return schedule;
+    };
+    switch (name) {
+      case "delegate_task": return this.delegateTask(session, args);
+      case "check_task": return this.checkTasks(session, args);
+      case "collect_results": return this.collectResults(session, args, touch);
+      case "write_skill": return this.writeLeadSkill(session, args, false);
+      case "update_skill": return this.writeLeadSkill(session, args, true);
+      case "list_skills": return this.leadSkillList(session);
+      case "schedule_create":
+        if (!stewardId) throw new Error("담당을 찾을 수 없습니다.");
+        return this.scheduleView(this.createLeadSchedule(stewardId, args as ScheduleInput, "lead", session));
+      case "schedule_list":
+        return { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, now: new Date().toISOString(), schedules: stewardId ? this.listSchedules(stewardId).map((item) => this.scheduleView(item)) : [] };
+      case "schedule_update":
+        return this.scheduleView(this.updateLeadSchedule(own(args.id).id, args as ScheduleInput, "lead", session));
+      case "schedule_delete":
+        this.deleteLeadSchedule(own(args.id).id, "lead", session);
+        return { deleted: args.id };
+      default: throw new Error(`알 수 없는 도구: ${name}`);
+    }
+  }
+
+  private scheduleView(schedule: Schedule) {
+    const { id, title, prompt, at, cron, timezone, enabled, nextRunAt, lastRunAt, createdBy } = schedule;
+    return { id, title, prompt, ...(at ? { at } : {}), ...(cron ? { cron } : {}), timezone, enabled, ...(nextRunAt ? { nextRunAt } : {}), ...(lastRunAt ? { lastRunAt } : {}), createdBy };
+  }
+
+  private liveLeadTurn(session: Session): LeadTurn {
+    const turn = this.leadTurns.get(session.id);
+    if (!turn || turn.controller.signal.aborted || !this.isCurrentRun(session, turn.controller.signal)) throw new Error("이 담당은 지금 진행 중인 턴이 없어 워커 일을 다룰 수 없습니다.");
+    return turn;
+  }
+
+  /** Worker for a delegate_task: the named one, or an idle one of the CLI, or a new one of it (parallel). */
+  private pickLeadWorker(session: Session, turn: LeadTurn, args: Record<string, unknown>): AgentSelection {
+    const workers = turn.workers;
+    const busy = (id: string) => turn.tasks.some((task) => task.workerId === id && task.status === "running");
+    const isAgent = (value: unknown): value is AgentId => value === "claude" || value === "codex" || value === "grok";
+    const requested = typeof args.worker === "string" ? args.worker.trim() : "";
+    let agent = isAgent(args.agent) ? args.agent : undefined;
+    if (requested) {
+      const exact = workers.find((worker) => worker.id === requested);
+      if (exact) return exact;
+      const named = requested.toLowerCase();
+      if (!isAgent(named)) throw new Error(`워커 ${requested}가 없습니다. 있는 워커: ${workers.map((worker) => worker.id).join(", ")}. agent로 CLI를 정하면 새 워커를 만듭니다.`);
+      agent = named;
+    }
+    const model = typeof args.model === "string" && args.model.trim() ? args.model.trim().slice(0, 100) : undefined;
+    if (!agent) {
+      const any = workers.find((worker) => !busy(worker.id!)) ?? workers[0];
+      if (!any) throw new Error("팀에 워커가 없습니다. agent를 정하세요.");
+      return any;
+    }
+    const idle = workers.find((worker) => worker.agent === agent && (!model || worker.model === model) && !busy(worker.id!));
+    if (idle) return idle;
+    // Every worker of that CLI is busy (or none has the model): another one joins so both run at once.
+    const added = this.addStewardWorker(session, workers, agent, model);
+    if (!added) throw new Error(`${agentNames[agent]} 워커를 쓸 수 없습니다. 이 작업공간에서 허용된 에이전트: ${this.allowedAgents(session).join(", ")}`);
+    return added;
+  }
+
+  private async delegateTask(session: Session, args: Record<string, unknown>) {
+    const turn = this.liveLeadTurn(session);
+    if (turn.answerOnly) throw new Error("다른 담당의 질문에 답하는 중이라 워커에게 일을 맡길 수 없습니다. 사용자가 담당 패널에서 '다른 담당의 부탁으로 작업하기'를 켜야 합니다.");
+    const brief = typeof args.brief === "string" ? args.brief.trim().slice(0, 40_000) : "";
+    if (!brief) throw new Error("brief가 비었습니다. 워커에게 줄 지시를 적으세요.");
+    if (turn.tasks.filter((task) => task.status === "running").length >= maxDelegations * 2) throw new Error(`동시에 맡길 수 있는 일은 ${maxDelegations * 2}건입니다. collect_results로 끝난 일을 받은 뒤 맡기세요.`);
+    const worker = this.pickLeadWorker(session, turn, args);
+    const names = Array.isArray(args.skills) ? args.skills.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 10) : [];
+    const skillText = names.length ? await this.leadSkillText(session, names) : { text: "", missing: [] as string[] };
+    const kind = args.kind === "design" || args.kind === "research" ? args.kind : undefined;
+    const group = typeof args.group === "string" && args.group.trim() ? args.group.trim().slice(0, 60) : undefined;
+    const label = workerLabel(worker);
+    const task: LeadTask = { id: `t${turn.tasks.length + 1}-${randomUUID().slice(0, 6)}`, workerId: worker.id!, label, agent: worker.agent, brief, ...(group ? { group } : {}), ...(kind ? { kind } : {}), status: "running", collected: false, startedAt: new Date().toISOString(), done: Promise.resolve() };
+    const extra = `${skillText.text}${kind === "design" ? `\n\n${DESIGN_BRIEF}` : ""}`;
+    task.done = this.runBrief(session, turn, brief, worker, turn.worktrees, extra).then((out) => {
+      if (out === STOPPED) { task.status = "stopped"; task.result = `[${label} 결과 — 멈춤]`; }
+      else { task.status = "done"; task.result = out; }
+    }, (error: unknown) => {
+      task.status = "error";
+      task.result = `[${label} 결과 — 실패]\n${error instanceof Error ? error.message : String(error)}`;
+    }).finally(() => { task.endedAt = new Date().toISOString(); });
+    turn.tasks.push(task);
+    return { task_id: task.id, worker: worker.id, agent: worker.agent, status: "running", ...(skillText.missing.length ? { missing_skills: skillText.missing } : {}), next: "다른 일도 맡기고, collect_results(wait)로 결과를 받으세요." };
+  }
+
+  private checkTasks(session: Session, args: Record<string, unknown>) {
+    const turn = this.leadTurns.get(session.id);
+    const id = typeof args.task_id === "string" ? args.task_id : undefined;
+    const tasks = (turn?.tasks ?? []).filter((task) => !id || task.id === id);
+    if (id && !tasks.length) throw new Error(`맡긴 일을 찾을 수 없습니다: ${id}`);
+    return { tasks: tasks.map((task) => ({ task_id: task.id, worker: task.workerId, agent: task.agent, status: task.status, ...(task.group ? { group: task.group } : {}), collected: task.collected, started_at: task.startedAt, ...(task.endedAt ? { ended_at: task.endedAt } : {}), brief: task.brief.slice(0, 200) })) };
+  }
+
+  private async collectResults(session: Session, args: Record<string, unknown>, touch?: () => void) {
+    const turn = this.liveLeadTurn(session);
+    const ids = Array.isArray(args.task_ids) ? args.task_ids.filter((item): item is string => typeof item === "string") : [];
+    const group = typeof args.group === "string" && args.group ? args.group : undefined;
+    const picked = turn.tasks.filter((task) => (ids.length ? ids.includes(task.id) : !task.collected) && (!group || task.group === group));
+    if (args.wait !== false && picked.some((task) => task.status === "running")) {
+      const seconds = Math.min(LEAD_WAIT_LIMIT_SEC, Math.max(1, Number(args.timeout_sec) || LEAD_WAIT_LIMIT_SEC));
+      let timer: NodeJS.Timeout | undefined;
+      const keepAlive = touch ? setInterval(touch, 20_000) : undefined;
+      keepAlive?.unref();
+      const stopped = new Promise<void>((done) => turn.controller.signal.addEventListener("abort", () => done(), { once: true }));
+      try {
+        await Promise.race([Promise.all(picked.map((task) => task.done)), new Promise<void>((done) => { timer = setTimeout(done, seconds * 1_000); timer.unref(); }), stopped]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (keepAlive) clearInterval(keepAlive);
+      }
+    }
+    const finished = picked.filter((task) => task.status !== "running");
+    const worktrees = [...new Map(finished.flatMap((task) => { const info = turn.worktrees.get(task.workerId); return info ? [[info.path, info] as const] : []; })).values()];
+    const note = worktrees.length ? await worktreeReviewNote(worktrees, mergeRule(this.stewardOf(session)?.mergePolicy)).catch(() => "") : "";
+    for (const task of finished) task.collected = true;
+    const running = picked.filter((task) => task.status === "running");
+    return {
+      results: finished.map((task) => ({ task_id: task.id, worker: task.workerId, status: task.status, result: task.result ?? "" })),
+      ...(running.length ? { still_running: running.map((task) => task.id) } : {}),
+      ...(note ? { worktrees: note } : {}),
+      ...(!picked.length ? { note: "받을 결과가 없습니다." } : {}),
+    };
+  }
+
+  private leadSkillRoot(session: Session): string {
+    const id = this.stewardOf(session)?.id;
+    if (!id || !this.stewardDataDir) throw new Error("담당 스킬을 둘 곳이 없습니다.");
+    return join(this.stewardDataDir, "stewards", id, "skills");
+  }
+
+  /** Skills the lead can attach: its own (lead scope) first, then the project's and installed ones. */
+  private async leadSkillRecords(session: Session): Promise<SkillRecord[]> {
+    const own = this.stewardDataDir && this.stewardOf(session) ? await scanSkillRoot(this.leadSkillRoot(session), "담당", ["claude", "codex", "grok"]) : [];
+    return [...own, ...await loadSkills(session.cwd).catch(() => [] as SkillRecord[])];
+  }
+
+  private async leadSkillText(session: Session, names: string[]): Promise<{ text: string; missing: string[] }> {
+    const records = await this.leadSkillRecords(session);
+    const ids: string[] = [];
+    const missing: string[] = [];
+    for (const name of names) {
+      const wanted = name.trim().toLowerCase();
+      const record = records.find((item) => item.id === name || item.name.toLowerCase() === wanted);
+      if (record) ids.push(record.id); else missing.push(name);
+    }
+    return { text: formatSkillPrompt(records, ids), missing };
+  }
+
+  private async leadSkillList(session: Session) {
+    const records = await this.leadSkillRecords(session);
+    const view = (items: SkillRecord[]) => items.slice(0, 80).map((item) => ({ name: item.name, description: item.description, source: item.source }));
+    return { lead: view(records.filter((item) => item.source === "담당")), others: view(records.filter((item) => item.source !== "담당")) };
+  }
+
+  private async writeLeadSkill(session: Session, args: Record<string, unknown>, update: boolean): Promise<{ name: string; scope: "lead" | "project"; path: string; action: "created" | "updated" }> {
+    const name = skillSlug(typeof args.name === "string" ? args.name : "");
+    if (!name) throw new Error("스킬 이름은 영문 소문자·숫자·하이픈으로 정하세요 (예: api-review).");
+    const scope = args.scope === "project" ? "project" : "lead";
+    const directory = scope === "project" ? join(session.cwd, ".claude", "skills", name) : join(this.leadSkillRoot(session), name);
+    const file = join(directory, "SKILL.md");
+    let existing = await readFile(file, "utf8").catch(() => undefined);
+    // update_skill without scope: the lead's own skill, else the project's.
+    if (update && existing === undefined && args.scope === undefined) {
+      const projectFile = join(session.cwd, ".claude", "skills", name, "SKILL.md");
+      const project = await readFile(projectFile, "utf8").catch(() => undefined);
+      if (project !== undefined) return this.writeLeadSkill(session, { ...args, scope: "project" }, true);
+    }
+    if (update && existing === undefined) throw new Error(`스킬 ${name}이 없습니다. write_skill로 만드세요.`);
+    if (!update && existing !== undefined) throw new Error(`스킬 ${name}이 이미 있습니다. update_skill로 고치세요.`);
+    existing ??= "";
+    const front = /^---\n([\s\S]*?)\n---\n?/u.exec(existing);
+    const oldDescription = front?.[1].match(/^description:\s*(.*)$/mu)?.[1]?.trim() ?? "";
+    const oldBody = front ? existing.slice(front[0].length).trim() : existing.trim();
+    const description = (typeof args.description === "string" && args.description.trim() ? args.description : oldDescription).replace(/\s+/gu, " ").trim().slice(0, 300);
+    const content = (typeof args.content === "string" && args.content.trim() ? args.content : oldBody).trim().slice(0, 30_000);
+    if (!description || !content) throw new Error("스킬에는 설명(description)과 본문(content)이 필요합니다.");
+    await mkdir(directory, { recursive: true });
+    await writeFile(file, `---\nname: ${name}\ndescription: ${description}\n---\n\n${content}\n`);
+    if (scope === "project") clearSkillsCache(session.cwd);
+    const action = update ? "updated" : "created";
+    this.event(session, session.agent, "status", `담당이 ${scope === "project" ? "프로젝트" : "담당"} 스킬 ${name}을 ${update ? "고쳤습니다" : "만들었습니다"}.`, { role: "orchestrator", metadata: { leadSkill: { name, scope, action } } });
+    return { name, scope, path: file, action };
+  }
+
+  // ---------- schedules ----------
+
+  restoreSchedules(list: Schedule[]): void {
+    for (const schedule of list) if (this.stewardEntities.has(schedule.stewardId)) this.schedules.set(schedule.id, schedule);
+  }
+
+  listSchedules(stewardId?: string): Schedule[] {
+    return [...this.schedules.values()].filter((item) => !stewardId || item.stewardId === stewardId).sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  createLeadSchedule(stewardId: string, input: ScheduleInput, by: Schedule["createdBy"], via?: Session): Schedule {
+    if (!this.stewardEntities.has(stewardId)) throw new Error("담당을 찾을 수 없습니다.");
+    if (this.listSchedules(stewardId).length >= SCHEDULE_LIMIT) throw new Error(`담당 한 명의 일정은 ${SCHEDULE_LIMIT}개까지입니다. 지난 일정을 지우세요.`);
+    const schedule = createSchedule(stewardId, input, by);
+    this.schedules.set(schedule.id, schedule);
+    this.saveSchedules();
+    this.scheduleCard(schedule, "created", by, via);
+    return schedule;
+  }
+
+  updateLeadSchedule(id: string, input: ScheduleInput, by: Schedule["createdBy"], via?: Session): Schedule {
+    const current = this.schedules.get(id);
+    if (!current) throw new Error("일정을 찾을 수 없습니다.");
+    const next = applySchedulePatch(current, input);
+    this.schedules.set(id, next);
+    this.saveSchedules();
+    this.scheduleCard(next, "updated", by, via);
+    return next;
+  }
+
+  deleteLeadSchedule(id: string, by: Schedule["createdBy"], via?: Session): void {
+    const current = this.schedules.get(id);
+    if (!current) throw new Error("일정을 찾을 수 없습니다.");
+    this.schedules.delete(id);
+    this.saveSchedules();
+    this.scheduleCard(current, "deleted", by, via);
+  }
+
+  private saveSchedules(): void {
+    void Promise.resolve(this.persistSchedules?.(this.listSchedules())).catch(() => undefined);
+  }
+
+  /** The small card in the lead's chat: in the chat that changed it, else the lead's latest chat. */
+  private scheduleCard(schedule: Schedule, action: ScheduleCard["action"], by: "user" | "lead" | "app", via?: Session): void {
+    const target = via ?? this.latestThread(schedule.stewardId);
+    if (!target) return;
+    const verb = { created: "만들었습니다", updated: "고쳤습니다", deleted: "지웠습니다", fired: "시각이 되어 담당에게 보냈습니다", missed: "앱이 꺼져 있던 동안 시각이 지나 건너뛰었습니다" }[action];
+    const who = by === "lead" ? "담당이 일정을 " : by === "user" ? "사용자가 일정을 " : "일정: ";
+    this.event(target, target.agent, "status", `${who}${verb} — ${describeSchedule(schedule)}`, {
+      role: "orchestrator",
+      metadata: { schedule: { id: schedule.id, title: schedule.title, action, by, ...(schedule.at ? { at: schedule.at } : {}), ...(schedule.cron ? { cron: schedule.cron } : {}), timezone: schedule.timezone, ...(schedule.nextRunAt ? { nextRunAt: schedule.nextRunAt } : {}), enabled: schedule.enabled } },
+    });
+  }
+
+  /** Due schedules: each sends its prompt to the lead's latest chat (queued behind running work). */
+  private scheduleTick(now: Date): void {
+    const due = dueSchedules(this.schedules.values(), now);
+    if (!due.length) return;
+    for (const { schedule, action } of due) {
+      const target = this.latestThread(schedule.stewardId);
+      this.scheduleCard(schedule, action === "fire" ? "fired" : "missed", "app", target);
+      if (action === "fire" && target) this.deliverToSteward(target, { prompt: `[일정 "${schedule.title}"]\n${schedule.prompt}` });
+    }
+    this.saveSchedules();
+  }
+
+  /** Lead (Claude when allowed) and one worker per allowed agent: what a lead with no team starts with. */
+  private defaultTeam(workspaceId: string, lead?: AgentId): { agent: AgentId; workers: AgentId[]; workerConfigs?: undefined } {
+    const allowed = this.allowedAgents({ workspaceId });
+    if (!allowed.length) throw new Error("이 작업공간에서 허용된 에이전트가 없습니다.");
+    return { agent: lead ?? (allowed.includes("claude") ? "claude" : allowed[0]), workers: [...allowed], workerConfigs: undefined };
+  }
+
+  deleteSteward(id: string): void {
+    if (!this.stewardEntities.has(id)) throw new Error("담당을 찾을 수 없습니다.");
+    for (const session of this.stewardThreads(id)) this.updateSteward(session.id, { enabled: false });
+    this.stewardEntities.delete(id);
+    void Promise.resolve(this.persistStewards?.(this.listStewards())).catch(() => undefined);
+    const owned = this.listSchedules(id);
+    for (const schedule of owned) this.schedules.delete(schedule.id);
+    if (owned.length) this.saveSchedules();
+  }
+
+  /** The instructions and skills a turn starts with: a lead's are its entity's, as they are now. */
+  private turnConfig(session: Session): { skills: string[]; systemPrompt: string } {
+    const entity = this.stewardOf(session);
+    if (entity) return { skills: [...entity.skills], systemPrompt: entity.systemPrompt };
+    return this.configs.get(session.id) ?? { skills: [], systemPrompt: "" };
+  }
+
+  /** One chat at a glance (GET /api/sessions/:id/summary). */
+  summary(id: string): SessionSummary {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    return sessionSummary(session, this.stewardOf(session));
+  }
+
+  /**
+   * A lead delegated to an agent its team does not have. When the workspace allows that agent, a
+   * worker for it joins the team (kept for later turns) and the user is told; otherwise it is refused.
+   */
+  private addStewardWorker(session: Session, workers: AgentSelection[], agent: AgentId, model?: string): AgentSelection | undefined {
+    if (!this.agentAllowed(session.workspaceId, agent)) {
+      this.event(session, session.agent, "warning", `${agentNames[agent]}는 이 작업공간에서 허용되지 않은 에이전트라 위임하지 않았습니다. 작업공간 설정에서 허용하거나 팀에 있는 워커에게 맡기세요.`);
+      return undefined;
+    }
+    const nextAgents = [...session.workers, agent];
+    const configs = normalizeWorkerConfigs(nextAgents, [...(session.workerConfigs ?? []), { agent, ...(model ? { model } : {}) }]);
+    const added = configs.find((config) => config.agent === agent && !workers.some((worker) => worker.id === config.id));
+    if (!added) return undefined;
+    session.workers = nextAgents;
+    session.workerConfigs = configs;
+    workers.push(added);
+    this.event(session, agent, "status", `팀에 없던 ${agentNames[agent]} 워커(${added.id})를 추가해 맡깁니다. 다음 턴에도 이 팀으로 이어 갑니다.`, { metadata: { addedWorker: agent } });
+    return added;
+  }
+
+  /** Approves the lead's held branches (mergePolicy "ask"): merges them into the main checkout now. */
+  async approveMerge(id: string): Promise<Session> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    if (!session.steward?.pendingMerge) throw new Error("병합을 기다리는 작업이 없습니다.");
+    if (session.status === "running") throw new Error("실행 중에는 병합할 수 없습니다. 이번 턴이 끝난 뒤 승인하세요.");
+    delete session.steward.pendingMerge;
+    const { failed } = await this.mergeStewardWork(session, "사용자가 승인해 ");
+    // A failed merge waits for approval again; nothing goes in by itself.
+    if (failed && session.steward && session.worktrees?.length) session.steward.pendingMerge = this.pendingFrom(session.worktrees);
+    this.broadcast(session);
+    return session;
+  }
+
+  /** Declines the held branches: nothing is merged, the branches stay, and the next turn's end asks again. */
+  rejectMerge(id: string): Session {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    const pending = session.steward?.pendingMerge;
+    if (!pending) throw new Error("병합을 기다리는 작업이 없습니다.");
+    delete session.steward!.pendingMerge;
+    const branches = pending.branches.map((item) => item.branch).join(", ");
+    this.event(session, session.agent, "status", `병합하지 않았습니다. 작업 브랜치(${branches})는 남겨 두었고, 다음 턴이 끝나면 다시 묻습니다.`);
+    session.steward!.appNotes = [...(session.steward!.appNotes ?? []), `사용자가 작업 브랜치(${branches}) 병합을 거절했습니다. 메인 폴더에는 들어가지 않았습니다.`];
+    this.broadcast(session);
+    return session;
+  }
+
+  private pendingFrom(infos: NonNullable<Session["worktrees"]>): NonNullable<NonNullable<Session["steward"]>["pendingMerge"]> {
+    return { branches: infos.map((info) => ({ workerId: info.workerId, ...(info.workerLabel ? { workerLabel: info.workerLabel } : {}), branch: info.branch, path: info.path })), createdAt: new Date().toISOString() };
+  }
+
+  /** mergePolicy "ask" or "never": the turn's branches with work stay; the user approves them, or merges by hand. */
+  private async holdStewardWork(session: Session, policy: Exclude<MergePolicy, "auto">): Promise<void> {
+    if (!session.worktrees?.length) {
+      if (session.steward) delete session.steward.pendingMerge;
+      return;
+    }
+    await this.cliRunsSettled(session.id);
+    await this.withWorktreeLock(session.id, async () => {
+      const held: NonNullable<Session["worktrees"]> = [];
+      for (const info of session.worktrees ?? []) {
+        const status = await worktreeStatus(info).catch(() => undefined);
+        if (!status || status.changedFiles > 0 || status.commits > 0) held.push(info);
+      }
+      const steward = session.steward;
+      if (!steward) return;
+      if (!held.length) { delete steward.pendingMerge; return; }
+      const branches = held.map((info) => info.branch).join(", ");
+      if (policy === "ask") {
+        steward.pendingMerge = this.pendingFrom(held);
+        this.event(session, session.agent, "status", `작업 브랜치(${branches})가 병합 승인을 기다립니다. 담당 패널에서 승인하면 메인 폴더에 병합합니다.`, { metadata: { mergeHold: "ask" } });
+        steward.appNotes = [...(steward.appNotes ?? []), `워커 작업(${branches})은 사용자의 병합 승인을 기다리고 있습니다. 메인 폴더에는 아직 없습니다.`];
+      } else {
+        delete steward.pendingMerge;
+        this.event(session, session.agent, "status", `병합하지 않는 담당이라 작업을 브랜치에 남겨 두었습니다: ${branches}. 직접 병합하세요.`, { metadata: { mergeHold: "never" } });
+        steward.appNotes = [...(steward.appNotes ?? []), `워커 작업은 브랜치(${branches})에 남아 있습니다. 앱은 병합하지 않습니다.`];
+      }
+      this.broadcast(session);
+    });
   }
 
   /**
@@ -1514,21 +2224,29 @@ export class Orchestra {
    * project and the chat are unchanged since the last one), and runs messages left waiting.
    */
   async stewardTick(now = new Date()): Promise<void> {
-    for (const session of this.stewards()) {
-      const steward = session.steward!;
-      if (steward.report && reportDue(steward.report, steward.reportedAt, now)) {
-        const since = steward.reportedAt;
-        steward.reportedAt = now.toISOString();
-        const state = await projectState(session.cwd);
-        const talked = session.events.some((event) => event.agent === "user" && event.type === "message" && (!since || event.time > since) && !isReportPrompt(event.text));
-        if (steward.reportState === undefined || state !== steward.reportState || talked) {
-          steward.reportState = state;
-          this.deliverToSteward(session, { prompt: reportPrompt() });
-        }
-        this.broadcast(session);
+    this.scheduleTick(now);
+    // One report per lead, in the chat it used last; it covers the lead's other chats too.
+    for (const steward of this.listStewards()) {
+      if (!steward.report || !reportDue(steward.report, steward.reportedAt, now)) continue;
+      const target = this.latestThread(steward.id);
+      if (!target) continue;
+      const threads = this.stewardThreads(steward.id);
+      const since = steward.reportedAt;
+      steward.reportedAt = now.toISOString();
+      const folders = [...new Set(threads.map((session) => session.cwd))].sort();
+      const state = (await Promise.all(folders.map((cwd) => projectState(cwd)))).join("\n--\n");
+      const talked = threads.some((session) => session.events.some((event) => event.agent === "user" && event.type === "message" && (!since || event.time > since) && !isReportPrompt(event.text)));
+      if (steward.reportState === undefined || state !== steward.reportState || talked) {
+        steward.reportState = state;
+        const others = threads.filter((session) => session !== target).map((session) => ({ title: session.title, status: session.status, ...(this.stewardDataDir ? { transcript: transcriptPath(this.stewardDataDir, session.id) } : {}) }));
+        this.deliverToSteward(target, { prompt: reportPrompt(others) });
       }
-      // Left from before a restart, or found the lead busy and nothing ran it since.
-      if (steward.inbox?.length) this.drainIfIdle(session);
+      this.saveStewardEntity(steward);
+      this.broadcast(target);
+    }
+    // Left from before a restart, or found the lead busy and nothing ran it since.
+    for (const session of this.stewardChats()) {
+      if (session.steward!.inbox?.length) this.drainIfIdle(session);
     }
   }
 
@@ -1616,9 +2334,9 @@ export class Orchestra {
 
   private async stewardContext(session: Session): Promise<string> {
     if (!session.steward || !this.stewardDataDir) return "";
-    const notes = await readNotes(this.stewardDataDir, session.id);
+    const [notes, preferences] = await Promise.all([readNotes(this.stewardDataDir, stewardNotesId(session)), readUserPreferences(this.stewardDataDir)]);
     const peers = this.stewards(session.id).map((peer) => ({ name: stewardName(peer), cwd: peer.cwd }));
-    return `\n\n${stewardRules(notes, transcriptPath(this.stewardDataDir, session.id), peers, session.steward.appNotes)}`;
+    return `\n\n${stewardRules(notes, transcriptPath(this.stewardDataDir, session.id), peers, session.steward.appNotes, { mergePolicy: this.stewardOf(session)?.mergePolicy, preferences, allowedAgents: this.allowedAgents(session) })}`;
   }
 
   /**
@@ -1637,21 +2355,28 @@ export class Orchestra {
     // This turn saw what the app did after the last one; the merge below writes the next note.
     delete steward.appNotes;
     if (this.stewardDataDir) await saveTranscript(this.stewardDataDir, session).catch(() => undefined);
-    if (outcome === "done" && !commanderActive(session) && this.permissionModeOf(session) !== "plan") await this.mergeStewardWork(session);
+    if (outcome === "done" && !commanderActive(session) && this.permissionModeOf(session) !== "plan") {
+      const policy = this.stewardOf(session)?.mergePolicy ?? DEFAULT_MERGE_POLICY;
+      if (policy === "auto") await this.mergeStewardWork(session);
+      else await this.holdStewardWork(session, policy);
+    }
     if (steward.turns < STEWARD_ROLLOVER_TURNS || session.status === "running") return;
-    const notes = this.stewardDataDir ? await readNotes(this.stewardDataDir, session.id) : "";
+    const notes = this.stewardDataDir ? await readNotes(this.stewardDataDir, stewardNotesId(session)) : "";
     session.handoffContext = rolloverContext(notes, this.conversationSummary(session, session.agent), this.stewardDataDir ? transcriptPath(this.stewardDataDir, session.id) : "(없음)");
+    // Only the lead's CLI session starts fresh. Workers keep theirs: each gets a full brief per task,
+    // their CLIs compact their own context, and a session that cannot be resumed already falls back
+    // to a fresh one (execute: "이전 세션에 연결하지 못해"). Dropping them would cost every worker its
+    // knowledge of the files it worked on for nothing the lead gains.
     delete session.cliSessionId;
-    delete session.workerSessionIds;
     Object.assign(steward, { turns: 0, since: new Date().toISOString() });
-    this.event(session, session.agent, "status", "대화가 길어져 다음 턴부터 새 세션으로 이어 갑니다. 담당 노트와 전체 기록은 그대로입니다.");
+    this.event(session, session.agent, "status", "대화가 길어져 다음 턴부터 새 세션으로 이어 갑니다. 대화 기록은 그대로 이어 갑니다.");
   }
 
   /** Merges every worker branch of the lead's chat that holds work; a failed merge keeps its branch for the next turn. */
-  private async mergeStewardWork(session: Session): Promise<void> {
-    if (!session.worktrees?.length) return;
+  private async mergeStewardWork(session: Session, prefix = ""): Promise<{ merged: number; failed: number }> {
+    if (!session.worktrees?.length) return { merged: 0, failed: 0 };
     await this.cliRunsSettled(session.id);
-    await this.withWorktreeLock(session.id, async () => {
+    return this.withWorktreeLock(session.id, async () => {
       const merged: string[] = [];
       const failed: string[] = [];
       for (const info of [...(session.worktrees ?? [])]) {
@@ -1663,15 +2388,17 @@ export class Orchestra {
       if (!session.worktrees?.length) delete session.worktrees;
       const notes: string[] = [];
       if (merged.length) {
-        this.event(session, session.agent, "status", `이번 턴의 작업을 메인 폴더에 병합했습니다 (${merged.join(", ")}).`);
+        this.event(session, session.agent, "status", `${prefix}이번 턴의 작업을 메인 폴더에 병합했습니다 (${merged.join(", ")}).`);
         notes.push(`워커 작업을 메인 폴더에 병합했습니다 (${merged.join(", ")}). 작업 브랜치는 정리했습니다.`);
       }
       if (failed.length) {
-        this.event(session, session.agent, "warning", `메인 폴더에 병합하지 못했습니다: ${[...new Set(failed)].join(" ")} 작업 브랜치는 남겨 두었고 다음 턴이 끝날 때 다시 시도합니다.`);
-        notes.push(`메인 폴더 병합에 실패했습니다: ${[...new Set(failed)].join(" ")} 작업 브랜치는 남아 있고, 다음 턴이 끝날 때 다시 시도합니다.`);
+        const retry = prefix ? "충돌을 풀고 다시 승인하세요" : "다음 턴이 끝날 때 다시 시도합니다";
+        this.event(session, session.agent, "warning", `메인 폴더에 병합하지 못했습니다: ${[...new Set(failed)].join(" ")} 작업 브랜치는 남겨 두었고 ${retry}.`);
+        notes.push(`메인 폴더 병합에 실패했습니다: ${[...new Set(failed)].join(" ")} 작업 브랜치는 남아 있고, ${retry}.`);
       }
-      if (notes.length && session.steward) session.steward.appNotes = notes;
+      if (notes.length && session.steward) session.steward.appNotes = [...(session.steward.appNotes ?? []), ...notes];
       this.broadcast(session);
+      return { merged: merged.length, failed: failed.length };
     });
   }
 
@@ -1690,7 +2417,7 @@ export class Orchestra {
       if (fresh.length) this.stewardAsks.set(session.id, [...known, ...fresh]);
     }
     const notes = session.steward && this.stewardDataDir ? parseNotes(text) : undefined;
-    if (notes) void saveNotes(this.stewardDataDir!, session.id, notes).catch((error) => this.event(session, session.agent, "warning", `담당 노트를 저장하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`));
+    if (notes) void saveNotes(this.stewardDataDir!, stewardNotesId(session), notes).catch((error) => this.event(session, session.agent, "warning", `담당 노트를 저장하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`));
   }
 
   /** The lead keeps a checklist for this request (this turn or before), so the app runs it to the end. */

@@ -1,7 +1,7 @@
 import type { RefObject } from "react";
 import { runPhase } from "../run-activity";
-import { ArrowRight, CalendarClock, UserCheck } from "lucide-react";
-import { isReportPrompt, leadMessage } from "../lead";
+import { ArrowRight, CalendarClock, UserCheck, WandSparkles } from "lucide-react";
+import { isReportPrompt, leadMessage, schedulePrompt, scheduleWhen } from "../lead";
 import { Beat } from "../Beat";
 import { AgentMark } from "../AgentMark";
 import { CopyButton } from "../CopyButton";
@@ -14,7 +14,7 @@ import { names, statusLabels } from "./labels";
 import type { Session, SessionDraft, SessionEvent } from "../../server/types";
 import { useSmoothText } from "../smooth-text";
 import { cleanBriefTitle } from "../worker-log";
-import { t } from "../i18n";
+import { getLang, t, type MessageKey } from "../i18n";
 import { ComputerTrail } from "../ComputerUse";
 import { QuietIndicator } from "./QuietIndicator";
 import { WorktreePanel } from "./WorktreePanel";
@@ -89,6 +89,22 @@ function DelegationCard({ e, task, active, onOpenWorker }: { e: SessionEvent; ta
   </article>;
 }
 
+/** A schedule the lead (or the user) made, changed or that ran: one line with when it runs next. */
+function ScheduleCardView({ e }: { e: SessionEvent }) {
+  const card = e.metadata!.schedule!;
+  const locale = getLang() === "ko" ? "ko-KR" : "en-US";
+  const next = card.nextRunAt && card.enabled !== false && card.action !== "deleted" ? t("steward.scheduleNext", { time: new Date(card.nextRunAt).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) }) : "";
+  return <article className={`schedule-card ${card.action}`} aria-label={t(`steward.scheduleCard.${card.action}` as MessageKey)}>
+    <CalendarClock size={14} aria-hidden="true" />
+    <div>
+      <span>{t(`steward.scheduleCard.${card.action}` as MessageKey)} · {t(`steward.scheduleCard.${card.by}` as MessageKey)}</span>
+      <strong>{card.title}</strong>
+      <small>{[scheduleWhen(card, locale), next, card.enabled === false && card.action !== "deleted" ? t("steward.scheduleOff") : ""].filter(Boolean).join(" · ")}</small>
+    </div>
+    <time dateTime={e.time}>{new Date(e.time).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
+  </article>;
+}
+
 /** The main conversation of the active session: messages, handoffs and delegation cards. */
 export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan, draft, lookupSession, onOpenSession, onStop }: MessageListProps) {
   const last = events.at(-1);
@@ -101,7 +117,15 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
         {e.metadata?.auto && !e.metadata.quotaFallback && e.id === latestHandoffId && <button className="handoff-undo" disabled={busy || !canUndoAutoHandoff(e, active.status, latestHandoffId)} onClick={() => onUndoHandoff(e.id)}>{e.metadata.undone ? t("msg.undone") : t("msg.undo")}</button>}
       </div>;
       if (e.type === "delegation") return <DelegationCard key={e.id} e={e} task={tasksById.get(e.id)!} active={active} onOpenWorker={onOpenWorker} />;
+      if (e.type === "status" && e.metadata?.schedule) return <ScheduleCardView key={e.id} e={e} />;
+      if (e.type === "status" && e.metadata?.leadSkill) return <div className="handoff-divider steward-divider" key={e.id}><span className="agent-label"><WandSparkles size={13} aria-hidden="true" />{t(`steward.skillCard.${e.metadata.leadSkill.action}` as MessageKey, { name: e.metadata.leadSkill.name })}</span></div>;
       const isUser = e.agent === "user";
+      // A schedule's prompt arriving: the card above says why; the text folds under a divider.
+      const scheduled = isUser ? schedulePrompt(e.text) : undefined;
+      if (scheduled) return <details className="handoff-divider steward-divider schedule-turn" key={e.id}>
+        <summary className="agent-label"><CalendarClock size={13} aria-hidden="true" />{t("steward.scheduleTurn", { title: scheduled.title })}</summary>
+        <div className="message-text"><Markdown text={scheduled.body} /></div>
+      </details>;
       // What the app put in a project lead's chat for it: another lead's message, or its daily report.
       if (isUser && isReportPrompt(e.text)) return <div className="handoff-divider steward-divider" key={e.id}><span className="agent-label"><CalendarClock size={13} aria-hidden="true" />{t("steward.reportTurn")}</span></div>;
       const lead = isUser ? leadMessage(e.text) : undefined;

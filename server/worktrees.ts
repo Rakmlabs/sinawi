@@ -282,7 +282,8 @@ export async function removeWorktree(info: WorktreeInfo, options: { force?: bool
 const clip = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
 
 /** What the lead needs to review worker changes: where they are and what changed. */
-export async function worktreeReviewNote(infos: WorktreeInfo[], autoMerge = false): Promise<string> {
+/** `autoMerge`: true for a commander's goal (merged once its checklist is done), or the sentence to say instead (a project lead's merge rule). */
+export async function worktreeReviewNote(infos: WorktreeInfo[], autoMerge: boolean | string = false): Promise<string> {
   if (!infos.length) return "";
   const sections = await Promise.all(infos.map(async (info) => {
     const inspected = await inspectWorktree(info).catch(() => undefined);
@@ -300,7 +301,7 @@ export async function worktreeReviewNote(infos: WorktreeInfo[], autoMerge = fals
     return lines.join("\n");
   }));
   return `## 워커 변경 위치 (git worktree)
-파일을 고친 워커는 메인 작업 폴더가 아니라 각자 아래 worktree에서 일했습니다. 검토할 때는 이 경로의 파일을 읽으세요(메인 폴더에는 이 변경이 없습니다). ${autoMerge ? "이 세션은 총지휘의 목표라서, 체크리스트가 모두 끝나면 앱이 이 브랜치들을 메인 폴더에 병합합니다. 검증하지 않은 작업은 [x]로 표시하지 마세요." : "앱은 자동 병합하지 않습니다. 최종 답에 각 워커의 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요."}
+파일을 고친 워커는 메인 작업 폴더가 아니라 각자 아래 worktree에서 일했습니다. 검토할 때는 이 경로의 파일을 읽으세요(메인 폴더에는 이 변경이 없습니다). ${typeof autoMerge === "string" ? autoMerge : autoMerge ? "이 세션은 총지휘의 목표라서, 체크리스트가 모두 끝나면 앱이 이 브랜치들을 메인 폴더에 병합합니다. 검증하지 않은 작업은 [x]로 표시하지 마세요." : "앱은 자동 병합하지 않습니다. 최종 답에 각 워커의 브랜치 이름을 적고, 병합은 개발자가 직접 한다고 알리세요."}
 ${sections.join("\n")}`;
 }
 

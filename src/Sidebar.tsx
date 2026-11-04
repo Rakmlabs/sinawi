@@ -1,12 +1,12 @@
 import { terminalOwnsKeyboardEvent } from "./terminal-events";
 import { AgentMark } from "./AgentMark";
 import { goalProgress } from "./goal-progress";
-import { leadHue, leadName, leadPreview } from "./lead";
+import { leadGroups, leadHue, leadPreview, stewardDescription, type LeadGroup } from "./lead";
 import { useEffect, useReducer, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
 import { delegationWorkers } from "./conversation";
-import type { Group, Session, SessionStatus, WorkspaceId } from "../server/types";
+import type { Group, Session, SessionStatus, Steward, WorkspaceId } from "../server/types";
 import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, RotateCw, Search, Settings2, SquarePen, UserCheck, WandSparkles, Wrench, X } from "lucide-react";
 import { searchWorkspace, workspaceName } from "./workspaces";
 import { useWorkspaces } from "./workspace-context";
@@ -29,6 +29,10 @@ type SidebarProps = {
   onUsage?: () => void;
   /** Starts a new chat that will be a project lead (the composer picks its folder and first request). */
   onNewSteward?: () => void;
+  /** Leads as entities: the sidebar groups their chats and lists leads that have none yet. */
+  stewards?: Steward[];
+  /** Starts a new chat of an existing lead (its instructions, skills, team, merge policy and folder). */
+  onNewStewardThread?: (stewardId: string) => void;
   /** Opens the settings window (⌘,); without it "Settings" falls back to the legacy settings tab. */
   onSettings?: () => void;
   onDeleteWorker?: (sessionId: string, workerId: string) => Promise<boolean>;
@@ -86,7 +90,7 @@ export function Sidebar(props: SidebarProps) {
   const subChats = (id: string) => results.sessions.filter((session) => session.parentId === id);
   const topSessions = results.sessions.filter((session) => !session.parentId || !shownIds.has(session.parentId));
   // Project leads have their own list at the top, like a messenger's contacts; the rest are chats.
-  const leads = topSessions.filter((session) => session.steward);
+  const leads = leadGroups(topSessions.filter((session) => session.steward), query.trim() ? [] : props.stewards);
   const visibleSessions = topSessions.filter((session) => !session.steward);
   const visibleGroups = results.groups;
   const searching = Boolean(query.trim());
@@ -229,15 +233,30 @@ export function Sidebar(props: SidebarProps) {
     {subChats(session.id).length > 0 && <div className="sidebar-subchats" aria-label={t("side.subChats", { title: session.title })}>{subChats(session.id).map(sessionRow)}</div>}
   </div>;
   };
-  const leadRow = (session: Session) => {
-    const name = leadName(session);
+  const leadAvatar = (name: string) => <span className="sidebar-lead-avatar" style={{ background: `hsl(${leadHue(name)} 52% 44%)` }} aria-hidden="true">{[...name][0]?.toUpperCase()}</span>;
+  const newThreadButton = (group: LeadGroup) => props.onNewStewardThread && <button className="sidebar-row-action" aria-label={t("side.leadNewThread", { name: group.name })} title={t("side.leadNewThread", { name: group.name })} disabled={busy} onClick={() => props.onNewStewardThread!(group.id)}><Plus size={15} /></button>;
+  const leadRow = (group: LeadGroup) => {
+    const session = group.latest;
+    const name = group.name;
+    // A lead with no chat yet: its row starts the first one.
+    if (!session) return <div key={group.id} className="sidebar-chat sidebar-lead">
+      <div className="sidebar-row">
+        <button className="sidebar-lead-open" title={t("side.leadNewThread", { name })} disabled={busy || !props.onNewStewardThread} onClick={() => props.onNewStewardThread?.(group.id)}>
+          {leadAvatar(name)}
+          <span className="sidebar-lead-copy">
+            <span className="sidebar-lead-name"><span className="sidebar-session-title">{name}</span></span>
+            <small className="sidebar-lead-preview">{(group.steward && stewardDescription(group.steward)) || t("side.leadNoChats")}</small>
+          </span>
+        </button>
+      </div>
+    </div>;
     const active = selected === session.id && tab === "workspace" && !props.selectedWorker;
     const preview = leadPreview(session).replace(/\s+/gu, " ").slice(0, 140);
     const progress = goalProgress(session);
-    return <div key={session.id} className="sidebar-chat sidebar-lead">
+    return <div key={group.id} className="sidebar-chat sidebar-lead">
       <div className="sidebar-row" onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}>
-        <button className={`sidebar-lead-open${active ? " active" : ""}`} aria-current={active ? "page" : undefined} title={`${name} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
-          <span className="sidebar-lead-avatar" style={{ background: `hsl(${leadHue(name)} 52% 44%)` }} aria-hidden="true">{[...name][0]?.toUpperCase()}</span>
+        <button className={`sidebar-lead-open${active ? " active" : ""}`} aria-current={active ? "page" : undefined} title={`${name} · ${session.title} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
+          {leadAvatar(name)}
           <span className="sidebar-lead-copy">
             <span className="sidebar-lead-name"><span className="sidebar-session-title">{name}</span>
               {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : session.status === "error" ? <span className="status-dot error" role="img" aria-label={statusLabels.error} /> : null}
@@ -246,9 +265,11 @@ export function Sidebar(props: SidebarProps) {
             <small className="sidebar-lead-preview">{preview || t("side.leadNoMessages")}</small>
           </span>
         </button>
+        {newThreadButton(group)}
         <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: name })} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
       </div>
       {subChats(session.id).length > 0 && <div className="sidebar-subchats" aria-label={t("side.subChats", { title: name })}>{subChats(session.id).map(sessionRow)}</div>}
+      {group.others.length > 0 && <div className="sidebar-subchats sidebar-lead-threads" aria-label={t("side.leadThreads", { name, count: group.others.length + 1 })}>{group.others.map(sessionRow)}</div>}
     </div>;
   };
   const ungrouped = visibleSessions.filter((session) => !visibleGroups.some((group) => group.id === session.groupId));

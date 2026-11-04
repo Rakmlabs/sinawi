@@ -523,13 +523,48 @@ test("run output resets the inactivity watchdog", async () => {
   assert.equal(session.status, "done");
 });
 
-test("normal sessions require at least one selected worker", async () => {
+test("a chat without workers gets the workspace's allowed agents instead of an error", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-test-"));
-  const orchestra = new Orchestra();
-  await assert.rejects(
-    orchestra.create({ prompt: "No worker", agent: "codex", workers: [], cwd }),
-    /워커를 한 명 이상 선택하세요/,
-  );
+  const runner = async (options: RunCliOptions) => {
+    options.onLine({ type: "message", text: "done", finalText: "done" });
+    return { exitCode: 0, finalText: "done" };
+  };
+  const orchestra = new Orchestra(() => undefined, runner, undefined, undefined, undefined, (id: string) => [...restrictedAgents(id)]);
+  const session = await orchestra.create({ prompt: "No worker", agent: "claude", workers: [], cwd, workspaceId: "company" });
+  assert.deepEqual(session.workers, ["claude", "grok"], "the agents the workspace allows");
+  await waitUntilSettled(session);
+  const noAgent = await orchestra.create({ prompt: "No team", agent: undefined as never, cwd, workspaceId: "company" });
+  assert.equal(noAgent.agent, "claude");
+  assert.deepEqual(noAgent.workers, ["claude", "grok"]);
+  await waitUntilSettled(noAgent);
+});
+
+test("a chat without a first message opens empty and starts with its first follow-up", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "orchestra-test-"));
+  const prompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    prompts.push(options.prompt);
+    options.onLine({ type: "message", text: "hi", finalText: "hi" });
+    return { exitCode: 0, finalText: "hi" };
+  };
+  const orchestra = new Orchestra(() => undefined, runner);
+  const session = await orchestra.create({ prompt: "", agent: "codex", workers: ["claude"], cwd });
+  assert.equal(session.status, "done", "nothing runs");
+  assert.equal(session.title, "새 채팅");
+  assert.equal(session.turnCount, 0);
+  assert.equal(prompts.length, 0, "no CLI started");
+  assert.ok(!session.events.some((event) => event.agent === "user"), "no user message yet");
+  assert.ok(session.events.some((event) => /빈 채팅을 열었습니다/u.test(event.text)));
+  const titled = await orchestra.create({ prompt: "  ", title: "기획 회의", agent: "codex", workers: ["claude"], cwd });
+  assert.equal(titled.title, "기획 회의");
+
+  await orchestra.followup(session.id, "로그인 버그를 고쳐줘");
+  await waitUntilSettled(session);
+  assert.equal(session.title, "로그인 버그를 고쳐줘", "named by its first message");
+  assert.equal(session.turnCount, 1);
+  assert.equal(session.status, "done");
+  assert.ok(prompts.some((prompt) => prompt.includes("로그인 버그를 고쳐줘")));
+  assert.equal(session.events.filter((event) => event.agent === "user" && event.type === "message").length, 1);
 });
 
 test("company sessions reject Codex in every configured role before starting a CLI", async () => {
