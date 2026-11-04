@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// npx sinawi        install or update Sinawi.app (macOS) from the latest GitHub release
-// npx sinawi mcp    the stdio MCP bridge to a running Sinawi app
+// npx @rakmlabs/sinawi        install or update Sinawi.app (macOS) from the latest GitHub release
+// npx @rakmlabs/sinawi mcp    the stdio MCP bridge to a running Sinawi app
 import { readFileSync } from "node:fs";
 import { HELP, install, parseArgs } from "../lib/install.mjs";
 

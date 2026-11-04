@@ -16,7 +16,7 @@ await build({
   target: "node22",
   // ws uses these optional native addons only as performance accelerators.
   external: ["bufferutil", "utf-8-validate", "node-pty"],
-  // The outside-AI MCP bridge (packages/sinawi, `npx sinawi mcp` on npm) rides inside server.cjs; the server writes it to <data>/hooks.
+  // The outside-AI MCP bridge (packages/sinawi, `npx @rakmlabs/sinawi mcp` on npm) rides inside server.cjs; the server writes it to <data>/hooks.
   define: { __SINAWI_MCP_SCRIPT__: JSON.stringify(bridge) },
 });
 // The same bridge as a plain file in the app bundle: Sinawi.app/Contents/Resources/sinawi-mcp.mjs (tauri.conf.json).

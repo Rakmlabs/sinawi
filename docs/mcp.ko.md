@@ -59,14 +59,14 @@ Grok Build에는 실행마다 MCP를 붙이는 옵션이 없어, Grok 담당은 
 
    이 버튼은 MCP 도구가 아니고, 쓰기는 앱 자신의 창에서 사용자가 확인한 JSON으로만 받습니다. AI가 다른 AI 클라이언트의 구성을 바꿀 수 없습니다.
 
-2. **npx.** npm 패키지 [`sinawi`](../packages/sinawi)가 올라간 뒤부터 씁니다. 같은 화면의 **구성 복사**가 토큰이 채워진 다음 구성을 줍니다. Claude Desktop은 **설정 → 개발자 → 구성 편집**에 넣습니다:
+2. **npx.** npm 패키지 [`@rakmlabs/sinawi`](../packages/sinawi)를 씁니다. 같은 화면의 **구성 복사**가 토큰이 채워진 다음 구성을 줍니다. Claude Desktop은 **설정 → 개발자 → 구성 편집**에 넣습니다:
 
 ```json
 {
   "mcpServers": {
     "sinawi": {
       "command": "npx",
-      "args": ["-y", "sinawi", "mcp"],
+      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
     }
   }
@@ -77,9 +77,9 @@ Grok Build에는 실행마다 MCP를 붙이는 옵션이 없어, Grok 담당은 
 
 모두 같은 파일 `packages/sinawi/lib/mcp.mjs`를 실행합니다. 저장소에서는 `npm run sinawi-mcp`도 같습니다. 환경변수는 [패키지 README](../packages/sinawi/README.md)에 있습니다.
 
-### npm 패키지 `sinawi`
+### npm 패키지 `@rakmlabs/sinawi`
 
-`npx sinawi`는 앱을 설치하거나 업데이트합니다(최신 GitHub 릴리즈를 `codesign --verify --deep --strict`와 `spctl -a -t exec`로 확인하고, `/Applications/Sinawi.app`을 바꾸기 전에 묻습니다). `npx sinawi mcp`가 브리지입니다. 배포는 손으로 합니다. `packages/sinawi/package.json` 버전을 올린 뒤 **Actions → Publish sinawi (npm) → Run workflow**를 실행합니다(`.github/workflows/publish-sinawi.yml`, `NPM_TOKEN` 시크릿으로 `npm publish --provenance --access public`). `npm run pkg:pack`은 묶일 파일을 보여 주고, `npm run pkg:publish`는 로그인된 컴퓨터에서 provenance 없이 배포합니다.
+`npx @rakmlabs/sinawi`는 앱을 설치하거나 업데이트합니다(최신 GitHub 릴리즈를 `codesign --verify --deep --strict`와 `spctl -a -t exec`로 확인하고, `/Applications/Sinawi.app`을 바꾸기 전에 묻습니다). `npx @rakmlabs/sinawi mcp`가 브리지입니다. 배포는 손으로 합니다. `packages/sinawi/package.json` 버전을 올린 뒤 **Actions → Publish sinawi (npm) → Run workflow**를 실행합니다(`.github/workflows/publish-sinawi.yml`, `NPM_TOKEN` 시크릿으로 `npm publish --provenance --access public`). `npm run pkg:pack`은 묶일 파일을 보여 주고, `npm run pkg:publish`는 로그인된 컴퓨터에서 provenance 없이 배포합니다.
 
 ### 토큰
 

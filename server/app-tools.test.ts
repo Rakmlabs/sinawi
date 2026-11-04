@@ -108,7 +108,7 @@ test("the external MCP endpoint refuses a missing or wrong token and answers wit
   assert.equal(connection.body.token, token);
   assert.equal(connection.body.config.mcpServers.sinawi.env.SINAWI_MCP_TOKEN, token);
   assert.equal(connection.body.config.mcpServers.sinawi.command, "npx", "the config runs the npm package");
-  assert.deepEqual(connection.body.config.mcpServers.sinawi.args, ["-y", "sinawi", "mcp"]);
+  assert.deepEqual(connection.body.config.mcpServers.sinawi.args, ["-y", "@rakmlabs/sinawi", "mcp"]);
   const alternative = connection.body.scriptConfig.mcpServers.sinawi;
   assert.equal(alternative.command, process.execPath, "the alternative runs the app's copy with Node, without npx");
   assert.equal(alternative.args[0], connection.body.script);

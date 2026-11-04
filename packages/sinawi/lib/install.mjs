@@ -1,4 +1,4 @@
-// `npx sinawi`: installs (or updates) Sinawi.app from the latest GitHub release on macOS.
+// `npx @rakmlabs/sinawi`: installs (or updates) Sinawi.app from the latest GitHub release on macOS.
 //
 //   1. GET https://api.github.com/repos/Rakmlabs/sinawi/releases/latest, pick the universal .dmg
 //   2. download it to a temporary folder, mount it read-only
@@ -21,8 +21,8 @@ export const REPO = "Rakmlabs/sinawi";
 export const APP = "Sinawi.app";
 export const DEFAULT_DIR = "/Applications";
 
-export const HELP = `Usage: npx sinawi [install] [options]
-       npx sinawi mcp
+export const HELP = `Usage: npx @rakmlabs/sinawi [install] [options]
+       npx @rakmlabs/sinawi mcp
 
 Commands:
   install (default)  Download the latest Sinawi release, check its signature and install it (macOS)
@@ -126,7 +126,7 @@ async function verify(run, app) {
 export async function install(options, overrides = {}) {
   const deps = { ...defaultDeps(), ...overrides };
   const { run, log } = deps;
-  if (deps.platform !== "darwin") throw new Error("Sinawi is a macOS app; `npx sinawi` installs it on macOS only.");
+  if (deps.platform !== "darwin") throw new Error("Sinawi is a macOS app; `npx @rakmlabs/sinawi` installs it on macOS only.");
   const target = join(options.dir ?? DEFAULT_DIR, APP);
   const work = await deps.tmp();
   const mount = join(work, "mount");

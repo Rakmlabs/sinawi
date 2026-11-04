@@ -149,7 +149,7 @@ function McpClientButtons({ fail }: { fail: (reason: unknown) => void }) {
 }
 
 /**
- * How an outside AI connects: the connect buttons write the client's config; or copy `npx -y sinawi mcp`,
+ * How an outside AI connects: the connect buttons write the client's config; or copy `npx -y @rakmlabs/sinawi mcp`,
  * or the bridge copy in <data>/hooks without npx (server/app-mcp.ts).
  */
 function AppMcpSection() {

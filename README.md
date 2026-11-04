@@ -115,10 +115,10 @@ flowchart LR
 
 Download `Sinawi_<version>_universal.dmg` from the **[latest release](https://github.com/Rakmlabs/sinawi/releases/latest)**, open it and drag **Sinawi** to **Applications**.
 
-Or, once the [`sinawi`](packages/sinawi) npm package is published, from a terminal:
+Or from a terminal, with the [`@rakmlabs/sinawi`](packages/sinawi) npm package:
 
 ```sh
-npx sinawi
+npx @rakmlabs/sinawi
 ```
 
 It downloads the latest release, checks it with `codesign` and `spctl`, asks before replacing an existing app and opens it (`--yes`, `--no-open`, `--help`).
@@ -140,14 +140,14 @@ Sinawi finds the CLIs on your login shell's `PATH` and in common install locatio
 Claude Desktop, Cursor and other MCP clients can use the whole app through a small stdio bridge. Three ways to connect, easiest first:
 
 1. **One click.** In Sinawi, open **Settings → General → External AI connection (MCP)** and press **Connect to Claude Desktop** or **Connect to Cursor**. Sinawi shows the exact JSON it will merge, writes it into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json` (other entries stay, the original is kept as `.bak`), and you restart the client. The entry reads the token from Sinawi's token file, so no secret is copied.
-2. **npx**, once the [`sinawi`](packages/sinawi) package is published to npm. **Copy config** on the same screen gives this, with your token filled in:
+2. **npx**, with the [`@rakmlabs/sinawi`](packages/sinawi) npm package. **Copy config** on the same screen gives this, with your token filled in:
 
    ```json
    {
      "mcpServers": {
        "sinawi": {
          "command": "npx",
-         "args": ["-y", "sinawi", "mcp"],
+         "args": ["-y", "@rakmlabs/sinawi", "mcp"],
          "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
        }
      }
@@ -167,7 +167,7 @@ Paste one of these into Claude Code, Codex or any assistant that can run command
 ```text
 Help me install and set up Sinawi (https://github.com/Rakmlabs/sinawi), a macOS app that runs the Claude Code, Codex and Grok Build CLIs as one team.
 
-1. Install the app. If the npm package `sinawi` is published, run `npx sinawi`: it downloads the latest release, checks the signature with codesign and spctl, asks before replacing an existing /Applications/Sinawi.app, and opens it. Otherwise download the latest Sinawi_<version>_universal.dmg from https://github.com/Rakmlabs/sinawi/releases/latest, open it and drag Sinawi to Applications. It is signed and notarized.
+1. Install the app. Run `npx @rakmlabs/sinawi`: it downloads the latest release, checks the signature with codesign and spctl, asks before replacing an existing /Applications/Sinawi.app, and opens it. Or download the latest Sinawi_<version>_universal.dmg from https://github.com/Rakmlabs/sinawi/releases/latest, open it and drag Sinawi to Applications. It is signed and notarized.
 2. Check Node.js on my login shell's PATH (`node -v`): 24.22.1 or newer is recommended; on 22.x it must be 22.23.4 or newer. On Apple Silicon it must be an arm64 Node. If it is missing or too old, install it (for example `brew install node`).
 3. Check Git (`git --version`; if missing: `xcode-select --install`).
 4. Make sure at least one agent CLI is installed and logged in, and ask me which ones I want:
@@ -187,10 +187,10 @@ Connect this AI client to Sinawi (https://github.com/Rakmlabs/sinawi) over MCP.
 - Sinawi must be running on this Mac; its API is http://127.0.0.1:3001.
 - Easiest for Claude Desktop or Cursor: ask me to open Sinawi → Settings → General → External AI connection (MCP) and press "Connect to Claude Desktop" or "Connect to Cursor". Sinawi shows the JSON, writes it into the client's config (keeping a .bak) and I restart the client. Then skip to "Verify".
 - Otherwise add an mcpServers entry named "sinawi" to this client's MCP config yourself:
-  - with npm (once the package `sinawi` is published): command "npx", args ["-y", "sinawi", "mcp"]
+  - with npm (`@rakmlabs/sinawi`): command "npx", args ["-y", "@rakmlabs/sinawi", "mcp"]
   - without npm: command "node", args ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]
   - env: SINAWI_URL "http://127.0.0.1:3001", and SINAWI_MCP_TOKEN from Sinawi → Settings → General → External AI connection (MCP) → "Copy config". Let me paste the token; never print it back or commit it.
-  - Claude Code: `claude mcp add sinawi --env SINAWI_MCP_TOKEN=<token> -- npx -y sinawi mcp`
+  - Claude Code: `claude mcp add sinawi --env SINAWI_MCP_TOKEN=<token> -- npx -y @rakmlabs/sinawi mcp`
   Then restart the client.
 - Verify: list the `sinawi` tools and call `app_status`.
 - Risky tools (delete, settings, merge, terminal commands) return `pending_approval`; I approve or reject them on the approval card in Sinawi. Never try to approve them yourself.
@@ -203,7 +203,7 @@ Connect this AI client to Sinawi (https://github.com/Rakmlabs/sinawi) over MCP.
 I want to understand (and maybe contribute to) the Sinawi codebase: https://github.com/Rakmlabs/sinawi
 
 1. Clone it and read, in this order: llms.txt, AGENTS.md, docs/ai/for-ai.md, CONTRIBUTING.md.
-2. Summarize the layout for me: server/ (Express + WebSocket server, CLI runners, orchestration, MCP tool registry in server/app-tools.ts), src/ (React UI, text in src/i18n.ts in Korean and English), src-tauri/ (Tauri v2 shell), packages/sinawi/ (the `sinawi` npm package: app installer and MCP bridge).
+2. Summarize the layout for me: server/ (Express + WebSocket server, CLI runners, orchestration, MCP tool registry in server/app-tools.ts), src/ (React UI, text in src/i18n.ts in Korean and English), src-tauri/ (Tauri v2 shell), packages/sinawi/ (`@rakmlabs/sinawi`: app installer and MCP bridge).
 3. Use Node ^22.23.4, ^24.22.1 or >=26.12.1. Run `npm install`, then `npm run typecheck`, `npm test` and `npm run build`; all three must pass before any change is done.
 4. Follow AGENTS.md: never use port 3001 or the real app data; for a dev server use `SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev`. If you change server/app-tools.ts, run `npm run docs:ai`. Add UI text in both languages.
 5. Do not commit, push or open a pull request until I say so. Branch from main (fix/… or feat/…) and link an issue, as CONTRIBUTING.md describes.

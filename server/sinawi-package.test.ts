@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 // @ts-expect-error plain .mjs without types: the package has no build step.
 import { HELP, install, parseArgs, pickAsset } from "../packages/sinawi/lib/install.mjs";
 
-// packages/sinawi: the npm package `sinawi`. `npx sinawi` installs the app, `npx sinawi mcp` is the
+// packages/sinawi: the npm package `@rakmlabs/sinawi`. `npx @rakmlabs/sinawi` installs the app, `npx @rakmlabs/sinawi mcp` is the
 // stdio bridge Claude Desktop runs; lib/mcp.mjs is also the file bundled into the app as is.
 const PACKAGE = join(process.cwd(), "packages", "sinawi");
 const BIN = join(PACKAGE, "bin", "sinawi.mjs");
@@ -121,7 +121,7 @@ const exec = promisify(execFile);
 
 test("`sinawi --help`, `--version` and bad arguments answer without touching the network", async () => {
   const help = await exec(process.execPath, [BIN, "--help"]);
-  assert.match(help.stdout, /npx sinawi mcp/u);
+  assert.match(help.stdout, /npx @rakmlabs\/sinawi mcp/u);
   assert.match(help.stdout, /--yes/u);
   const manifest = JSON.parse(await readFile(join(PACKAGE, "package.json"), "utf8"));
   assert.equal((await exec(process.execPath, [BIN, "-v"])).stdout.trim(), manifest.version);
@@ -261,7 +261,7 @@ test("install: a local --dmg skips GitHub; other systems are refused", async (t)
 
 test("the sinawi package is publishable: bin, libs, README and LICENSE are packed, nothing else, no dependencies", async () => {
   const manifest = JSON.parse(await readFile(join(PACKAGE, "package.json"), "utf8"));
-  assert.equal(manifest.name, "sinawi");
+  assert.equal(manifest.name, "@rakmlabs/sinawi");
   assert.equal(manifest.bin.sinawi, "bin/sinawi.mjs");
   assert.equal(manifest.type, "module");
   assert.equal(manifest.license, "MIT");
@@ -284,7 +284,8 @@ test("the sinawi package is publishable: bin, libs, README and LICENSE are packe
   try {
     const { stdout } = await exec(npm, ["pack", "--dry-run", "--json", "--ignore-scripts", "--offline", `--cache=${cache}`, "--userconfig=/dev/null"], { cwd: PACKAGE, env: { ...process.env, npm_config_loglevel: "silent" } });
     const [pack] = JSON.parse(stdout);
-    assert.equal(pack.name, "sinawi");
+    assert.equal(pack.name, "@rakmlabs/sinawi");
+    assert.equal(pack.filename, `rakmlabs-sinawi-${manifest.version}.tgz`);
     const files = pack.files as Array<{ path: string; mode: number }>;
     assert.deepEqual(files.map((file) => file.path).sort(), ["LICENSE", "README.md", "bin/sinawi.mjs", "lib/install.mjs", "lib/mcp.mjs", "package.json"]);
     assert.ok(files.find((file) => file.path === "bin/sinawi.mjs")!.mode & 0o111, "packed as executable");

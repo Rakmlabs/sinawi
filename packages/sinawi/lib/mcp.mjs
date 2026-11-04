@@ -11,7 +11,7 @@
 //                          (default ~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token)
 //
 // This file is the one implementation. It runs as soon as it is loaded, and is run as:
-//   npx -y sinawi mcp                                        the npm package `sinawi` (bin/sinawi.mjs)
+//   npx -y @rakmlabs/sinawi mcp                              the npm package `@rakmlabs/sinawi` (bin/sinawi.mjs)
 //   node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs   the copy inside the app
 //   node <data>/hooks/sinawi-mcp.mjs                         the copy the app keeps in its data folder
 //   npm run sinawi-mcp                                       a checkout (scripts/sinawi-mcp.mjs)

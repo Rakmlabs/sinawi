@@ -5,15 +5,15 @@ import { envVar } from "./runtime.js";
 
 /**
  * The external MCP surface (server/app-tools.ts, surface "external"): Claude Desktop or any other
- * MCP client starts the stdio bridge (packages/sinawi/lib/mcp.mjs: `npx -y sinawi mcp`, the copy in the app
+ * MCP client starts the stdio bridge (packages/sinawi/lib/mcp.mjs: `npx -y @rakmlabs/sinawi mcp`, the copy in the app
  * bundle, or the copy in <data>/hooks), which posts to
  * /api/app-mcp with this token. The token lives in the app's data folder (0600); the settings page
  * shows it with a ready-made config.
  */
 export const APP_MCP_SERVER = "sinawi";
 export const APP_MCP_SCRIPT = "sinawi-mcp.mjs";
-/** The npm package whose `mcp` command is the bridge: `npx -y sinawi mcp`. */
-export const APP_MCP_PACKAGE = "sinawi";
+/** The npm package whose `mcp` command is the bridge: `npx -y @rakmlabs/sinawi mcp`. */
+export const APP_MCP_PACKAGE = "@rakmlabs/sinawi";
 /** The bridge's source in a checkout. */
 const BRIDGE_SOURCE = join("packages", "sinawi", "lib", "mcp.mjs");
 

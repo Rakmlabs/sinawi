@@ -115,10 +115,10 @@ flowchart LR
 
 **[최신 릴리즈](https://github.com/Rakmlabs/sinawi/releases/latest)**에서 `Sinawi_<버전>_universal.dmg`를 받아 열고 **Sinawi**를 **응용 프로그램**으로 끌어다 놓으세요.
 
-[`sinawi`](packages/sinawi) npm 패키지가 올라간 뒤에는 터미널에서도 설치할 수 있습니다:
+[`@rakmlabs/sinawi`](packages/sinawi) npm 패키지로 터미널에서도 설치할 수 있습니다:
 
 ```sh
-npx sinawi
+npx @rakmlabs/sinawi
 ```
 
 최신 릴리즈를 받아 `codesign`·`spctl`로 확인하고, 이미 있는 앱을 바꿀지 물은 뒤 엽니다(`--yes`, `--no-open`, `--help`).
@@ -140,14 +140,14 @@ npx sinawi
 Claude Desktop, Cursor 같은 MCP 클라이언트가 작은 stdio 브리지로 앱 전체를 다룰 수 있습니다. 연결 방법은 쉬운 순서로 셋입니다.
 
 1. **버튼 하나.** 시나위 **설정 → 일반 → 외부 AI 연결 (MCP)**에서 **Claude Desktop에 연결** 또는 **Cursor에 연결**을 누릅니다. 시나위가 넣을 JSON을 그대로 보여 준 뒤 `~/Library/Application Support/Claude/claude_desktop_config.json` 또는 `~/.cursor/mcp.json`에 씁니다(다른 항목은 그대로, 원래 파일은 `.bak`으로 남김). 그다음 클라이언트를 다시 시작하세요. 이 항목은 시나위의 토큰 파일을 읽으므로 토큰이 복사되지 않습니다.
-2. **npx.** [`sinawi`](packages/sinawi) 패키지가 npm에 올라간 뒤부터 쓸 수 있습니다. 같은 화면의 **구성 복사**를 누르면 토큰이 채워진 다음 구성이 나옵니다:
+2. **npx.** [`@rakmlabs/sinawi`](packages/sinawi) npm 패키지를 씁니다. 같은 화면의 **구성 복사**를 누르면 토큰이 채워진 다음 구성이 나옵니다:
 
    ```json
    {
      "mcpServers": {
        "sinawi": {
          "command": "npx",
-         "args": ["-y", "sinawi", "mcp"],
+         "args": ["-y", "@rakmlabs/sinawi", "mcp"],
          "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
        }
      }
@@ -167,7 +167,7 @@ Claude Code, Codex처럼 Mac에서 명령을 실행할 수 있는 AI에 그대�
 ```text
 시나위(Sinawi, https://github.com/Rakmlabs/sinawi)를 설치하고 설정하는 걸 도와줘. Claude Code, Codex, Grok Build CLI를 한 팀으로 돌리는 macOS 앱이야.
 
-1. 앱을 설치해 줘. npm 패키지 `sinawi`가 올라가 있으면 `npx sinawi`를 실행해. 최신 릴리즈를 받아 codesign·spctl로 서명을 확인하고, 이미 있는 /Applications/Sinawi.app을 바꿀지 물어본 뒤 앱을 열어 줘. 아니면 https://github.com/Rakmlabs/sinawi/releases/latest 에서 최신 Sinawi_<버전>_universal.dmg를 받아 열고 Sinawi를 응용 프로그램으로 옮겨 줘. 서명·공증된 앱이야.
+1. 앱을 설치해 줘. `npx @rakmlabs/sinawi`를 실행해. 최신 릴리즈를 받아 codesign·spctl로 서명을 확인하고, 이미 있는 /Applications/Sinawi.app을 바꿀지 물어본 뒤 앱을 열어 줘. 또는 https://github.com/Rakmlabs/sinawi/releases/latest 에서 최신 Sinawi_<버전>_universal.dmg를 받아 열고 Sinawi를 응용 프로그램으로 옮겨 줘. 서명·공증된 앱이야.
 2. 로그인 셸 PATH의 Node.js를 확인해 줘(`node -v`). 24.22.1 이상을 권장하고, 22.x라면 22.23.4 이상이어야 해. Apple Silicon에서는 arm64 Node여야 해. 없거나 낮으면 설치해 줘(예: `brew install node`).
 3. Git을 확인해 줘(`git --version`, 없으면 `xcode-select --install`).
 4. 에이전트 CLI가 하나 이상 설치·로그인돼 있어야 해. 어떤 걸 쓸지 나에게 물어봐 줘:
@@ -187,10 +187,10 @@ Claude Code, Codex처럼 Mac에서 명령을 실행할 수 있는 AI에 그대�
 - 이 Mac에서 시나위가 켜져 있어야 해. API 주소는 http://127.0.0.1:3001 이야.
 - Claude Desktop이나 Cursor라면 가장 쉬운 방법: 나에게 시나위 → 설정 → 일반 → 외부 AI 연결 (MCP)에서 "Claude Desktop에 연결" 또는 "Cursor에 연결"을 누르라고 해 줘. 시나위가 JSON을 보여 주고 클라이언트 구성에 써(.bak을 남김). 내가 클라이언트를 다시 시작하면 "확인"으로 넘어가.
 - 아니면 이 클라이언트의 MCP 구성에 "sinawi"라는 mcpServers 항목을 직접 넣어 줘:
-  - npm으로(패키지 `sinawi`가 올라간 뒤부터): command "npx", args ["-y", "sinawi", "mcp"]
+  - npm으로(`@rakmlabs/sinawi`): command "npx", args ["-y", "@rakmlabs/sinawi", "mcp"]
   - npm 없이: command "node", args ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]
   - env: SINAWI_URL "http://127.0.0.1:3001", 그리고 시나위 → 설정 → 일반 → 외부 AI 연결 (MCP) → "구성 복사"에 있는 SINAWI_MCP_TOKEN. 토큰은 내가 붙여 넣을게. 토큰을 다시 출력하거나 커밋하지 마.
-  - Claude Code: `claude mcp add sinawi --env SINAWI_MCP_TOKEN=<토큰> -- npx -y sinawi mcp`
+  - Claude Code: `claude mcp add sinawi --env SINAWI_MCP_TOKEN=<토큰> -- npx -y @rakmlabs/sinawi mcp`
   그다음 클라이언트를 다시 시작해 줘.
 - 확인: `sinawi` 도구 목록을 보고 `app_status`를 호출해 봐.
 - 위험한 도구(삭제, 설정 변경, 병합, 터미널 명령)는 `pending_approval`을 돌려줘. 승인·거절은 내가 시나위의 승인 카드에서 해. 네가 직접 승인하려고 하지 마.
@@ -203,7 +203,7 @@ Claude Code, Codex처럼 Mac에서 명령을 실행할 수 있는 AI에 그대�
 시나위 코드베이스(https://github.com/Rakmlabs/sinawi)를 이해하고, 필요하면 기여하고 싶어.
 
 1. 저장소를 클론하고 llms.txt, AGENTS.md, docs/ai/for-ai.ko.md, CONTRIBUTING.md 순서로 읽어 줘.
-2. 구조를 요약해 줘: server/(Express + WebSocket 서버, CLI 실행, 오케스트레이션, server/app-tools.ts의 MCP 도구 목록), src/(React UI, 문구는 src/i18n.ts에 한국어·영어), src-tauri/(Tauri v2 셸), packages/sinawi/(npm 패키지 `sinawi`: 앱 설치기와 MCP 브리지).
+2. 구조를 요약해 줘: server/(Express + WebSocket 서버, CLI 실행, 오케스트레이션, server/app-tools.ts의 MCP 도구 목록), src/(React UI, 문구는 src/i18n.ts에 한국어·영어), src-tauri/(Tauri v2 셸), packages/sinawi/(`@rakmlabs/sinawi`: 앱 설치기와 MCP 브리지).
 3. Node는 ^22.23.4, ^24.22.1, >=26.12.1 중 하나를 써. `npm install` 후 `npm run typecheck`, `npm test`, `npm run build`를 돌려 줘. 변경을 마치기 전에 셋 다 통과해야 해.
 4. AGENTS.md 규칙을 지켜: 3001 포트와 실제 앱 데이터는 쓰지 말고, 개발 서버는 `SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev`로 띄워. server/app-tools.ts를 바꾸면 `npm run docs:ai`를 돌려. UI 문구는 두 언어 모두 넣어.
 5. 내가 말하기 전에는 커밋, 푸시, 풀 리퀘스트를 하지 마. 브랜치는 main에서(fix/… 또는 feat/…) 만들고 CONTRIBUTING.md대로 이슈를 연결해.

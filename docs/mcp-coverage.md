@@ -187,14 +187,14 @@
 ## Claude Desktop·Cursor 연결
 
 1. 가장 쉬운 방법: 시나위 설정 → 일반 → **외부 AI 연결 (MCP)** 에서 **Claude Desktop에 연결** 또는 **Cursor에 연결**을 누릅니다. 넣을 JSON을 확인하면 앱이 클라이언트 구성 파일에 `mcpServers.sinawi`를 합칩니다(다른 항목 유지, 원본은 `.bak`). 항목은 `<데이터 폴더>/hooks/sinawi-mcp.mjs`를 앱의 Node로 실행하고 토큰은 `SINAWI_MCP_TOKEN_FILE`로 읽습니다. 클라이언트를 다시 시작하세요.
-2. 직접 넣으려면 같은 화면의 **구성 복사**를 누릅니다. 토큰이 들어간 `npx -y sinawi mcp` 구성이 나옵니다(npm 패키지 `sinawi`가 올라간 뒤부터 동작). npx 없이 쓰는 구성도 함께 나옵니다. Claude Desktop → 설정 → 개발자 → 구성 편집으로 `claude_desktop_config.json`을 열고 `mcpServers`에 넣습니다:
+2. 직접 넣으려면 같은 화면의 **구성 복사**를 누릅니다. 토큰이 들어간 `npx -y @rakmlabs/sinawi mcp` 구성이 나옵니다(npm 패키지 `@rakmlabs/sinawi`). npx 없이 쓰는 구성도 함께 나옵니다. Claude Desktop → 설정 → 개발자 → 구성 편집으로 `claude_desktop_config.json`을 열고 `mcpServers`에 넣습니다:
 
 ```json
 {
   "mcpServers": {
     "sinawi": {
       "command": "npx",
-      "args": ["-y", "sinawi", "mcp"],
+      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
     }
   }

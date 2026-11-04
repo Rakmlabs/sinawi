@@ -40,14 +40,14 @@ Both surfaces read the same registry (`APP_TOOLS` in `server/app-tools.ts`). App
 Sinawi must be running. In order of preference:
 
 1. **In-app button** (Claude Desktop, Cursor): **Settings → General → External AI connection (MCP) → Connect to Claude Desktop / Connect to Cursor**. After the user confirms the exact JSON, the app merges `mcpServers.sinawi` into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json`, keeping other entries and a `.bak` copy. The entry is `"command": "<node>", "args": ["<data>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<data>/app-mcp-token"}` (no token copied). Routes: `GET`/`POST /api/app-mcp/clients/:client` (`claude`, `cursor`); not MCP tools, and `POST` needs the app's own Origin and the confirmed JSON. Tests move the paths with `SINAWI_CLAUDE_DESKTOP_CONFIG` and `SINAWI_CURSOR_MCP_CONFIG`.
-2. **npx**, once the npm package `sinawi` is published: **Copy config** on the same screen gives
+2. **npx**, with the npm package `@rakmlabs/sinawi`: **Copy config** on the same screen gives
 
 ```json
 {
   "mcpServers": {
     "sinawi": {
       "command": "npx",
-      "args": ["-y", "sinawi", "mcp"],
+      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
     }
   }
@@ -56,7 +56,7 @@ Sinawi must be running. In order of preference:
 
 3. **The bridge bundled in the app**: `"command": "node"`, `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, same `env`. The settings screen's "without npx" config points at the copy in `<data>/hooks/sinawi-mcp.mjs` instead (it survives app updates and moves).
 
-From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`) starts the same stdio bridge. Every form runs one implementation, `packages/sinawi/lib/mcp.mjs`, which has no dependencies (Node 18+). The same npm package installs the app: `npx sinawi` (macOS; downloads the latest release, verifies it with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`).
+From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`) starts the same stdio bridge. Every form runs one implementation, `packages/sinawi/lib/mcp.mjs`, which has no dependencies (Node 18+). The same npm package installs the app: `npx @rakmlabs/sinawi` (macOS; downloads the latest release, verifies it with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`).
 
 ### Bridge environment variables (`sinawi mcp`)
 

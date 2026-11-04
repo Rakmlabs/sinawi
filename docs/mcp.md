@@ -59,14 +59,14 @@ Sinawi must be running. Three ways, easiest first:
 
    These buttons are not MCP tools, and the write is accepted only from the app's own window with the JSON you confirmed: an AI cannot rewire another AI client.
 
-2. **npx**, once the npm package [`sinawi`](../packages/sinawi) is published. **Copy config** on the same screen gives this with the token filled in; in Claude Desktop add it under **Settings → Developer → Edit Config**:
+2. **npx**, with the npm package [`@rakmlabs/sinawi`](../packages/sinawi). **Copy config** on the same screen gives this with the token filled in; in Claude Desktop add it under **Settings → Developer → Edit Config**:
 
 ```json
 {
   "mcpServers": {
     "sinawi": {
       "command": "npx",
-      "args": ["-y", "sinawi", "mcp"],
+      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
     }
   }
@@ -77,9 +77,9 @@ Sinawi must be running. Three ways, easiest first:
 
 All of these run one file, `packages/sinawi/lib/mcp.mjs`; from a checkout `npm run sinawi-mcp` runs it too. The [package README](../packages/sinawi/README.md) lists the environment variables.
 
-### The `sinawi` npm package
+### The `@rakmlabs/sinawi` npm package
 
-`npx sinawi` installs or updates the app (latest GitHub release, checked with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`); `npx sinawi mcp` is the bridge. It is published by hand: bump `packages/sinawi/package.json`, then run **Actions → Publish sinawi (npm) → Run workflow** (`.github/workflows/publish-sinawi.yml`: `npm publish --provenance --access public` with the `NPM_TOKEN` secret). `npm run pkg:pack` shows what would be packed; `npm run pkg:publish` publishes from a logged-in machine without provenance.
+`npx @rakmlabs/sinawi` installs or updates the app (latest GitHub release, checked with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`); `npx @rakmlabs/sinawi mcp` is the bridge. It is published by hand: bump `packages/sinawi/package.json`, then run **Actions → Publish sinawi (npm) → Run workflow** (`.github/workflows/publish-sinawi.yml`: `npm publish --provenance --access public` with the `NPM_TOKEN` secret). `npm run pkg:pack` shows what would be packed; `npm run pkg:publish` publishes from a logged-in machine without provenance.
 
 ### Token
 

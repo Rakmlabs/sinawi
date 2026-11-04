@@ -1,17 +1,17 @@
-# sinawi
+# @rakmlabs/sinawi
 
 Command-line companion for [Sinawi](https://github.com/Rakmlabs/sinawi), the macOS app that runs the Claude Code, Codex and Grok Build CLIs as one team.
 
 ```sh
-npx sinawi        # install or update Sinawi.app from the latest GitHub release
-npx sinawi mcp    # stdio MCP bridge: lets Claude Desktop, Cursor and other MCP clients use Sinawi
+npx @rakmlabs/sinawi        # install or update Sinawi.app from the latest GitHub release
+npx @rakmlabs/sinawi mcp    # stdio MCP bridge: lets Claude Desktop, Cursor and other MCP clients use Sinawi
 ```
 
 macOS only. Node 18 or later. No dependencies.
 
 ## Install the app
 
-`npx sinawi` (same as `npx sinawi install`):
+`npx @rakmlabs/sinawi` (same as `npx @rakmlabs/sinawi install`):
 
 1. looks up the latest release of `Rakmlabs/sinawi` on GitHub and downloads its universal `.dmg`;
 2. mounts it read-only and checks the app with `codesign --verify --deep --strict` and `spctl -a -t exec` (Developer ID signature and Apple notarization);
@@ -32,14 +32,14 @@ Then install and log in to at least one agent CLI (Claude Code, Codex CLI or Gro
 
 Easiest: in Sinawi, open **Settings → General → External AI connection (MCP)** and press **Connect to Claude Desktop** or **Connect to Cursor**. The app shows the exact JSON, merges it into the client's config (other entries stay, the original is kept as `.bak`), and you restart the client.
 
-By hand, with this package (once it is published to npm). Claude Desktop, **Settings → Developer → Edit Config** (`claude_desktop_config.json`):
+By hand, with this package. Claude Desktop, **Settings → Developer → Edit Config** (`claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "sinawi": {
       "command": "npx",
-      "args": ["-y", "sinawi", "mcp"],
+      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
       "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from Sinawi's settings>" }
     }
   }
@@ -49,7 +49,7 @@ By hand, with this package (once it is published to npm). Claude Desktop, **Sett
 Cursor (`~/.cursor/mcp.json`) takes the same `mcpServers` entry. Claude Code:
 
 ```sh
-claude mcp add sinawi --env SINAWI_MCP_TOKEN=<token> -- npx -y sinawi mcp
+claude mcp add sinawi --env SINAWI_MCP_TOKEN=<token> -- npx -y @rakmlabs/sinawi mcp
 ```
 
 Without npm, the app carries the same bridge: `node "/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"`.

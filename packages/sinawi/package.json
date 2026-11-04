@@ -1,7 +1,7 @@
 {
-  "name": "sinawi",
+  "name": "@rakmlabs/sinawi",
   "version": "1.4.0",
-  "description": "Install the Sinawi macOS app (npx sinawi) and connect MCP clients such as Claude Desktop and Cursor to it (npx sinawi mcp).",
+  "description": "Install the Sinawi macOS app (npx @rakmlabs/sinawi) and connect MCP clients such as Claude Desktop and Cursor to it (npx @rakmlabs/sinawi mcp).",
   "type": "module",
   "bin": {
     "sinawi": "bin/sinawi.mjs"
