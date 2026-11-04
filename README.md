@@ -13,6 +13,9 @@ Each CLI is good at different things. Having one agent delegate to the others te
 ## What it does
 
 - **Lead and workers.** Pick a lead and any mix of workers, or let *Auto* routing choose a team, models and skills for the request. The lead delegates with structured briefs (goal, context, done criteria, constraints, verification, report format); Sinawi fills in missing parts, adds the user's own words so nothing is lost in the summary, and sends results back to the lead. When the lead hands work to several workers, they run at the same time; one worker's briefs run in order.
+- **Project leads.** A lead is a long-lived chat that owns one project: keep giving it work in that chat, and it keeps notes (editable in the lead's settings) and carries on across sessions. Claude and Codex leads get the `sinawi_lead` MCP tools for parallel delegation (`delegate_task`, `check_task`, `collect_results`), writing reusable skills, design work that comes back with screenshots, and making their own schedules. Each lead's merge policy is `auto`, `ask` or `never`. Grok leads use a text tag protocol instead of MCP, so they lack these tools.
+- **Schedules.** Once or cron, in the Mac's time zone (for example `Asia/Seoul`). Leads create them from the conversation, you manage them in the lead's settings, and each one shows up as a card in the chat.
+- **App-wide MCP.** Other AIs such as Claude Desktop can drive Sinawi through `npm run sinawi-mcp` with a token from **Settings → General → External AI connection**. Reads and creates run at once; risky tools wait for an approval card in the app. See [docs/mcp.md](docs/mcp.md).
 - **Permission modes**, like Claude Code: *Plan* (read-only, the lead proposes a plan you can run with one click), *Auto* (edits in the project folder and does not stop to ask about ordinary commands; with Claude Code it uses the CLI's own auto mode), and *Full access* (only when the workspace allows it).
 - **Live view.** Messages, tool calls, commands and file changes stream in as they happen, with a clear indicator of what the team is doing right now — including when it is waiting on a CI run or deploy.
 - **Workspaces.** Keep conversations, projects and defaults apart (switch with F1 / F2). Each workspace has its own policy: which agents may run, whether computer control or full access is allowed, and which MCP tools are blocked.
@@ -86,10 +89,11 @@ Both servers bind to `127.0.0.1` only. `SINAWI_PORT` and `SINAWI_DATA_DIR` chang
 | `scripts/` | Dev runner, server bundler, signing and release scripts |
 | `docs/orchestration/` | Operating rules the app enforces on leads and workers, and the research behind them |
 | `docs/RELEASING.md` | How releases and signed auto-updates work |
+| `docs/mcp.md` | Project leads, schedules, the `sinawi_lead` tools and the app-wide MCP server ([coverage](docs/mcp-coverage.md)) |
 
 ## Safety
 
-The agents edit files and run commands in the folder you choose. *Plan* mode is read-only, *Auto* mode keeps writes inside the project folder, and *Full access* turns off the CLIs' own sandboxes (for example Claude Code's `--dangerously-skip-permissions`), so it is off unless a workspace explicitly allows it. Sinawi is not a sandbox itself: what an agent can touch ultimately depends on macOS and on each CLI.
+The agents edit files and run commands in the folder you choose. *Plan* mode is read-only, *Auto* mode keeps writes inside the project folder, and *Full access* turns off the CLIs' own sandboxes (for example Claude Code's `--dangerously-skip-permissions`), so it is off unless a workspace explicitly allows it. Sinawi is not a sandbox itself: what an agent can touch ultimately depends on macOS and on each CLI. MCP approval cards guard the MCP tools only; an agent with a shell can still call Sinawi's local HTTP API directly.
 
 ## Contributing
 
