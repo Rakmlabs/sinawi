@@ -222,6 +222,30 @@ test("a lead's run gets the lead tools and the app tools; its approvals land in 
   assert.ok((await chat()).events.some((event) => /승인되어 실행했습니다/u.test(event.text)), "the result is an event in the chat");
 });
 
+test("a lead MCP get_lead name resolves in the calling lead's workspace", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-app-tools-lead-name-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const lead = (id: string, workspaceId: string, prompt: string): Session => ({
+    id, title: id, agent: "codex", workers: ["claude"], cwd, status: "done",
+    createdAt: id === "home" ? "2026-01-01T00:00:00.000Z" : "2026-01-02T00:00:00.000Z",
+    workspaceId, systemPrompt: prompt, skills: [], events: [],
+    steward: { turns: 1, since: "2026-01-01T00:00:00.000Z", name: "API" },
+  });
+  const { call } = await fixture(t, [lead("home", "default", "home prompt"), lead("side", "side", "side prompt")]);
+  assert.equal((await call("POST", "/api/workspaces", { name: "Side" })).body.workspaces.at(-1)?.id, "side");
+  await call("GET", "/api/stewards");
+  const token = issueComputerToken({ sessionId: "side", workspaceId: "side", agent: "codex", owner: "side:orchestrator" });
+  t.after(() => revokeComputerToken(token));
+  const response = await call("POST", "/api/lead-mcp", toolCall(1, "get_lead", { lead_id: "API" }), { "x-sinawi-token": token });
+  const found = parsed(response);
+  assert.equal(found.id, "side");
+  assert.equal(found.systemPrompt, "side prompt");
+  const crossSpaceAsk = await call("POST", "/api/lead-mcp", toolCall(2, "ask_running_session", { session_id: "home", prompt: "status?" }), { "x-sinawi-token": token });
+  assert.equal(crossSpaceAsk.body.result.isError, true);
+  assert.match(crossSpaceAsk.body.result.content[0].text, /같은.*공간/u);
+
+});
+
 test("scripts/sinawi-mcp.mjs speaks stdio MCP to the app with the token, and says so when the token is missing", async (t) => {
   const { httpServer, directory, call } = await fixture(t);
   const token = (await call("GET", "/api/app-mcp/connection")).body.token as string;
@@ -299,4 +323,20 @@ test("approval lines name chats, leads and workspaces, with the ID only as a hin
   assert.equal(waiting.workspaceName, "기본");
   const note = await noteWithKey(call, `approval:${pending.approvalId}`);
   assert.match(note.body, /^외부 AI가 요청한/u);
+});
+
+test("lead tools default to the caller's workspace: list_leads lists it, create_lead makes the lead there", async () => {
+  const calls: { method: string; path: string; body?: unknown }[] = [];
+  const ctx = { workspaceId: "side", dispatch: async (method: string, path: string, body?: unknown) => { calls.push({ method, path, body }); return []; } };
+  const tool = (name: string) => APP_TOOLS.find((item) => item.name === name)!;
+  await tool("list_leads").run({}, ctx);
+  await tool("list_leads").run({ workspace_id: "default" }, ctx);
+  await tool("list_leads").run({ all_workspaces: true }, ctx);
+  await tool("create_lead").run({ name: "x" }, ctx);
+  await tool("create_lead").run({ name: "y", workspace_id: "default" }, ctx);
+  await tool("update_lead").run({ lead_id: "l1", workspace_id: "default" }, ctx);
+  assert.deepEqual(calls.map((call) => call.path), ["/api/stewards?workspace=side", "/api/stewards?workspace=default", "/api/stewards", "/api/stewards", "/api/stewards", "/api/stewards/l1"]);
+  assert.deepEqual(calls.slice(3).map((call) => (call.body as { workspaceId?: string }).workspaceId), ["side", "default", "default"]);
+  assert.match(tool("list_leads").description, /워크스페이스 안에서 고유/u);
+  assert.match(tool("get_session_lead").description, /같은 워크스페이스 안에서만/u);
 });

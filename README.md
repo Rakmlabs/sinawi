@@ -111,6 +111,15 @@ flowchart LR
 > [!NOTE]
 > Claude and Codex leads get the MCP tools. **Grok leads** have no per-run MCP flag yet, so they fall back to a text tag protocol and lack these tools.
 
+## Spaces
+
+A space (workspace, 공간) is a separate desk inside the app. Switch with **F1** / **F2** (first and second space) or from the header.
+
+- **Its own chats, project groups and defaults**: folder, team, allowed agents, quota fallback.
+- **Its own leads (담당).** The sidebar, the new-chat lead picker and `list_leads` show only the current space's leads. A lead and all its chats live in one space; moving one moves the others, and leads only ask leads in their own space.
+- **Its own policy** (Settings › Workspaces): image/video generation, computer control, full access, Grok MCP, blocked MCP tools.
+- **Optional CLI accounts per space.** Give a space its own folder for Claude Code, Codex or Grok Build, and every run there (lead, workers, router) gets `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME` set to it: a work login in one space, a personal one in another. Each folder keeps its own login, settings, history and skills, and limits are tracked per account. Log in once from a terminal, e.g. `CODEX_HOME=/Users/you/accounts/work-codex codex login` (Settings shows the exact command). Empty means the CLI's default login.
+
 ## Install
 
 Download `Sinawi_<version>_universal.dmg` from the **[latest release](https://github.com/Rakmlabs/sinawi/releases/latest)**, open it and drag **Sinawi** to **Applications**.
@@ -215,7 +224,7 @@ I want to understand (and maybe contribute to) the Sinawi codebase: https://gith
 - **Lead and workers.** Pick a lead and any mix of workers, or let *Auto* routing choose a team, models and skills for the request. Sinawi fills in missing brief parts and adds the user's own words so nothing is lost in the summary. One worker's briefs run in order; several workers run at the same time.
 - **Permission modes**, like Claude Code: *Plan* (read-only, the lead proposes a plan you can run with one click), *Auto* (edits in the project folder without stopping for ordinary commands; with Claude Code it uses the CLI's own auto mode), and *Full access* (only when the workspace allows it).
 - **Live view.** Messages, tool calls, commands and file changes stream in as they happen, including when the team is waiting on a CI run or deploy.
-- **Workspaces.** Keep conversations, projects and defaults apart (F1 / F2). Each workspace has its own policy: which agents may run, whether computer control or full access is allowed, and which MCP tools are blocked.
+- **Workspaces.** Keep conversations, projects, leads and defaults apart (F1 / F2), each with its own policy and, optionally, its own CLI logins. See [Spaces](#spaces).
 - **Quota fallback.** When one CLI is about to run out of quota, Sinawi can switch that role to the next agent you configured.
 - **Built-in browser and computer use.** Agents can drive the app's own browser and, with your macOS permission, other native apps. Each session and worker gets its own tab; pages never cross workspaces.
 - **Worktrees, terminal and files.** Git worktrees, a terminal per session, previews of images, PDFs and Markdown.

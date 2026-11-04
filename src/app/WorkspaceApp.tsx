@@ -40,8 +40,8 @@ import { FileViewer } from "../FileViewer";
 import type { MediaRef } from "../viewer-model";
 import { ToolsPanel, toolsShortcut } from "../ToolsPanel";
 import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SessionDraft, SkillInfo as Skill, Bot as Preset, Steward } from "../../server/types";
-import { stewardDescription } from "../lead";
-import { scopedApi, workspaceApi, type Bootstrap } from "./api";
+import { stewardDescription, stewardIdOf } from "../lead";
+import { accountScopeKey, scopedApi, workspaceApi, workspacePath, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
 import { adoptSession as adoptInto, replaceSession, upsertPushedSession } from "./session-store";
@@ -321,9 +321,9 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const load = async () => {
     try {
       const [bootstrapResult, sessionsResult, settingsResult] = await Promise.allSettled([
-        api<Bootstrap>("/bootstrap"),
+        api<Bootstrap>(workspacePath("/bootstrap", workspaceId)),
         api<Session[]>("/sessions"),
-        api<RoutingSettings>("/settings"),
+        api<RoutingSettings>(workspacePath("/settings", workspaceId)),
       ]);
       if (bootstrapResult.status === "fulfilled") {
         setBoot(bootstrapResult.value);
@@ -339,8 +339,15 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     }
   };
   const refreshModels = useCallback(async (reason?: string) => {
-    try { setRoutingSettings(await workspaceApi<RoutingSettings>("/settings/models/refresh", { reason })); } catch {}
-  }, []);
+    try { setRoutingSettings(await api<RoutingSettings>("/settings/models/refresh", { reason })); } catch {}
+  }, [api]);
+  const workspaceAccountsKey = accountScopeKey(workspacesApi.settings[workspaceId]?.accounts);
+  const previousAccountsKey = useRef(workspaceAccountsKey);
+  useEffect(() => {
+    if (previousAccountsKey.current === workspaceAccountsKey) return;
+    previousAccountsKey.current = workspaceAccountsKey;
+    void refreshModels("account");
+  }, [workspaceAccountsKey, refreshModels]);
   useEffect(() => {
     let lastFocus = 0;
     const focus = () => {
@@ -594,9 +601,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const stewardKey = sessions.filter((session) => session.steward).map((session) => `${session.steward!.id}:${session.steward!.name}`).join("|");
   useEffect(() => {
     let live = true;
-    api<Steward[]>("/stewards").then((list) => { if (live) setStewards(list); }, () => undefined);
+    // Each workspace has its own leads; an older server ignores the query and returns every lead.
+    api<Steward[]>(`/stewards?workspace=${encodeURIComponent(workspaceId)}`).then((list) => { if (live) setStewards(inWorkspace(list, workspaceId, defaultWorkspaceId)); }, () => undefined);
     return () => { live = false; };
-  }, [api, stewardKey, stewardDraft !== false]);
+  }, [api, workspaceId, defaultWorkspaceId, stewardKey, stewardDraft !== false]);
   const chosenSteward = stewardDraft && stewardDraft.id ? stewards.find((item) => item.id === stewardDraft.id) : undefined;
   /** A new chat of an existing lead, opened in the lead's first folder. */
   const pickSteward = (id: string) => {
@@ -712,7 +720,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         quotaFallback={quotaFallback} setQuotaFallback={setQuotaFallback} quotaThreshold={quotaThreshold} setQuotaThreshold={setQuotaThreshold}
         fallbackOrder={fallbackOrder} setFallbackOrder={setFallbackOrder} autoSwitch={autoSwitch} setAutoSwitch={setAutoSwitch} />;
       case "routing": return <RoutingPage value={routingSettings} onReload={() => void load()}
-        onSave={async (next) => { setRoutingSettings(await api<RoutingSettings>("/settings", next, "PUT")); setRecommendation(undefined); }}
+        onSave={async (next) => { setRoutingSettings(await api<RoutingSettings>(workspacePath("/settings", workspaceId), next, "PUT")); setRecommendation(undefined); }}
         onRefresh={async () => {
           const next = await api<RoutingSettings>("/settings/models/refresh", {}, "POST");
           setRoutingSettings(next);
@@ -782,6 +790,12 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
             setSessions((old) => old.map((session) => session.groupId === id ? { ...session, workspaceId: target } : session));
             if (active?.groupId === id) newSession();
             if (groupId === id) setGroupId("");
+          })}
+          onMoveSteward={(id, target) => safe(async () => {
+            await api<Steward>(`/stewards/${id}`, { workspaceId: target }, "PATCH");
+            setStewards((old) => old.filter((steward) => steward.id !== id));
+            setSessions((old) => old.map((session) => stewardIdOf(session) === id ? { ...session, workspaceId: target } : session));
+            if (active && stewardIdOf(active) === id) newSession();
           })}
           onAssign={(id, group) => safe(() => assignGroup(id, group))}
           onRenameSession={(id, title) => safe(async () => {

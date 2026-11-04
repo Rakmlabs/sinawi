@@ -1,16 +1,19 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { AgentId, WorkspaceId, WorkspacePolicy } from "./types.js";
-import { isToolLocked } from "./workspace-policy.js";
+import { accountEnv } from "./cli.js";
+import { ACCOUNT_ENV, isToolLocked } from "./workspace-policy.js";
 
 const execFileAsync = promisify(execFile);
 const safeName = /^[\w.@:/ ()-]{1,200}$/;
 const authenticationReason = "MCP 인증 필요: 터미널에서 로그인하세요.";
+const codexConfigMutations = new Map<string, Promise<void>>();
 
-export type ToolCommandRunner = (file: string, args: string[]) => Promise<{ stdout: string; stderr?: string }>;
+export type ToolCommandRunner = (file: string, args: string[], options?: { env?: NodeJS.ProcessEnv }) => Promise<{ stdout: string; stderr?: string }>;
 
 export interface McpToolInfo {
   agent: AgentId;
@@ -44,10 +47,11 @@ export function mcpDisplayName(name: string): string {
 
 function shellQuote(value: string): string { return `'${value.replace(/'/g, "'\\''")}'`; }
 
-export function mcpAuthAction(agent: AgentId, name: string): { command: string; hint: string } {
+export function mcpAuthAction(agent: AgentId, name: string, accountDir?: string): { command: string; hint: string } {
   const hint = agent === "codex" ? `Codex MCP 인증: 브라우저가 열리면 ${name} 로그인 후 승인하세요.`
     : `${agentLabels[agent]} MCP 인증: /mcp 입력 → ${name} 선택 → Authenticate`;
-  const launch = agent === "codex" ? `codex mcp login ${shellQuote(name)}` : agent;
+  const prefix = accountDir ? `${ACCOUNT_ENV[agent]}=${shellQuote(accountDir)} ` : "";
+  const launch = prefix + (agent === "codex" ? `codex mcp login ${shellQuote(name)}` : agent);
   return { hint, command: `printf '\\n▶ %s\\n\\n' ${shellQuote(hint)} && ${launch}` };
 }
 
@@ -56,8 +60,8 @@ export function mcpAuthTitle(agent: AgentId, names: string[]): string {
   return `${agentLabels[agent]}의 ${shown}${names.length > 3 ? ` 외 ${names.length - 3}개` : ""} MCP 인증이 필요해요`;
 }
 
-function defaultRunner(file: string, args: string[]): Promise<{ stdout: string; stderr?: string }> {
-  return execFileAsync(file, args, { timeout: 10_000, maxBuffer: 512_000 });
+function defaultRunner(file: string, args: string[], options?: { env?: NodeJS.ProcessEnv }): Promise<{ stdout: string; stderr?: string }> {
+  return execFileAsync(file, args, { timeout: 10_000, maxBuffer: 512_000, ...options });
 }
 
 interface TomlLine { start: number; end: number; text: string; newline: string; external: boolean; header?: string }
@@ -206,10 +210,10 @@ export async function discoverMcpTools(_workspace: WorkspaceId, options: { runne
   const disabled = new Set(options.disabledMcp ?? []);
   const agents: AgentId[] = ["codex", "claude", "grok"];
   const results = await Promise.all(agents.map(async (agent) => {
-    try { return parseList(agent, (await runner(agent, ["mcp", "list"])).stdout); }
+    try { return parseList(agent, (await runner(agent, ["mcp", "list"], { env: { ...process.env, ...accountEnv(agent, options.policy?.accounts?.[agent]) } })).stdout); }
     catch { return []; }
   }));
-  return results.flat().map((tool) => decorate(tool)).map((tool) => {
+  return results.flat().map((tool) => decorate(tool, options.policy?.accounts?.[tool.agent])).map((tool) => {
     const forcedOff = isToolLocked(options.policy, tool.agent, tool.name);
     const appEnabled = tool.nativeEnabled && !disabled.has(`${tool.agent}:${tool.name}`) && !forcedOff;
     return {
@@ -224,27 +228,37 @@ export async function discoverMcpTools(_workspace: WorkspaceId, options: { runne
   });
 }
 
-function decorate(tool: McpToolInfo): McpToolInfo {
+function decorate(tool: McpToolInfo, accountDir?: string): McpToolInfo {
   const displayName = mcpDisplayName(tool.name);
   if (!tool.needsAuth) return { ...tool, displayName };
-  const action = mcpAuthAction(tool.agent, tool.name);
+  const action = mcpAuthAction(tool.agent, tool.name, accountDir);
   return { ...tool, displayName, authCommand: action.command, authHint: action.hint, reason: `인증 필요 · ${action.hint}` };
 }
 
-export async function updateMcpTool(input: { agent: AgentId; name: string; enabled: boolean }, options: { runner?: ToolCommandRunner; codexConfigPath?: string } = {}): Promise<void> {
+export async function updateMcpTool(input: { agent: AgentId; name: string; enabled: boolean }, options: { runner?: ToolCommandRunner; codexConfigPath?: string; accounts?: WorkspacePolicy["accounts"] } = {}): Promise<void> {
   if (!safeName.test(input.name)) throw new Error("MCP 도구 이름이 올바르지 않습니다.");
   const runner = options.runner ?? defaultRunner;
   if (input.agent === "grok") {
-    await runner("grok", ["mcp", input.enabled ? "enable" : "disable", input.name]);
+    await runner("grok", ["mcp", input.enabled ? "enable" : "disable", input.name], { env: { ...process.env, ...accountEnv("grok", options.accounts?.grok) } });
     return;
   }
   if (input.agent === "claude") return;
-  const file = options.codexConfigPath ?? join(homedir(), ".codex", "config.toml");
-  const current = await readFile(file, "utf8");
-  const next = setCodexMcpEnabled(current, input.name, input.enabled);
-  if (next === current) return;
-  await mkdir(dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  await writeFile(temporary, next, { mode: 0o600 });
-  await rename(temporary, file);
+  const file = options.codexConfigPath ?? join(options.accounts?.codex ?? process.env.CODEX_HOME ?? join(homedir(), ".codex"), "config.toml");
+  const previous = codexConfigMutations.get(file) ?? Promise.resolve();
+  const mutation = previous.catch(() => undefined).then(async () => {
+    const current = await readFile(file, "utf8");
+    const next = setCodexMcpEnabled(current, input.name, input.enabled);
+    if (next === current) return;
+    await mkdir(dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, next, { mode: 0o600 });
+      await rename(temporary, file);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  });
+  codexConfigMutations.set(file, mutation);
+  try { await mutation; }
+  finally { if (codexConfigMutations.get(file) === mutation) codexConfigMutations.delete(file); }
 }

@@ -14,7 +14,7 @@ import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
 import type { AutoSwitchRecommendation } from "./auto-routing.js";
-import { allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, fullAccessBlockedMessage, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
+import { accountDirFor, allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, fullAccessBlockedMessage, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
@@ -332,12 +332,20 @@ export class Orchestra {
     if (mode === "full" && !this.workspacePolicyResolver?.(workspaceId)?.fullAccess) throw new Error(fullAccessBlockedMessage);
   }
 
+  /** The workspace's CLI account folders (skills and runs use them); none means the default logins. */
+  private accountsOf(workspaceId: Session["workspaceId"]) {
+    return this.workspacePolicyResolver?.(workspaceId)?.accounts;
+  }
+
   private assertSessionPolicy(session: Session): void {
     this.assertPolicy(session.workspaceId, [session.agent, ...session.workers, ...(session.planner ? [session.planner.agent] : [])]);
   }
 
-  /** `legacyMergePolicy`: what migrated leads get (StewardSettings); "auto" when unset. */
-  restore(sessions: Session[], stewards: Steward[] = [], options: { legacyMergePolicy?: MergePolicy } = {}) {
+  /**
+   * `legacyMergePolicy`: what migrated leads get (StewardSettings); "auto" when unset.
+   * `defaultWorkspaceId`: where a lead saved before leads were per workspace goes when it has no chat.
+   */
+  restore(sessions: Session[], stewards: Steward[] = [], options: { legacyMergePolicy?: MergePolicy; defaultWorkspaceId?: Session["workspaceId"] } = {}) {
     for (const steward of stewards) this.stewardEntities.set(steward.id, steward);
     for (const session of sessions) {
       session.workerConfigs = normalizeWorkerConfigs(session.workers, session.workerConfigs);
@@ -361,6 +369,10 @@ export class Orchestra {
     // Report times used to be per chat: each lead now has one, the earliest its chats had.
     const reportsMoved = this.moveThreadReports();
     if (reportsMoved.length) migrated.push(...reportsMoved.filter((id) => !migrated.includes(id)));
+    // Leads used to be app-wide: each now belongs to one workspace (its threads' too).
+    const placed = this.placeStewardsInWorkspaces(options.defaultWorkspaceId);
+    if (placed.stewards && !migrated.length) void Promise.resolve(this.persistStewards?.(this.listStewards())).catch(() => undefined);
+    if (placed.sessions.length) migrated.push(...placed.sessions.filter((id) => !migrated.includes(id)));
     if (migrated.length) {
       void Promise.resolve(this.persistStewards?.(this.listStewards())).catch(() => undefined);
       void Promise.resolve(this.persist(this.list(), migrated)).catch(() => undefined);
@@ -433,7 +445,8 @@ export class Orchestra {
     if (requested.steward?.id && !entity) throw new Error("담당을 찾을 수 없습니다.");
     if (requested.parentId && entity) throw new Error("나눠 맡긴 채팅은 담당이 될 수 없습니다.");
     let input: StartSessionInput = entity ? {
-      ...requested, agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort,
+      // A lead's threads live in the lead's workspace, wherever they were asked for from.
+      ...requested, ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}), agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort,
       ...(entity.workers.length ? { workers: entity.workers.map((worker) => worker.agent), workerConfigs: structuredClone(entity.workers) } : {}),
       systemPrompt: entity.systemPrompt, skills: [...new Set([...entity.skills, ...(requested.skills ?? [])])],
     } : requested;
@@ -444,7 +457,7 @@ export class Orchestra {
       const fallback = this.defaultTeam(input.workspaceId ?? "personal", input.agent || undefined);
       input = { ...input, agent: input.agent || fallback.agent, ...(input.workers?.length ? {} : { workers: fallback.workers, workerConfigs: undefined }) };
     }
-    if (!entity && input.steward?.name?.trim()) this.assertStewardNameFree(input.steward.name.trim().slice(0, 80));
+    if (!entity && input.steward?.name?.trim()) this.assertStewardNameFree(input.steward.name.trim().slice(0, 80), undefined, input.workspaceId ?? "personal");
     const workspaceId = input.workspaceId ?? "personal";
     // No first message: an empty chat that waits for one (followup starts its first turn).
     const empty = !input.prompt.trim();
@@ -465,7 +478,7 @@ export class Orchestra {
     if (!folder) throw new Error("작업 폴더가 올바르지 않습니다.");
     const cwd = resolve(folder);
     if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
-    const selectedSkills = [...new Set([...(input.skills ?? []), ...mediaSkills(input.prompt, await enabledPublicSkills(cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), workspaceId).disabledSkills))])];
+    const selectedSkills = [...new Set([...(input.skills ?? []), ...mediaSkills(input.prompt, await enabledPublicSkills(cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), workspaceId).disabledSkills, this.accountsOf(workspaceId)))])];
     const session: Session = {
       id: randomUUID(), title: input.title?.trim().slice(0, 100) || (empty ? EMPTY_TITLE : titleFrom(input.prompt)), agent,
       workers, cwd, model,
@@ -484,9 +497,14 @@ export class Orchestra {
       ...(input.steward && !input.parentId ? { steward: { turns: 0, since: new Date().toISOString(), ...(entity ? { id: entity.id, name: entity.name } : input.steward.name?.trim() ? { name: input.steward.name.trim().slice(0, 80) } : {}) } } : {}),
     };
     this.sessions.set(session.id, session);
-    if (session.steward) {
-      if (entity && !entity.cwds.includes(cwd)) this.saveStewardEntity({ ...entity, cwds: [...entity.cwds, cwd] });
-      if (!entity) this.adoptSteward(session);
+    try {
+      if (session.steward) {
+        if (entity && !entity.cwds.includes(cwd)) this.saveStewardEntity({ ...entity, cwds: [...entity.cwds, cwd] });
+        if (!entity) this.adoptSteward(session);
+      }
+    } catch (error) {
+      this.sessions.delete(session.id);
+      throw error;
     }
     this.configs.set(session.id, { skills: selectedSkills, systemPrompt: input.systemPrompt ?? "" });
     if (empty) {
@@ -524,9 +542,9 @@ export class Orchestra {
       throw new Error(mediaUnavailableMessage);
     }
     const disabledSkills = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills;
-    const skills = await resolveSkillPrompt(skillIds, session.cwd, disabledSkills);
+    const skills = await resolveSkillPrompt(skillIds, session.cwd, disabledSkills, this.accountsOf(session.workspaceId));
     // Every installed skill, so the lead can pick skills for a brief the user never named.
-    const installedSkills = filterEnabledSkills(await loadSkills(session.cwd).catch(() => []), disabledSkills);
+    const installedSkills = filterEnabledSkills(await loadSkills(session.cwd, false, this.accountsOf(session.workspaceId)).catch(() => []), disabledSkills);
     const mediaPrompt = this.workspacePolicyResolver?.(session.workspaceId).mediaPrompt;
     if (!this.isCurrentRun(session, controller.signal)) return;
     let plan = "";
@@ -892,6 +910,7 @@ export class Orchestra {
     let text = "";
     try {
       const result = await this.runner({
+        accountDir: accountDirFor(this.workspacePolicyResolver?.(session.workspaceId), "grok"),
         agent: "grok",
         prompt: liveReplyPrompt(prompt, digest, workers),
         cwd: session.cwd,
@@ -1036,6 +1055,8 @@ export class Orchestra {
     // A worktree worker reads (never edits) the main checkout: uncommitted docs and node_modules live there.
     const worktreeRoot = role === "worker" && workerId ? session.worktrees?.find((item) => item.workerId === workerId)?.repoRoot : undefined;
     const pending = this.runner({
+      // The workspace's CLI login for this agent (CLAUDE_CONFIG_DIR / CODEX_HOME / GROK_HOME), if it has one.
+      accountDir: accountDirFor(policy, agent),
       blockedMcp: [...new Set([...blockedMcp, ...policyDenyPatterns(policy, agent)])],
       lockedMcp: lockedToolsFor(policy, agent),
       // Review/planning runs are read-only but must still be able to read files to verify (see readTools).
@@ -1255,7 +1276,7 @@ export class Orchestra {
     }
     if (controller.signal.aborted) return session;
     const config = this.turnConfig(session);
-    const selectedSkills = [...new Set([...config.skills, ...skills, ...mediaSkills(prompt, await enabledPublicSkills(session.cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills))])];
+    const selectedSkills = [...new Set([...config.skills, ...skills, ...mediaSkills(prompt, await enabledPublicSkills(session.cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills, this.accountsOf(session.workspaceId)))])];
     void this.execute(session, carriedOverPrompt(carried, prompt), selectedSkills, config.systemPrompt, controller, mediaLead || (mediaRequest && session.agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
     return session;
@@ -1274,6 +1295,14 @@ export class Orchestra {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.status === "running") this.assertPolicy(workspaceId, [session.agent, ...session.workers, ...(session.planner ? [session.planner.agent] : [])]);
+    // A lead and its chats share one workspace: moving one of its chats moves the lead and the rest.
+    const steward = this.stewardOf(session);
+    if (steward) {
+      this.moveSteward(steward.id, workspaceId, detachFromGroup);
+      if (detachFromGroup) delete session.groupId;
+      this.broadcast(session);
+      return session;
+    }
     session.workspaceId = workspaceId;
     if (detachFromGroup) delete session.groupId;
     this.broadcast(session);
@@ -1544,7 +1573,7 @@ export class Orchestra {
     for (let index = 0; index < Math.min(Math.max(turns, 1), 20); index++) {
       if (controller.signal.aborted) return this.finishStopped(session, controller);
       const bot = index % 2 === 0 ? botA : botB;
-      const skills = await resolveSkillPrompt(bot.skills, session.cwd, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills);
+      const skills = await resolveSkillPrompt(bot.skills, session.cwd, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills, this.accountsOf(session.workspaceId));
       const prompt = `${bot.systemPrompt}${skills}\n\n상대 봇의 메시지에 응답하세요. 현재 ${index + 1}/${turns}턴입니다.\n\n${message}`;
       const result = await this.runAgent(session, bot.agent, prompt, bot.model, undefined, undefined, controller.signal);
       if (result.exitCode !== 0) throw new Error(`${bot.name} 실행 실패 (코드 ${result.exitCode})`);
@@ -1617,15 +1646,36 @@ export class Orchestra {
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.parentId) throw new Error("나눠 맡긴 채팅은 담당이 될 수 없습니다.");
     const newName = patch.name?.trim().slice(0, 80);
-    if (newName) this.assertStewardNameFree(newName, session.steward?.id);
+    const existing = this.stewardEntities.get(session.steward?.id ?? session.disabledStewardId ?? session.id);
     const enabled = patch.enabled ?? Boolean(session.steward);
+    const destination = existing?.workspaceId ?? session.workspaceId;
+    const enabledName = newName || existing?.name || basename(session.cwd) || session.cwd;
     if (enabled && !session.steward) {
-      session.steward = { turns: 0, since: new Date().toISOString(), ...(newName ? { name: newName } : {}) };
+      this.assertStewardNameFree(enabledName, existing?.id, destination);
+      if (existing?.workspaceId && existing.workspaceId !== session.workspaceId && session.status === "running") {
+        this.assertSessionPolicy({ ...session, workspaceId: existing.workspaceId });
+      }
+    } else if (newName) {
+      this.assertStewardNameFree(newName, session.steward?.id, destination);
+    }
+    if (enabled && !session.steward) {
+      // A disabled former lead may have been moved as an ordinary chat. Restoring the lead restores
+      // the entity's workspace too, keeping every thread of a lead in one space.
+      if (existing?.workspaceId) {
+        session.workspaceId = existing.workspaceId;
+        delete session.groupId;
+      }
+      session.steward = {
+        turns: 0, since: new Date().toISOString(),
+        ...(existing ? { id: existing.id, name: existing.name } : newName ? { name: newName } : {}),
+      };
       session.goal ??= freshGoal();
       this.adoptSteward(session);
+      delete session.disabledStewardId;
       this.event(session, session.agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
     } else if (!enabled && session.steward) {
       if (session.steward.answering) this.settleStewardAnswer(session, "stopped");
+      session.disabledStewardId = session.steward.id ?? session.id;
       delete session.steward;
       this.stewardLastAnswer.delete(id);
       this.event(session, session.agent, "status", "프로젝트 담당을 해제했습니다.");
@@ -1656,10 +1706,13 @@ export class Orchestra {
    * a chat; its own lead's other threads are not "other leads".
    */
   private stewards(except?: string): Session[] {
-    const own = except ? this.sessions.get(except)?.steward?.id : undefined;
+    const asker = except ? this.sessions.get(except) : undefined;
+    const own = asker?.steward?.id;
     const latest = new Map<string, Session>();
     for (const item of this.sessions.values()) {
       if (!item.steward || item.id === except) continue;
+      // Leads only see the leads of their own workspace (공간).
+      if (asker && item.workspaceId !== asker.workspaceId) continue;
       const key = item.steward.id ?? item.id;
       if (own && key === own) continue;
       const seen = latest.get(key);
@@ -1673,22 +1726,91 @@ export class Orchestra {
     return [...this.sessions.values()].filter((item) => item.steward);
   }
 
-  /** Leads are found by name, so two may not share one. `except` is a Steward id. */
-  private assertStewardNameFree(name: string, except?: string): void {
+  /** Leads are found by name inside a workspace, so names only need to be unique there. */
+  private assertStewardNameFree(name: string, except?: string, workspaceId?: Session["workspaceId"]): void {
     const wanted = name.toLowerCase();
-    const entity = [...this.stewardEntities.values()].find((item) => item.id !== except && item.name.toLowerCase() === wanted);
-    const chat = entity ? undefined : this.stewardChats().find((peer) => (peer.steward!.id ?? peer.id) !== except && stewardName(peer).toLowerCase() === wanted);
+    const entity = [...this.stewardEntities.values()].find((item) => item.id !== except && item.workspaceId === workspaceId && item.name.toLowerCase() === wanted);
+    const chat = entity ? undefined : this.stewardChats().find((peer) => (peer.steward!.id ?? peer.id) !== except && peer.workspaceId === workspaceId && stewardName(peer).toLowerCase() === wanted);
     const taken = entity?.name ?? (chat ? stewardName(chat) : undefined);
     if (taken) throw new Error(`이미 「${taken}」 담당이 있습니다. 다른 이름을 정하세요.`);
   }
 
   // Lead entities (Steward): what a lead is, apart from any one chat.
 
-  listStewards(): Steward[] {
-    return [...this.stewardEntities.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  /** Every lead, or only those of one workspace. */
+  listStewards(workspaceId?: Session["workspaceId"]): Steward[] {
+    return [...this.stewardEntities.values()]
+      .filter((steward) => workspaceId === undefined || steward.workspaceId === workspaceId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  /**
+   * Gives every lead without a workspace one: the workspace of its latest chat, else `fallback`.
+   * A lead's chats that sit in another workspace move to the lead's, so a lead is in one place.
+   * Returns whether any lead changed and the chats moved.
+   */
+  private placeStewardsInWorkspaces(fallback?: Session["workspaceId"]): { stewards: boolean; sessions: string[] } {
+    let stewards = false;
+    const sessions: string[] = [];
+    for (const steward of this.listStewards()) {
+      let workspaceId = steward.workspaceId;
+      if (!workspaceId) {
+        workspaceId = this.latestThread(steward.id)?.workspaceId ?? fallback;
+        if (!workspaceId) continue;
+        this.stewardEntities.set(steward.id, { ...steward, workspaceId });
+        stewards = true;
+      }
+      for (const thread of this.stewardThreads(steward.id)) {
+        if (thread.workspaceId === workspaceId) continue;
+        thread.workspaceId = workspaceId;
+        delete thread.groupId;
+        sessions.push(thread.id);
+      }
+    }
+    return { stewards, sessions };
+  }
+
+  /**
+   * Moves a lead and all its chats to another workspace. A running chat may move only when the
+   * new workspace allows its agents. `detachFromGroup`: false when the groups move along (a deleted
+   * workspace's contents). Returns the chats moved.
+   */
+  moveSteward(id: string, workspaceId: Session["workspaceId"], detachFromGroup = true): Session[] {
+    const steward = this.stewardEntities.get(id);
+    if (!steward) throw new Error("담당을 찾을 수 없습니다.");
+    this.assertStewardNameFree(steward.name, id, workspaceId);
+    const threads = this.stewardThreads(id);
+    for (const session of threads) if (session.status === "running") this.assertSessionPolicy({ ...session, workspaceId });
+    if (steward.workspaceId !== workspaceId) this.saveStewardEntity({ ...steward, workspaceId, updatedAt: new Date().toISOString() });
+    const moved: Session[] = [];
+    for (const session of threads) {
+      if (session.workspaceId === workspaceId) continue;
+      session.workspaceId = workspaceId;
+      if (detachFromGroup) delete session.groupId;
+      this.broadcast(session);
+      moved.push(session);
+    }
+    return moved;
   }
 
   getSteward(id: string): Steward | undefined { return this.stewardEntities.get(id); }
+
+  /**
+   * Resolves a lead ID or name for an API/MCP caller. Names prefer the caller's workspace. A name
+   * that exists in several other workspaces is deliberately rejected so the caller can use an ID.
+   */
+  resolveSteward(idOrName: string, workspaceId?: Session["workspaceId"]): Steward | undefined {
+    const exact = this.stewardEntities.get(idOrName);
+    if (exact) return exact;
+    const wanted = idOrName.trim().toLowerCase();
+    if (!wanted) return;
+    const matches = this.listStewards().filter((item) => item.name.toLowerCase() === wanted);
+    const local = workspaceId ? matches.find((item) => item.workspaceId === workspaceId) : undefined;
+    if (local) return local;
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) throw new Error(`「${idOrName}」 담당이 여러 공간에 있습니다. 담당 ID를 사용하세요.`);
+    return;
+  }
 
   /** The lead a chat is a thread of. */
   stewardOf(session: Session): Steward | undefined {
@@ -1717,17 +1839,20 @@ export class Orchestra {
       return existing;
     }
     const steward = stewardFromSession(session, { id, mergePolicy: DEFAULT_MERGE_POLICY });
+    // Creation performs async discovery before reaching here. Recheck and reserve synchronously so
+    // concurrent creates, plus implicit folder-derived names, cannot both enter the same workspace.
+    this.assertStewardNameFree(steward.name, id, session.workspaceId);
     session.steward!.id = steward.id;
     session.steward!.name = steward.name;
     return this.saveStewardEntity(steward);
   }
 
-  createSteward(input: StewardPatch & { name: string }): Steward {
+  createSteward(input: StewardPatch & { name: string; workspaceId?: Session["workspaceId"] }): Steward {
     const name = input.name.trim().slice(0, 80);
     if (!name) throw new Error("담당 이름이 필요합니다.");
-    this.assertStewardNameFree(name);
+    this.assertStewardNameFree(name, undefined, input.workspaceId);
     const now = new Date().toISOString();
-    const base: Steward = { id: randomUUID(), name, agent: input.agent ?? "claude", skills: [], systemPrompt: "", workers: [], mergePolicy: DEFAULT_MERGE_POLICY, cwds: [], createdAt: now };
+    const base: Steward = { id: randomUUID(), name, agent: input.agent ?? "claude", skills: [], systemPrompt: "", workers: [], mergePolicy: DEFAULT_MERGE_POLICY, cwds: [], ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), createdAt: now };
     const steward = applyStewardPatch(base, { ...input, name }, now);
     delete steward.updatedAt;
     steward.workers = normalizeWorkerConfigs(steward.workers.map((worker) => worker.agent), steward.workers);
@@ -1738,19 +1863,28 @@ export class Orchestra {
    * Edits a lead. Instructions and skills apply from each thread's next turn (they are read when a
    * turn starts); a new name shows in every thread; a new team goes to every thread not running now.
    */
-  patchSteward(id: string, patch: StewardPatch): Steward {
+  patchSteward(id: string, patch: StewardPatch, workspaceId?: Session["workspaceId"]): Steward {
     const current = this.stewardEntities.get(id);
     if (!current) throw new Error("담당을 찾을 수 없습니다.");
     const name = patch.name?.trim().slice(0, 80);
     if (patch.name !== undefined && !name) throw new Error("담당 이름이 필요합니다.");
-    if (name && name.toLowerCase() !== current.name.toLowerCase()) this.assertStewardNameFree(name, id);
+    const destination = workspaceId ?? current.workspaceId;
+    this.assertStewardNameFree(name ?? current.name, id, destination);
+    if (workspaceId) {
+      for (const session of this.stewardThreads(id)) if (session.status === "running") this.assertSessionPolicy({ ...session, workspaceId });
+    }
     const next = applyStewardPatch(current, { ...patch, ...(name ? { name } : {}) });
+    if (workspaceId) next.workspaceId = workspaceId;
     if (patch.workers) next.workers = normalizeWorkerConfigs(next.workers.map((worker) => worker.agent), next.workers);
     if (patch.mergePolicy !== undefined) next.mergePolicyChosen = true;
     const teamChanged = patch.agent !== undefined || patch.workers !== undefined || patch.model !== undefined || patch.reasoningEffort !== undefined;
     this.saveStewardEntity(next);
     for (const session of this.stewardThreads(id)) {
       session.steward!.name = next.name;
+      if (workspaceId && session.workspaceId !== workspaceId) {
+        session.workspaceId = workspaceId;
+        delete session.groupId;
+      }
       if (teamChanged && session.status !== "running" && next.workers.length) {
         try {
           this.applyTeam(session, { agent: next.agent, model: next.model, reasoningEffort: next.reasoningEffort, workers: next.workers.map((worker) => worker.agent), workerConfigs: structuredClone(next.workers) });
@@ -1989,7 +2123,7 @@ export class Orchestra {
   /** Skills the lead can attach: its own (lead scope) first, then the project's and installed ones. */
   private async leadSkillRecords(session: Session): Promise<SkillRecord[]> {
     const own = this.stewardDataDir && this.stewardOf(session) ? await scanSkillRoot(this.leadSkillRoot(session), "담당", ["claude", "codex", "grok"]) : [];
-    return [...own, ...await loadSkills(session.cwd).catch(() => [] as SkillRecord[])];
+    return [...own, ...await loadSkills(session.cwd, false, this.accountsOf(session.workspaceId)).catch(() => [] as SkillRecord[])];
   }
 
   private async leadSkillText(session: Session, names: string[]): Promise<{ text: string; missing: string[] }> {

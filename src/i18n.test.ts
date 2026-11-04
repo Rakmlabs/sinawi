@@ -41,6 +41,16 @@ test("t interpolates, follows the current language and maps stay live", () => {
   }
 });
 
+test("workspace account folders warn that existing CLI history may stop resuming", () => {
+  const before = getLang();
+  try {
+    setLang("ko");
+    assert.match(t("wsset.accountsHint"), /기존 채팅.*이어지지 않을 수/);
+    setLang("en");
+    assert.match(t("wsset.accountsHint"), /existing chats may not resume/i);
+  } finally { setLang(before); }
+});
+
 test("desktop header renders the Sinawi wordmark and English labels", () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
   const before = getLang();

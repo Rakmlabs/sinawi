@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import type { AgentId, SkillInfo } from "./types.js";
+import type { AgentId, SkillInfo, WorkspaceAccounts } from "./types.js";
+import { ACCOUNT_ENV } from "./workspace-policy.js";
 
 export interface SkillRecord extends SkillInfo {
   agents: AgentId[];
@@ -18,13 +19,17 @@ interface SkillRoot {
 const cache = new Map<string, { expires: number; records: SkillRecord[] }>();
 const allAgents: AgentId[] = ["claude", "codex", "grok"];
 
-function userRoots(): SkillRoot[] {
+/** `accounts`: a workspace's CLI account folders; their skills replace the default login's. */
+function userRoots(accounts: WorkspaceAccounts = {}): SkillRoot[] {
+  const claude = accounts.claude!;
+  const codex = accounts.codex!;
+  const grok = accounts.grok!;
   return [
-    { path: join(homedir(), ".claude", "skills"), source: "Claude", agents: ["claude"] },
-    { path: join(homedir(), ".codex", "skills"), source: "Codex", agents: ["codex"] },
-    { path: join(homedir(), ".codex", "prompts"), source: "Codex 프롬프트", agents: ["codex"] },
+    { path: join(claude, "skills"), source: "Claude", agents: ["claude"] },
+    { path: join(codex, "skills"), source: "Codex", agents: ["codex"] },
+    { path: join(codex, "prompts"), source: "Codex 프롬프트", agents: ["codex"] },
     { path: join(homedir(), ".agents", "skills"), source: "Agents", agents: ["codex"] },
-    { path: join(homedir(), ".grok", "skills"), source: "Grok Build", agents: ["grok"] },
+    { path: join(grok, "skills"), source: "Grok Build", agents: ["grok"] },
     { path: resolve(process.cwd(), "skills"), source: "로컬", agents: allAgents },
   ];
 }
@@ -160,25 +165,34 @@ export async function scanProjectSkills(cwd: string): Promise<SkillRecord[]> {
 }
 
 export function clearSkillsCache(cwd?: string): void {
-  if (cwd) cache.delete(resolve(cwd));
-  else cache.clear();
+  if (!cwd) { cache.clear(); return; }
+  const folder = resolve(cwd);
+  for (const key of cache.keys()) if (key === folder || key.startsWith(`${folder}\0`)) cache.delete(key);
 }
 
-export async function loadSkills(cwd = process.cwd(), refresh = false): Promise<SkillRecord[]> {
-  const key = resolve(cwd);
+const effectiveAccounts = (accounts: WorkspaceAccounts = {}): WorkspaceAccounts => Object.fromEntries(
+  (["claude", "codex", "grok"] as const).map((agent) => [agent, accounts[agent] ?? process.env[ACCOUNT_ENV[agent]] ?? join(homedir(), `.${agent}`)])
+);
+const accountsKey = (accounts: WorkspaceAccounts) => (["claude", "codex", "grok"] as const).map((agent) => accounts[agent]).join("\0");
+
+/** `accounts`: the workspace's CLI account folders (user skills and Claude plugins are read from them). */
+export async function loadSkills(cwd = process.cwd(), refresh = false, accounts: WorkspaceAccounts = {}): Promise<SkillRecord[]> {
+  const folder = resolve(cwd);
+  const effective = effectiveAccounts(accounts);
+  const key = `${folder}\0${accountsKey(effective)}`;
   const cached = cache.get(key);
   if (!refresh && cached && cached.expires > Date.now()) return cached.records;
   const records = dedupe((await Promise.all([
-    ...userRoots().map((root) => scanSkillRoot(root.path, root.source, root.agents)),
-    scanProjectSkills(key),
-    scanClaudePlugins(),
+    ...userRoots(effective).map((root) => scanSkillRoot(root.path, root.source, root.agents)),
+    scanProjectSkills(folder),
+    scanClaudePlugins(join(effective.claude!, "plugins", "installed_plugins.json")),
   ])).flat());
   cache.set(key, { expires: Date.now() + 15_000, records });
   return records;
 }
 
-export async function publicSkills(cwd?: string, refresh = false): Promise<SkillInfo[]> {
-  return (await loadSkills(cwd, refresh)).map(({ content: _content, ...record }) => record);
+export async function publicSkills(cwd?: string, refresh = false, accounts?: WorkspaceAccounts): Promise<SkillInfo[]> {
+  return (await loadSkills(cwd, refresh, accounts)).map(({ content: _content, ...record }) => record);
 }
 
 export function filterEnabledSkills<T extends Pick<SkillInfo, "name">>(records: T[], disabledNames: readonly string[] = []): T[] {
@@ -186,13 +200,13 @@ export function filterEnabledSkills<T extends Pick<SkillInfo, "name">>(records: 
   return records.filter((record) => !disabled.has(record.name.toLocaleLowerCase()));
 }
 
-export async function enabledPublicSkills(cwd?: string, refresh = false, disabledNames: readonly string[] = []): Promise<SkillInfo[]> {
-  return filterEnabledSkills(await publicSkills(cwd, refresh), disabledNames);
+export async function enabledPublicSkills(cwd?: string, refresh = false, disabledNames: readonly string[] = [], accounts?: WorkspaceAccounts): Promise<SkillInfo[]> {
+  return filterEnabledSkills(await publicSkills(cwd, refresh, accounts), disabledNames);
 }
 
-export async function resolveSkillPrompt(ids: string[], cwd?: string, disabledNames: readonly string[] = []): Promise<string> {
+export async function resolveSkillPrompt(ids: string[], cwd?: string, disabledNames: readonly string[] = [], accounts?: WorkspaceAccounts): Promise<string> {
   if (!ids.length) return "";
-  return formatSkillPrompt(await loadSkills(cwd), ids, disabledNames);
+  return formatSkillPrompt(await loadSkills(cwd, false, accounts), ids, disabledNames);
 }
 
 export function formatSkillPrompt(records: SkillRecord[], ids: string[], disabledNames: readonly string[] = []): string {

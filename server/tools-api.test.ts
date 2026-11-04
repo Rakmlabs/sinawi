@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Duplex } from "node:stream";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -111,5 +111,60 @@ test("tools API includes skills from the requested working folder", async () => 
     assert.equal(seen.at(-1), directory);
     await request(app, "PUT", "/api/tools/skill", { name: "Local", enabled: false, workspace: "personal", cwd: directory });
     assert.equal(seen.at(-1), directory);
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test("workspace account startup and changes install skills and scope model auth notices", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "space-account-api-"));
+  const first = join(directory, "first-account");
+  const second = join(directory, "second-account");
+  await saveWorkspaceState({ currentWorkspaceId: "personal", workspaces: [{ id: "personal", name: "Personal" }, { id: "company", name: "Company" }], defaults: {}, settings: { personal: { mediaGeneration: true, computerUse: false, grokMcp: true, blockedTools: [], authAlertTools: [], accounts: { codex: first } } } }, directory);
+  const { app, websocket } = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: [], modelRunner: async (command, _args, options) => ({ stdout: command === "codex" && options?.env?.CODEX_HOME === first ? "Not logged in" : "Logged in authenticated" }), authDiscovery: { sleep: async () => undefined } });
+  try {
+    const personal = await request(app, "GET", "/api/settings?workspace=personal");
+    assert.equal(personal.body.modelOptions.codex.authStatus, "unauthenticated");
+    assert.equal((await request(app, "GET", "/api/settings?workspace=company")).body.modelOptions.codex.authStatus, "authenticated");
+    for (const name of ["orchestra-browser", "orchestra-computer"]) assert.match(await readFile(join(first, "skills", name, "SKILL.md"), "utf8"), new RegExp(`name: ${name}`));
+    const notices = await request(app, "GET", "/api/notifications?workspace=personal");
+    const payload = Array.isArray(notices.body) ? notices.body : notices.body.notifications;
+    assert.ok(payload.some((note: any) => note.key === "auth:codex" && note.action.command.includes(first)));
+    const changed = await request(app, "PATCH", "/api/workspaces/personal", { settings: { accounts: { codex: second } } });
+    assert.equal(changed.status, 200);
+    for (const name of ["orchestra-browser", "orchestra-computer"]) assert.match(await readFile(join(second, "skills", name, "SKILL.md"), "utf8"), new RegExp(`name: ${name}`));
+    assert.equal((await request(app, "GET", "/api/settings?workspace=personal")).body.modelOptions.codex.authStatus, "authenticated");
+    const old = await request(app, "GET", "/api/notifications?workspace=personal");
+    assert.ok(!(Array.isArray(old.body) ? old.body : old.body.notifications).some((note: any) => note.key === "auth:codex" && !note.resolvedAt));
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("failed account skill installation leaves the stored workspace policy unchanged", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "space-account-invalid-"));
+  const invalid = join(directory, "file-instead-of-folder");
+  await writeFile(invalid, "file");
+  await seedLegacyWorkspaces(directory);
+  const { app, websocket } = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: [], modelRunner: async () => ({ stdout: "" }) });
+  try {
+    for (const path of ["/api/workspaces/personal", "/api/workspaces"]) {
+      const result = await request(app, "PATCH", path, { workspaceId: "personal", settings: { accounts: { codex: invalid } } });
+      assert.equal(result.status, 400);
+      const workspaces = await request(app, "GET", "/api/workspaces");
+      assert.equal(workspaces.body.settings.personal?.accounts?.codex, undefined);
+    }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("an unavailable saved account folder reports installation failure without blocking startup", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "space-account-startup-failure-"));
+  const invalid = join(directory, "file-instead-of-folder");
+  await writeFile(invalid, "file");
+  await saveWorkspaceState({ currentWorkspaceId: "default", workspaces: [{ id: "default", name: "Default" }], defaults: {}, settings: { default: { mediaGeneration: true, computerUse: false, grokMcp: true, blockedTools: [], authAlertTools: [], accounts: { codex: invalid } } } }, directory);
+  const { app, websocket } = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: [], modelRunner: async () => ({ stdout: "" }) });
+  try {
+    assert.equal((await request(app, "GET", "/api/sessions")).status, 200);
+    const notices = await request(app, "GET", "/api/notifications?workspace=default");
+    assert.ok(notices.body.some((note: any) => note.key === "account-skills" && note.type === "error"));
+    const recovered = await request(app, "PATCH", "/api/workspaces/default", { settings: { accounts: { codex: "" } } });
+    assert.equal(recovered.status, 200);
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
 });

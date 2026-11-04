@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Check, FolderOpen, Pencil, Plus, Trash2, X } from "lucide-react";
 import { AgentMark } from "../AgentMark";
-import { allowedAgentsForWorkspace, defaultWorkspacePolicy, toolNamePattern } from "../../server/workspace-policy";
+import { accountLoginCommand, ACCOUNT_ENV, allowedAgentsForWorkspace, defaultWorkspacePolicy, toolNamePattern } from "../../server/workspace-policy";
 import { useWorkspaces } from "../workspace-context";
 import { workspaceName } from "../workspaces";
 import { names } from "./labels";
@@ -192,6 +192,7 @@ function WorkspaceRules({ workspaceId, policy, open, locked, save }: { workspace
     <RuleToggle id={`ws-${key}-grok-mcp`} label={t("wsset.grokMcp")} hint={t("wsset.grokMcpHint")} checked={policy.grokMcp} disabled={locked} onChange={(value) => void save({ grokMcp: value })} />
     <ToolList id={`ws-${key}-blocked`} label={t("wsset.blockedTools")} hint={t("wsset.blockedToolsHint")} values={policy.blockedTools} scoped disabled={locked} onChange={(next) => save({ blockedTools: next })} />
     <ToolList id={`ws-${key}-alerts`} label={t("wsset.alertTools")} hint={t("wsset.alertToolsHint")} values={policy.authAlertTools} scoped={false} disabled={locked} onChange={(next) => save({ authAlertTools: next })} />
+    <AccountFolders id={`ws-${key}-accounts`} settingId={open ? "ws-accounts" : undefined} accounts={policy.accounts ?? {}} disabled={locked} save={(agent, dir) => save({ accounts: { [agent]: dir } })} />
     {policy.mediaGeneration && <div className="workspace-rule">
       <label className="workspace-rule-head" htmlFor={`ws-${key}-media-prompt`}>{t("wsset.mediaPrompt")}</label>
       <small id={`ws-${key}-media-prompt-hint`}>{t("wsset.mediaPromptHint")}</small>
@@ -203,4 +204,31 @@ function WorkspaceRules({ workspaceId, policy, open, locked, save }: { workspace
     </div>}
     </div>
   </details>;
+}
+
+/**
+ * Per-agent CLI account folders (policy.accounts): every CLI run of that agent in this workspace
+ * gets CLAUDE_CONFIG_DIR / CODEX_HOME / GROK_HOME set to it. Empty is the default login.
+ */
+function AccountFolders({ id, settingId, accounts, disabled, save }: { id: string; settingId?: string; accounts: Partial<Record<AgentId, string>>; disabled: boolean; save: (agent: AgentId, dir: string) => Promise<boolean> }) {
+  const [drafts, setDrafts] = useState<Partial<Record<AgentId, string>>>({});
+  return <div className="workspace-rule" role="group" aria-labelledby={`${id}-label`} data-setting-id={settingId}>
+    <span className="workspace-rule-head" id={`${id}-label`}>{t("wsset.accounts")}</span>
+    <small id={`${id}-hint`}>{t("wsset.accountsHint")}</small>
+    {(["claude", "codex", "grok"] as AgentId[]).map((agent) => {
+      const saved = accounts[agent] ?? "";
+      const draft = drafts[agent] ?? saved;
+      const valid = !draft.trim() || draft.trim().startsWith("/");
+      const reset = () => setDrafts((old) => { const next = { ...old }; delete next[agent]; return next; });
+      return <form key={agent} className="workspace-account" onSubmit={async (event) => { event.preventDefault(); if (valid && !disabled && await save(agent, draft.trim())) reset(); }}>
+        <label className="workspace-inline-form">
+          <AgentMark agent={agent} size="small" /><span>{names[agent]}</span>
+          <input aria-label={t("wsset.accountFolder", { agent: names[agent] })} aria-describedby={`${id}-hint`} aria-invalid={!valid} placeholder={t("wsset.accountPlaceholder")} maxLength={1024} value={draft} disabled={disabled} onChange={(event) => setDrafts((old) => ({ ...old, [agent]: event.target.value }))} />
+          {draft !== saved && <><button type="button" className="button light" onClick={reset}>{t("side.cancel")}</button><button type="submit" className="button light" disabled={disabled || !valid}>{t("wsset.save")}</button></>}
+        </label>
+        {!valid && <small className="workspace-warning" role="alert">{t("wsset.accountInvalid")}</small>}
+        <small>{saved ? <>{t("wsset.accountLogin")} <code>{accountLoginCommand(agent, saved)}</code></> : <>{t("wsset.accountDefault")} · <code>{ACCOUNT_ENV[agent]}</code></>}</small>
+      </form>;
+    })}
+  </div>;
 }

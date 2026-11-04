@@ -303,6 +303,48 @@ test("two leads cannot share a name", async (t) => {
   assert.equal(two.steward!.name, "개발2");
 });
 
+test("concurrent lead chat creation reserves an explicit name only once", async (t) => {
+  const { repo } = await setup(t, "parallel");
+  const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "준비" }));
+  const results = await Promise.allSettled([
+    orchestra.create({ prompt: "one", agent: "codex", workers: ["claude"], cwd: repo, steward: { name: "Same" } }),
+    orchestra.create({ prompt: "two", agent: "codex", workers: ["claude"], cwd: repo, steward: { name: "Same" } }),
+  ]);
+  assert.deepEqual(results.map((result) => result.status).sort(), ["fulfilled", "rejected"]);
+  assert.equal(orchestra.listStewards("personal").filter((item) => item.name === "Same").length, 1);
+});
+
+test("implicit folder names are checked when creating or enabling a lead", async (t) => {
+  const { repo } = await setup(t, "same-folder");
+  const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "준비" }));
+  const first = await orchestra.create({ prompt: "one", agent: "codex", workers: ["claude"], cwd: repo, workspaceId: "personal", steward: {} });
+  await waitFor(() => first.status === "done");
+  await assert.rejects(
+    orchestra.create({ prompt: "two", agent: "codex", workers: ["claude"], cwd: repo, workspaceId: "personal", steward: {} }),
+    /이미 「same-folder」 담당/u,
+  );
+  const plain = await orchestra.create({ prompt: "plain", agent: "codex", workers: ["claude"], cwd: repo, workspaceId: "personal" });
+  await waitFor(() => plain.status === "done");
+  assert.throws(() => orchestra.setSteward(plain.id, true), /이미 「same-folder」 담당/u);
+  assert.equal(plain.steward, undefined);
+});
+
+test("re-enabling a running former lead validates its lead workspace policy before moving", async (t) => {
+  const { repo } = await setup(t, "policy");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const allowed = (workspaceId: string) => workspaceId === "company" ? ["claude", "grok"] as const : ["codex", "claude", "grok"] as const;
+  const orchestra = new Orchestra(undefined, async () => { await gate; return { exitCode: 0, finalText: "done" }; }, undefined, undefined, undefined, allowed);
+  const chat = await orchestra.create({ prompt: "start", agent: "codex", workers: ["claude"], cwd: repo, workspaceId: "personal", steward: { name: "Policy" } });
+  orchestra.setSteward(chat.id, false);
+  orchestra.patchSteward(chat.id, {}, "company");
+  assert.equal(chat.workspaceId, "personal");
+  assert.throws(() => orchestra.setSteward(chat.id, true), /Codex/u);
+  assert.equal(chat.workspaceId, "personal");
+  assert.equal(chat.steward, undefined);
+  release();
+});
+
 test("a daily report is skipped when the project and the chat are unchanged", async (t) => {
   const { repo, dataDir } = await setup(t);
   const prompts: string[] = [];

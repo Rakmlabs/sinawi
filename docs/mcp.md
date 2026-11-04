@@ -6,6 +6,8 @@
 
 A project lead is a long-lived chat that owns one project. Create one with **+** next to **Leads** at the top of the sidebar, then keep giving it work in plain language in that chat. The lead keeps notes on what it has learned and can search its earlier conversations; when a conversation grows long it moves to a fresh session and carries on from the notes. Notes, instructions, skills, team, merge policy and schedules are edited in the lead's settings.
 
+Leads belong to a workspace. Their names are unique within that workspace, so different workspaces may use the same name. Name-based API and MCP lookups prefer the caller's workspace. If the name exists in several other workspaces, use the lead ID. A lead can ask another lead only when both are in the same workspace.
+
 ### Merge policy
 
 | Policy | What happens to finished worker branches |
@@ -23,6 +25,7 @@ A Claude or Codex lead gets an MCP server, `sinawi_lead`, in its own runs (not i
 - **Skills.** `write_skill`, `update_skill` and `list_skills` save reusable instructions, for this lead only or for the whole project (`.claude/skills`), and attach them to later briefs.
 - **Schedules.** `schedule_create`, `schedule_list`, `schedule_update` (and `schedule_delete`, which needs your approval) let the lead set up deadlines, checks and recurring work it agreed on in the chat.
 - **App tools.** The lead also gets the app-wide tools below.
+- **Asking another lead.** A lead can ask only another lead in the same workspace. Move one of the leads first when work needs to cross workspace boundaries.
 
 ### Schedules
 

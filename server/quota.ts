@@ -19,6 +19,8 @@ export interface ProviderQuota {
   source?: string;
   credits?: Record<string, unknown>;
   unavailableReason?: string;
+  /** The CLI account folder these limits are for (a workspace's, server/cli.ts accountEnv); unset: the default login. */
+  account?: string;
 }
 
 function record(value: unknown): Record<string, any> | undefined {
@@ -129,6 +131,7 @@ async function readStored(directory: string): Promise<ProviderQuota[]> {
         ...(typeof item.source === "string" ? { source: item.source } : {}),
         ...(record(item.credits) ? { credits: structuredClone(item.credits) } : {}),
         ...(typeof item.unavailableReason === "string" ? { unavailableReason: item.unavailableReason } : {}),
+        ...(typeof item.account === "string" && item.account ? { account: item.account } : {}),
       });
     }
     return providers;
@@ -139,7 +142,8 @@ export function saveProviderQuota(quota: ProviderQuota, directory = defaultDataD
   const previous = queues.get(directory) ?? Promise.resolve();
   const operation = previous.then(async () => {
     const providers = await readStored(directory);
-    const index = providers.findIndex((item) => item.agent === quota.agent);
+    // One entry per agent and account: another workspace's login keeps its own limits.
+    const index = providers.findIndex((item) => item.agent === quota.agent && (item.account ?? "") === (quota.account ?? ""));
     if (index >= 0) providers[index] = structuredClone(quota);
     else providers.push(structuredClone(quota));
     const file = resolve(directory, "provider-limits.json");
@@ -172,8 +176,8 @@ async function readTail(file: string, maximumBytes = 2 * 1024 * 1024): Promise<s
   } finally { await handle.close(); }
 }
 
-async function scanCodexQuotaUncached(homeDirectory: string): Promise<ProviderQuota | undefined> {
-  const root = resolve(homeDirectory, ".codex", "sessions");
+async function scanCodexQuotaUncached(codexHome: string): Promise<ProviderQuota | undefined> {
+  const root = resolve(codexHome, "sessions");
   let names: string[];
   try { names = (await readdir(root, { recursive: true })).filter((name) => String(name).endsWith(".jsonl")).map(String); }
   catch { return; }
@@ -204,19 +208,27 @@ async function scanCodexQuotaUncached(homeDirectory: string): Promise<ProviderQu
   return latest;
 }
 
-/** Reads the newest bounded tail of Codex's append-only session events without changing them. */
-export function scanCodexQuota(homeDirectory = homedir()): Promise<ProviderQuota | undefined> {
-  const cached = codexScanCache.get(homeDirectory);
+/**
+ * Reads the newest bounded tail of Codex's append-only session events without changing them.
+ * `codexHome`: an account folder (CODEX_HOME) in place of `<home>/.codex`.
+ */
+export function scanCodexQuota(homeDirectory = homedir(), codexHome = resolve(homeDirectory, ".codex")): Promise<ProviderQuota | undefined> {
+  const cached = codexScanCache.get(codexHome);
   if (cached && cached.expiresAt > Date.now()) return cached.result;
-  const result = scanCodexQuotaUncached(homeDirectory);
-  codexScanCache.set(homeDirectory, { expiresAt: Date.now() + 30_000, result });
+  const result = scanCodexQuotaUncached(codexHome);
+  codexScanCache.set(codexHome, { expiresAt: Date.now() + 30_000, result });
   return result;
 }
 
-export async function loadProviderQuotas(directory = defaultDataDir, homeDirectory = homedir()): Promise<ProviderQuota[]> {
+/**
+ * The limits of every agent, one entry each. `accounts`: the workspace's CLI account folders; an
+ * agent with one reports that account's limits, the others the default login's.
+ */
+export async function loadProviderQuotas(directory = defaultDataDir, homeDirectory = homedir(), accounts: Partial<Record<AgentId, string>> = {}): Promise<ProviderQuota[]> {
   await (queues.get(directory) ?? Promise.resolve());
-  const stored = await readStored(directory);
-  const codex = await scanCodexQuota(homeDirectory);
+  const stored = (await readStored(directory)).filter((item) => (item.account ?? "") === (accounts[item.agent] ?? ""));
+  const scanned = await scanCodexQuota(homeDirectory, accounts.codex);
+  const codex = scanned && accounts.codex ? { ...scanned, account: accounts.codex } : scanned;
   const byAgent = new Map(stored.map((item) => [item.agent, item]));
   const cachedCodex = byAgent.get("codex");
   if (codex && (!cachedCodex || isNewer(codex.updatedAt, cachedCodex.updatedAt))) byAgent.set("codex", codex);

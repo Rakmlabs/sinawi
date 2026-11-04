@@ -1,4 +1,4 @@
-import type { AgentId, WorkspaceId, WorkspacePolicy, WorkspaceState } from "./types.js";
+import type { AgentId, WorkspaceAccounts, WorkspaceId, WorkspacePolicy, WorkspaceState } from "./types.js";
 
 const allAgents: AgentId[] = ["codex", "claude", "grok"];
 
@@ -87,6 +87,7 @@ export function normalizeWorkspacePolicy(value: unknown, strict = false, base: W
     else if (typeof input.mediaPrompt === "string" && input.mediaPrompt.length <= 4_000) mediaPrompt = input.mediaPrompt.trim() || undefined;
     else if (strict) throw new WorkspacePolicyInputError("미디어 작업 안내는 4000자 이하 문자열이어야 합니다.");
   }
+  const accounts = accountList(input.accounts, strict, base.accounts);
   return {
     mediaGeneration: flag("mediaGeneration", "이미지·영상 생성"),
     computerUse: flag("computerUse", "컴퓨터 조작"),
@@ -95,7 +96,62 @@ export function normalizeWorkspacePolicy(value: unknown, strict = false, base: W
     blockedTools: input.blockedTools === undefined ? [...base.blockedTools] : toolList(input.blockedTools, strict, "차단 도구"),
     authAlertTools: input.authAlertTools === undefined ? [...base.authAlertTools] : toolList(input.authAlertTools, strict, "인증 알림 도구"),
     ...(mediaPrompt ? { mediaPrompt } : {}),
+    ...(accounts ? { accounts } : {}),
   };
+}
+
+/**
+ * CLI account folders. A key left out keeps `base`'s; null or "" clears it (back to the default
+ * login). Folders must be absolute paths; `strict` (API input) throws on anything else.
+ */
+function accountList(value: unknown, strict: boolean, base: WorkspaceAccounts | undefined): WorkspaceAccounts | undefined {
+  const next: WorkspaceAccounts = { ...(base ?? {}) };
+  if (value === null) return undefined;
+  if (value !== undefined) {
+    if (typeof value !== "object" || Array.isArray(value)) {
+      if (strict) throw new WorkspacePolicyInputError("CLI 계정 설정이 올바르지 않습니다.");
+      return base && Object.keys(base).length ? { ...base } : undefined;
+    }
+    for (const [key, dir] of Object.entries(value as Record<string, unknown>)) {
+      if (!allAgents.includes(key as AgentId)) {
+        if (strict) throw new WorkspacePolicyInputError(`알 수 없는 에이전트의 계정입니다: ${key.slice(0, 40)}`);
+        continue;
+      }
+      const agent = key as AgentId;
+      if (dir == null || (typeof dir === "string" && !dir.trim())) { delete next[agent]; continue; }
+      const folder = typeof dir === "string" ? accountFolder(dir) : undefined;
+      if (!folder) {
+        if (strict) throw new WorkspacePolicyInputError(`${agent} 계정 폴더는 절대 경로여야 합니다.`);
+        continue;
+      }
+      next[agent] = folder;
+    }
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+
+/** An absolute POSIX folder, without doubled or trailing slashes; undefined when it is not one. (No node:path: the UI imports this file.) */
+function accountFolder(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/") || trimmed.length > 1_024 || /[\0\n\r]/u.test(trimmed) || trimmed.split("/").includes("..")) return undefined;
+  return trimmed.replace(/\/{2,}/gu, "/").replace(/(.)\/+$/u, "$1");
+}
+
+/** The environment variable each CLI reads its account folder (login, settings, sessions, skills) from. */
+export const ACCOUNT_ENV: Record<AgentId, string> = { claude: "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME", grok: "GROK_HOME" };
+
+const shellQuote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
+
+/** The terminal command that logs `agent`'s CLI in to the account kept in `dir` (the default login without one). */
+export function accountLoginCommand(agent: AgentId, dir?: string): string {
+  const login = agent === "claude" ? "claude auth login" : agent === "codex" ? "codex login" : "grok login";
+  if (!dir) return login;
+  return `mkdir -p ${shellQuote(dir)} && ${ACCOUNT_ENV[agent]}=${shellQuote(dir)} ${login}`;
+}
+
+/** The account folder this workspace gives `agent`'s CLI runs; undefined is the default login. */
+export function accountDirFor(policy: WorkspacePolicy | undefined, agent: AgentId): string | undefined {
+  return policy?.accounts?.[agent];
 }
 
 /** MCP server names locked off for `agent` in this workspace. */

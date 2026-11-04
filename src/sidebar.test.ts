@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Sidebar, workerTreeReducer } from "./Sidebar";
+import { Sidebar, StewardMoveConfirm, workerTreeReducer } from "./Sidebar";
 import type { Session } from "../server/types";
 
 const noop = () => {};
@@ -64,6 +64,34 @@ test("project rows offer a hover new-chat button next to the menu", () => {
   const html = render({ groups: [group], sessions: [session("nested", group.id)] });
   assert.match(html, /aria-label="앱 개발에서 새 채팅"/);
   assert.match(html, /role="status"[^>]*>[\s\S]*연결됨/);
+});
+
+test("moving a project lead shows a workspace picker and explicit confirmation", () => {
+  const html = renderToStaticMarkup(createElement(StewardMoveConfirm, {
+    name: "API 담당",
+    target: "company",
+    workspaces: [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }],
+    busy: false,
+    onTarget: noop,
+    onCancel: noop,
+    onConfirm: noop,
+  }));
+  assert.match(html, /role="alertdialog"/);
+  assert.match(html, /API 담당.*다른 공간으로 이동/);
+  assert.match(html, /<select[^>]*aria-label="이동할 공간"/);
+  assert.match(html, /<option value="company" selected="">회사<\/option>/);
+  assert.match(html, />이동 확인<\/button>/);
+  assert.match(html, /이 담당의 모든 채팅도 함께 이동합니다/);
+});
+
+test("a lead without chats still exposes its actions menu", () => {
+  const html = render({
+    stewards: [{ id: "lead-1", workspaceId: "personal", name: "문서", cwds: ["/tmp"], systemPrompt: "", skills: [], agent: "codex", workers: [], mergePolicy: "ask", createdAt: "2026-01-01" }],
+    onNewStewardThread: noop,
+    onMoveSteward: ok,
+  });
+  assert.match(html, /aria-label="문서 메뉴"/);
+  assert.match(html, /aria-haspopup="menu"/);
 });
 
 test("active conversation expands one sidebar child per worker with task count and live status", () => {

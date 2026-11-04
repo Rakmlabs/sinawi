@@ -108,6 +108,8 @@ export interface Session {
   commander?: CommanderState;
   /** The project lead: the chat the user keeps giving work to (server/steward.ts). */
   steward?: StewardState;
+  /** Lead entity this ordinary chat belonged to before lead mode was disabled. */
+  disabledStewardId?: string;
   /** The commander session this goal session was started for. */
   parentId?: string;
 }
@@ -159,6 +161,9 @@ export interface Steward extends Bot {
   mergePolicy: MergePolicy;
   /** Project folders this lead works in; its threads start in the first one by default. */
   cwds: string[];
+  /** The workspace (공간) the lead and all its threads belong to. Unset only on leads saved before
+   * leads were per workspace; Orchestra.restore fills it in (its chats' workspace, else the first one). */
+  workspaceId?: WorkspaceId;
   /** A daily report at this local time ("HH:MM"), one per lead, opened in its latest chat (server/steward.ts reportDue). */
   report?: string;
   reportedAt?: string;
@@ -306,7 +311,15 @@ export interface WorkspacePolicy {
   authAlertTools: string[];
   /** Extra instructions given to media workers (e.g. which media tools exist and how to use them). */
   mediaPrompt?: string;
+  /**
+   * Per-agent CLI account folders for this workspace: every CLI run of that agent here gets
+   * CLAUDE_CONFIG_DIR / CODEX_HOME / GROK_HOME set to it (server/cli.ts accountEnv). Unset: the default login.
+   */
+  accounts?: WorkspaceAccounts;
 }
+
+/** An absolute folder per agent holding that CLI's login, settings, sessions and skills. */
+export type WorkspaceAccounts = Partial<Record<AgentId, string>>;
 
 export interface WorkspaceState {
   currentWorkspaceId: WorkspaceId;

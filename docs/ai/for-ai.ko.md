@@ -15,9 +15,9 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 | 개념 | 코드 | 뜻 |
 |---|---|---|
 | 채팅(세션) | `Session` (`server/types.ts`), `/api/sessions` | 한 팀과의 대화 하나. 상태 `running`/`done`/`error`/`stopped`. 작업 폴더(`cwd`), 주 에이전트, 워커를 가집니다. |
-| 담당(프로젝트 리드) | `Steward` (`server/types.ts`), `/api/stewards` | 프로젝트 하나(`cwds`)를 맡는 오래가는 채팅. 노트를 남기고 이전 대화를 찾아보며, 대화가 길어지면 새 세션으로 옮겨 노트에서 이어 갑니다. `report`(`HH:MM`)에 일일 보고를 합니다. 담당끼리 일을 부탁할 수 있습니다(`accept_work`). |
+| 담당(프로젝트 리드) | `Steward` (`server/types.ts`), `/api/stewards` | 프로젝트 하나(`cwds`)를 맡는 오래가는 채팅. 워크스페이스 하나(`workspaceId`)에 속하고, 그 채팅도 모두 그 공간에 있습니다. 노트를 남기고 이전 대화를 찾아보며, 대화가 길어지면 새 세션으로 옮겨 노트에서 이어 갑니다. `report`(`HH:MM`)에 일일 보고를 합니다. 같은 공간의 담당끼리 일을 부탁할 수 있습니다(`accept_work`). |
 | 워커 | `workers: AgentSelection[]` | 담당이 브리프를 맡기는 CLI. 동시에 맡긴 일은 병렬로 돌고(같은 CLI 두 건은 워커 둘), 한 워커에게 간 브리프는 차례로 돕니다. 워커는 자기 git worktree에서 일할 수 있습니다. |
-| 워크스페이스(공간) | `WorkspaceState`, `/api/workspaces` | 채팅·그룹·기본값을 나눕니다. 기본값: 폴더, 팀, 허용 에이전트, 한도 자동 전환. 정책(`WorkspacePolicy`): `mediaGeneration`, `computerUse`, `fullAccess`, `grokMcp`, `blockedTools`, `authAlertTools`. |
+| 워크스페이스(공간) | `WorkspaceState`, `/api/workspaces` | 채팅·그룹·담당·기본값을 나눕니다(F1/F2로 전환). 기본값: 폴더, 팀, 허용 에이전트, 한도 자동 전환. 정책(`WorkspacePolicy`): `mediaGeneration`, `computerUse`, `fullAccess`, `grokMcp`, `blockedTools`, `authAlertTools`, `accounts`(`{claude, codex, grok}`: CLI 계정 폴더 절대 경로. 그 공간의 모든 실행에 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `GROK_HOME`으로 넘깁니다. 비우면 기본 로그인). |
 | 프로젝트 그룹 | `/api/groups` | 워크스페이스 안에서 채팅을 묶는 사이드바 폴더. |
 | 일정 | `/api/stewards/:id/schedules`, `/api/schedules/:id` | 정한 시각에 담당 채팅으로 prompt를 보냅니다. 한 번(`at`) 또는 반복(5칸 `cron`, 예: `0 9 * * 1-5`), IANA 시간대(기본: 이 Mac의 시간대). |
 | 스킬 | `/api/skills`, 담당 `write_skill` | 마크다운 작업 지침. `~/.claude/skills`, `~/.codex/skills`, `~/.codex/prompts`, `~/.grok/skills`, 프로젝트 `./skills`에서 읽습니다. 담당이 만든 스킬은 그 담당 전용이거나, `scope: "project"`면 프로젝트 `.claude/skills`에 저장됩니다. |
@@ -115,9 +115,9 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 | `list_sessions` | 담당·외부 | 아니오(읽기) | 채팅(세션) 목록: ID, 제목, 상태(running/done/error/stopped), 에이전트, 폴더, 담당 여부. 내용은 get_session이나 get_session_summary로 본다. |
 | `get_session` | 담당·외부 | 아니오(읽기) | 채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. |
 | `get_session_summary` | 담당·외부 | 아니오(읽기) | 채팅 한눈에 보기: 상태, 담당의 마지막 답, 체크리스트 진행, 승인 기다리는 병합, 담당 정보. |
-| `create_session` | 담당·외부 | 아니오 | 새 채팅을 연다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 스레드로 열면 팀·폴더는 담당 것을 쓴다. 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다. |
+| `create_session` | 담당·외부 | 아니오 | 새 채팅을 연다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 스레드로 열면 팀·폴더·워크스페이스는 담당 것을 쓴다. 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다. |
 | `send_message` | 담당·외부 | 아니오 | 채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 결과는 get_session_summary나 get_session으로 확인한다. |
-| `ask_running_session` | 담당·외부 | 아니오 | 실행 중인 채팅에 진행을 멈추지 않고 곁가지 질문을 한다("지금 어디까지 했어?"). 답은 채팅에 따로 붙는다. |
+| `ask_running_session` | 담당·외부 | 아니오 | 실행 중인 채팅에 진행을 멈추지 않고 곁가지 질문을 한다("지금 어디까지 했어?"). 답은 채팅에 따로 붙는다. 호출자와 같은 공간의 채팅에만 물을 수 있다. |
 | `rename_session` | 담당·외부 | 아니오 | 채팅 제목을 바꾼다. 사이드바에 보이는 이름이 바뀐다. |
 | `move_session_to_group` | 담당·외부 | 아니오 | 채팅을 프로젝트 그룹에 넣거나(group_id) 그룹에서 뺀다(group_id 비움). |
 | `move_session_to_workspace` | 담당·외부 | **필요** | 채팅을 다른 워크스페이스(공간)로 옮긴다. 옮긴 채팅은 그 공간의 정책(전체 권한, 컴퓨터 조작 등)을 따르게 되므로 사용자 승인 후 옮긴다. 공간 ID는 list_workspaces. |
@@ -141,12 +141,12 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 
 | 도구 | 표면 | 승인 | 설명 |
 |---|---|---|---|
-| `list_leads` | 담당·외부 | 아니오(읽기) | 프로젝트 담당 목록: 이름, 팀, 병합 정책(auto/ask/never), 폴더, 일일 보고 시각. |
+| `list_leads` | 담당·외부 | 아니오(읽기) | 프로젝트 담당 목록: 이름, 팀, 병합 정책(auto/ask/never), 폴더, 일일 보고 시각, 워크스페이스. 담당 이름은 워크스페이스 안에서 고유하며 다른 공간에서는 같을 수 있다. 기본은 지금 워크스페이스(담당이 부르면 그 담당의 워크스페이스)의 담당만. |
 | `get_lead` | 담당·외부 | 아니오(읽기) | 담당 하나의 설정, 노트(담당이 기억하는 것), 스레드(채팅) 목록. |
 | `create_lead` | 담당·외부 | 아니오 | 프로젝트 담당을 만든다. 담당은 폴더(cwds)를 맡아 워커에게 일을 나누고 결과를 합친다. 병합 정책은 ask(기본, 병합 전에 사용자에게 물음) 또는 never만 정할 수 있다. auto는 update_lead로(승인 필요). |
-| `update_lead` | 담당·외부 | **필요** | 담당 설정(이름, 지침, 팀, 병합 정책, 폴더, 노트, 보고 시각)을 바꾼다. 준 값만 바뀐다. 사용자 승인 후 적용된다. |
+| `update_lead` | 담당·외부 | **필요** | 담당 설정(이름, 지침, 팀, 병합 정책, 폴더, 노트, 보고 시각, 워크스페이스)을 바꾼다. 준 값만 바뀐다. workspace_id를 주면 담당과 그 채팅이 모두 그 워크스페이스로 옮겨진다. 사용자 승인 후 적용된다. |
 | `delete_lead` | 담당·외부 | **필요** | 담당을 지운다. 그 담당의 채팅은 보통 채팅으로 남는다. 사용자 승인 후 지워진다. |
-| `get_session_lead` | 담당·외부 | 아니오(읽기) | 담당 채팅의 담당 상태: 담당, 노트, 대기 병합, 턴 수, 보고 시각, 다른 담당 목록. |
+| `get_session_lead` | 담당·외부 | 아니오(읽기) | 담당 채팅의 담당 상태: 담당, 노트, 대기 병합, 턴 수, 보고 시각, 같은 워크스페이스의 다른 담당 목록. 담당끼리 묻기(ASK)는 같은 워크스페이스 안에서만 된다. |
 | `update_session_lead` | 담당·외부 | **필요** | 채팅의 담당 모드를 켜고 끄거나, 이름·보고 시각·'다른 담당의 부탁으로 작업하기'(accept_work)를 바꾼다. 사용자 승인 후 적용된다. |
 | `get_lead_settings` | 담당·외부 | 아니오(읽기) | 앱 전체 담당 설정: 이전된 담당이 받는 기본 병합 정책. |
 | `set_legacy_merge_policy` | 담당·외부 | **필요** | 이전된(옛 방식) 담당들의 기본 병합 정책을 auto/ask로 정한다. 사용자 승인 후 적용된다. |
@@ -175,8 +175,8 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 | `create_workspace` | 담당·외부 | 아니오 | 워크스페이스(공간)를 만든다. 지금 공간의 기본값과 정책을 이어받는다. |
 | `rename_workspace` | 담당·외부 | 아니오 | 워크스페이스(공간) 이름을 바꾼다. 기본값·정책은 update_workspace_settings. |
 | `switch_workspace` | 담당·외부 | **필요** | 앱에서 지금 보는 워크스페이스를 바꾼다. 사용자 화면이 바뀌므로 승인 후 적용된다. |
-| `update_workspace_settings` | 담당·외부 | **필요** | 워크스페이스의 기본값(defaults: 폴더 cwd, 팀 agent/workers, 허용 에이전트 allowedAgents, 한도 자동 전환 quotaFallback 등 — 통째로 바뀜)이나 정책(policy: 미디어 생성, 컴퓨터 조작, 전체 권한, 차단 도구 등 — 준 값만 합쳐짐)을 바꾼다. list_workspaces로 지금 값을 읽고 고쳐서 보낸다. 사용자 승인 후 적용된다. |
-| `delete_workspace` | 담당·외부 | **필요** | 워크스페이스를 지운다. 그 안의 채팅과 그룹은 move_to(비우면 남은 첫 공간)로 옮겨진다. 실행 중인 채팅이 있으면 안 된다. 사용자 승인 후 지워진다. |
+| `update_workspace_settings` | 담당·외부 | **필요** | 워크스페이스의 기본값(defaults: 폴더 cwd, 팀 agent/workers, 허용 에이전트 allowedAgents, 한도 자동 전환 quotaFallback 등 — 통째로 바뀜)이나 정책(policy: 미디어 생성, 컴퓨터 조작, 전체 권한, 차단 도구, CLI 계정 폴더 accounts {claude, codex, grok: 절대 경로, 빈 문자열이면 기본 로그인} 등 — 준 값만 합쳐짐)을 바꾼다. list_workspaces로 지금 값을 읽고 고쳐서 보낸다. 사용자 승인 후 적용된다. |
+| `delete_workspace` | 담당·외부 | **필요** | 워크스페이스를 지운다. 그 안의 채팅, 그룹, 담당은 move_to(비우면 남은 첫 공간)로 옮겨진다. 실행 중인 채팅이 있으면 안 된다. 사용자 승인 후 지워진다. |
 
 ### 프로젝트 그룹
 

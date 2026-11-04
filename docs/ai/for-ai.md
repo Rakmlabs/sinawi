@@ -15,9 +15,9 @@ A compact, structured reference for an AI that drives Sinawi through MCP or read
 | Concept | In the code | What it means |
 |---|---|---|
 | Chat (session) | `Session` (`server/types.ts`), `/api/sessions` | One conversation with a team. Status `running`/`done`/`error`/`stopped`. Has a working folder (`cwd`), a main agent and workers. |
-| Lead (담당, project lead) | `Steward` (`server/types.ts`), `/api/stewards` | A long-lived chat that owns one project (`cwds`). Keeps notes, can search its earlier conversations, moves to a fresh session when long and continues from its notes. Can send a daily report at `report` (`HH:MM`). Leads can ask each other for work (`accept_work`). |
+| Lead (담당, project lead) | `Steward` (`server/types.ts`), `/api/stewards` | A long-lived chat that owns one project (`cwds`) and belongs to one workspace (`workspaceId`, with all its chats). Keeps notes, can search its earlier conversations, moves to a fresh session when long and continues from its notes. Can send a daily report at `report` (`HH:MM`). Leads of the same workspace can ask each other for work (`accept_work`). |
 | Workers | `workers: AgentSelection[]` | CLIs the lead delegates briefs to. Parallel delegations run at the same time (two tasks for the same CLI get two workers); one worker's briefs run in order. Workers can run in their own git worktrees. |
-| Workspace (공간) | `WorkspaceState`, `/api/workspaces` | Separates chats, groups and defaults. Defaults: folder, team, allowed agents, quota fallback. Policy (`WorkspacePolicy`): `mediaGeneration`, `computerUse`, `fullAccess`, `grokMcp`, `blockedTools`, `authAlertTools`. |
+| Workspace (공간) | `WorkspaceState`, `/api/workspaces` | Separates chats, groups, leads and defaults (F1/F2 switch). Defaults: folder, team, allowed agents, quota fallback. Policy (`WorkspacePolicy`): `mediaGeneration`, `computerUse`, `fullAccess`, `grokMcp`, `blockedTools`, `authAlertTools`, and `accounts` (`{claude, codex, grok}`: absolute CLI account folders, passed to every run in the workspace as `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `GROK_HOME`; unset is the default login). |
 | Project group | `/api/groups` | A sidebar folder of chats inside a workspace. |
 | Schedule (일정) | `/api/stewards/:id/schedules`, `/api/schedules/:id` | Sends a prompt to a lead's chat once (`at`) or repeatedly (5-field `cron`, e.g. `0 9 * * 1-5`) in an IANA time zone (default: the Mac's). |
 | Skill | `/api/skills`, lead `write_skill` | Markdown instructions. Read from `~/.claude/skills`, `~/.codex/skills`, `~/.codex/prompts`, `~/.grok/skills` and the project's `./skills`; a lead's own skills are for that lead or, with `scope: "project"`, saved in the project's `.claude/skills`. |
@@ -117,7 +117,7 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 | `get_session_summary` | lead, external | no (read) | A chat at a glance: status, the lead's last answer, checklist progress, pending merge, lead info. |
 | `create_session` | lead, external | no | Open a new chat; with a prompt it starts working, without one it stays empty. Can open a new thread of a lead (lead_id). |
 | `send_message` | lead, external | no | Send a follow-up message to a chat (starts the next turn). |
-| `ask_running_session` | lead, external | no | Ask a running chat a side question without stopping it; the answer is attached separately. |
+| `ask_running_session` | lead, external | no | Ask a running chat in the caller's workspace a side question without stopping it. Cross-workspace asking is unavailable. The answer is attached separately. |
 | `rename_session` | lead, external | no | Rename a chat (the name shown in the sidebar). |
 | `move_session_to_group` | lead, external | no | Put a chat into a project group, or take it out (empty group_id). |
 | `move_session_to_workspace` | lead, external | **yes** | Move a chat to another workspace; it then follows that workspace's policy. |
@@ -141,12 +141,12 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 
 | Tool | Surface | Approval | Summary |
 |---|---|---|---|
-| `list_leads` | lead, external | no (read) | Project leads: name, team, merge policy (auto/ask/never), folders, daily report time. |
+| `list_leads` | lead, external | no (read) | Project leads of one workspace (default: the current one, or the calling lead's): name, team, merge policy (auto/ask/never), folders, daily report time. Names are unique within a workspace. |
 | `get_lead` | lead, external | no (read) | One lead's settings, notes and threads (chats). |
-| `create_lead` | lead, external | no | Create a project lead for folders (cwds). Merge policy can only be ask (default) or never. |
-| `update_lead` | lead, external | **yes** | Change a lead's settings (name, instructions, team, merge policy, folders, notes, report time). |
+| `create_lead` | lead, external | no | Create a project lead for folders (cwds) in a workspace (default: the current one). Its name must be unique in that workspace. Merge policy can only be ask (default) or never. |
+| `update_lead` | lead, external | **yes** | Change a lead's settings (name, instructions, team, merge policy, folders, notes, report time) or move it, with its chats, to another workspace. |
 | `delete_lead` | lead, external | **yes** | Delete a lead; its chats remain as ordinary chats. |
-| `get_session_lead` | lead, external | no (read) | Lead state of a lead chat: lead, notes, pending merge, turn count, report time, other leads. |
+| `get_session_lead` | lead, external | no (read) | Lead state of a lead chat: lead, notes, pending merge, turn count, report time, and other leads in the same workspace. Leads can ask only leads in that workspace. |
 | `update_session_lead` | lead, external | **yes** | Turn a chat's lead mode on or off, or change its name, report time or accept_work. |
 | `get_lead_settings` | lead, external | no (read) | App-wide lead settings: default merge policy for migrated leads. |
 | `set_legacy_merge_policy` | lead, external | **yes** | Set the default merge policy (auto/ask) for migrated (legacy) leads. |
@@ -175,7 +175,7 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 | `create_workspace` | lead, external | no | Create a workspace; it inherits the current workspace's defaults and policy. |
 | `rename_workspace` | lead, external | no | Rename a workspace. |
 | `switch_workspace` | lead, external | **yes** | Change the workspace the app is showing. |
-| `update_workspace_settings` | lead, external | **yes** | Change a workspace's defaults (replaced whole) or policy (merged): media, computer control, full access, blocked tools. |
+| `update_workspace_settings` | lead, external | **yes** | Change a workspace's defaults (replaced whole) or policy (merged): media, computer control, full access, blocked tools, per-agent CLI account folders. |
 | `delete_workspace` | lead, external | **yes** | Delete a workspace; its chats and groups move to `move_to` (default: first remaining). Not while chats run. |
 
 ### Project groups

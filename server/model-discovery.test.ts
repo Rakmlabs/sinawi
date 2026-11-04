@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
   defaultRoutingSettings,
   discoverCliModels,
+  loadRoutingSettings,
   parseGrokModels,
   RoutingService,
   saveRoutingSettings,
@@ -154,4 +155,94 @@ test("saving after discovery keeps runtime auth badges without persisting them",
   const persisted = JSON.parse(await readFile(join(dataDir, "routing-settings.json"), "utf8"));
   assert.equal(persisted.modelOptions.codex.authStatus, undefined);
   assert.equal(persisted.modelOptions.codex.authDetail, undefined);
+});
+
+test("workspace account folders drive local model and authentication discovery", async (t) => {
+  const fallbackHome = await mkdtemp(join(tmpdir(), "orchestra-models-fallback-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "orchestra-models-data-"));
+  const codexHome = await mkdtemp(join(tmpdir(), "orchestra-models-codex-"));
+  const claudeHome = await mkdtemp(join(tmpdir(), "orchestra-models-claude-"));
+  const grokHome = await mkdtemp(join(tmpdir(), "orchestra-models-grok-"));
+  t.after(() => Promise.all([fallbackHome, dataDir, codexHome, claudeHome, grokHome].map((directory) => rm(directory, { recursive: true, force: true }))));
+  await mkdir(join(fallbackHome, ".codex"));
+  await writeFile(join(fallbackHome, ".codex", "config.toml"), 'model = "default-codex"\n');
+  await writeFile(join(codexHome, "config.toml"), 'model = "workspace-codex"\n');
+  await writeFile(join(claudeHome, "settings.json"), JSON.stringify({ model: "workspace-claude" }));
+  await writeFile(join(grokHome, "config.json"), JSON.stringify({ model: "workspace-grok" }));
+  const environments: Array<Record<string, string> | undefined> = [];
+  const runner: ModelCommandRunner = async (_command, _args, options) => {
+    environments.push(options?.env);
+    return { stdout: "Logged in authenticated" };
+  };
+  const accounts = { codex: codexHome, claude: claudeHome, grok: grokHome };
+
+  const initial = await loadRoutingSettings(dataDir, fallbackHome, accounts);
+  assert.equal(initial.modelOptions.codex.models.includes("default-codex"), false);
+  assert.equal(initial.modelOptions.codex.models[0], "workspace-codex");
+
+  const discovered = await discoverCliModels(
+    structuredClone(defaultRoutingSettings),
+    fallbackHome,
+    runner,
+    { sleep: async () => undefined },
+    accounts,
+  );
+
+  assert.equal(discovered.modelOptions.codex.models[0], "workspace-codex");
+  assert.equal(discovered.modelOptions.claude.models[0], "workspace-claude");
+  assert.equal(discovered.modelOptions.grok.models[0], "workspace-grok");
+  assert.deepEqual(environments, [
+    { GROK_HOME: grokHome },
+    { CODEX_HOME: codexHome },
+    { CLAUDE_CONFIG_DIR: claudeHome },
+  ]);
+});
+
+test("RoutingService caches authentication separately for each workspace account", async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "orchestra-models-account-cache-"));
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  const firstCodex = await mkdtemp(join(tmpdir(), "orchestra-models-codex-a-"));
+  const secondCodex = await mkdtemp(join(tmpdir(), "orchestra-models-codex-b-"));
+  t.after(() => Promise.all([dataDir, homeDir, firstCodex, secondCodex].map((directory) => rm(directory, { recursive: true, force: true }))));
+  await saveRoutingSettings(structuredClone(defaultRoutingSettings), dataDir);
+  const modelRunner: ModelCommandRunner = async (command, _args, options) => {
+    if (command !== "codex") return { stdout: "Logged in authenticated" };
+    return { stdout: options?.env?.CODEX_HOME === firstCodex ? "Logged in authenticated" : "Not authenticated" };
+  };
+  const service = new RoutingService({ dataDir, homeDir, modelRunner, authDiscovery: { sleep: async () => undefined } });
+
+  await service.refreshModels({ codex: firstCodex });
+  await service.refreshModels({ codex: secondCodex });
+
+  assert.equal((await service.loadSettings({ codex: firstCodex })).modelOptions.codex.authStatus, "authenticated");
+  assert.equal((await service.loadSettings({ codex: secondCodex })).modelOptions.codex.authStatus, "unauthenticated");
+});
+
+test("inherited CLI account roots drive model discovery and cache identity", async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "orchestra-models-inherited-data-"));
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-inherited-home-"));
+  const firstCodex = await mkdtemp(join(tmpdir(), "orchestra-models-inherited-a-"));
+  const secondCodex = await mkdtemp(join(tmpdir(), "orchestra-models-inherited-b-"));
+  const previous = process.env.CODEX_HOME;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
+    await Promise.all([dataDir, homeDir, firstCodex, secondCodex].map((directory) => rm(directory, { recursive: true, force: true })));
+  });
+  await writeFile(join(firstCodex, "config.toml"), 'model = "inherited-first"\n');
+  await writeFile(join(secondCodex, "config.toml"), 'model = "inherited-second"\n');
+  await saveRoutingSettings(structuredClone(defaultRoutingSettings), dataDir);
+  const modelRunner: ModelCommandRunner = async (command, _args, options) => command === "codex"
+    ? { stdout: options?.env?.CODEX_HOME === firstCodex ? "Logged in authenticated" : "Not authenticated" }
+    : { stdout: "Logged in authenticated" };
+  const service = new RoutingService({ dataDir, homeDir, modelRunner, authDiscovery: { sleep: async () => undefined } });
+
+  process.env.CODEX_HOME = firstCodex;
+  const first = await service.refreshModels();
+  assert.equal(first.modelOptions.codex.models[0], "inherited-first");
+  process.env.CODEX_HOME = secondCodex;
+  const second = await service.refreshModels();
+  assert.equal(second.modelOptions.codex.models[0], "inherited-second");
+  process.env.CODEX_HOME = firstCodex;
+  assert.equal((await service.loadSettings()).modelOptions.codex.authStatus, "authenticated");
 });

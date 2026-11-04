@@ -1,7 +1,7 @@
 import { terminalOwnsKeyboardEvent } from "./terminal-events";
 import { AgentMark } from "./AgentMark";
 import { goalProgress } from "./goal-progress";
-import { leadGroups, leadHue, leadPreview, stewardDescription, type LeadGroup } from "./lead";
+import { leadGroups, leadHue, leadName, leadPreview, stewardDescription, stewardIdOf, type LeadGroup } from "./lead";
 import { useEffect, useReducer, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
@@ -26,6 +26,8 @@ type SidebarProps = {
   onRenameSession: (id: string, title: string) => Promise<boolean>; onSetSteward?: (id: string, enabled: boolean) => Promise<boolean>; onDeleteSession: (id: string, removeWorktrees?: boolean) => Promise<boolean>; onAssign: (id: string, groupId: string | null) => Promise<boolean>;
   workspaceId?: WorkspaceId;
   onMoveSession?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>; onMoveGroup?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>;
+  /** Moves the lead entity and every chat that belongs to it. */
+  onMoveSteward?: (id: string, workspaceId: WorkspaceId) => Promise<boolean>;
   onUsage?: () => void;
   /** Starts a new chat that will be a project lead (the composer picks its folder and first request). */
   onNewSteward?: () => void;
@@ -37,9 +39,36 @@ type SidebarProps = {
   onSettings?: () => void;
   onDeleteWorker?: (sessionId: string, workerId: string) => Promise<boolean>;
 };
-type MenuState = { kind: "session" | "group" | "worker"; id: string; workerId?: string; x: number; y: number };
+type MenuState = { kind: "session" | "group" | "worker" | "steward"; id: string; workerId?: string; x: number; y: number };
 const UNGROUPED = "__ungrouped__";
 type Editor = { kind: "create" | "group" | "session"; id: string; value: string };
+
+export function StewardMoveConfirm({ name, target, workspaces, busy, onTarget, onCancel, onConfirm }: {
+  name: string;
+  target: WorkspaceId;
+  workspaces: { id: WorkspaceId; name: string }[];
+  busy: boolean;
+  onTarget: (id: WorkspaceId) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return <div className="steward-move-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+    <div className="steward-move-dialog" role="alertdialog" aria-modal="true" aria-labelledby="steward-move-title" aria-describedby="steward-move-body"
+      onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCancel(); } }}>
+      <h4 id="steward-move-title">{t("steward.moveTitle", { name })}</h4>
+      <p id="steward-move-body">{t("steward.moveBody")}</p>
+      <label>{t("steward.moveTarget")}
+        <select aria-label={t("steward.moveTarget")} value={target} disabled={busy} onChange={(event) => onTarget(event.target.value)}>
+          {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspaceName(workspaces, workspace.id)}</option>)}
+        </select>
+      </label>
+      <div className="steward-move-actions">
+        <button type="button" disabled={busy} onClick={onCancel}>{t("side.cancel")}</button>
+        <button type="button" className="primary" disabled={busy} onClick={onConfirm}>{t("steward.moveConfirm")}</button>
+      </div>
+    </div>
+  </div>;
+}
 
 type WorkerTreeState = { expanded: Set<string>; activation?: string };
 type WorkerTreeAction = { type: "toggle"; id: string } | { type: "activate"; id?: string; taskKey: string; workerId?: string };
@@ -80,6 +109,7 @@ export function Sidebar(props: SidebarProps) {
   const [landed, setLanded] = useState<string>();
   const dragRef = useRef<{ id: string; title: string; agent: Session["agent"]; startX: number; startY: number; active: boolean; target?: string; hoverTimer?: number }>(undefined);
   const [deleting, setDeleting] = useState<{ kind: "group" | "session"; id: string; name: string }>();
+  const [movingSteward, setMovingSteward] = useState<{ id: string; name: string; target: WorkspaceId }>();
   const [dropTarget, setDropTarget] = useState<string>();
   const [query, setQuery] = useState("");
   // Sessions and groups arrive already scoped to the current workspace.
@@ -97,7 +127,7 @@ export function Sidebar(props: SidebarProps) {
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
       if (terminalOwnsKeyboardEvent(event)) return;
-      if (event.key === "Escape") { setMenu(undefined); setEditor(undefined); setDeleting(undefined); setDeletingWorker(undefined); if (dragRef.current?.active) cancelDrag(); }
+      if (event.key === "Escape") { setMenu(undefined); setEditor(undefined); setDeleting(undefined); setDeletingWorker(undefined); setMovingSteward(undefined); if (dragRef.current?.active) cancelDrag(); }
     };
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
@@ -240,7 +270,7 @@ export function Sidebar(props: SidebarProps) {
     const name = group.name;
     // A lead with no chat yet: its row starts the first one.
     if (!session) return <div key={group.id} className="sidebar-chat sidebar-lead">
-      <div className="sidebar-row">
+      <div className="sidebar-row" onContextMenu={(event) => { event.preventDefault(); openMenu("steward", group.id, event); }}>
         <button className="sidebar-lead-open" title={t("side.leadNewThread", { name })} disabled={busy || !props.onNewStewardThread} onClick={() => props.onNewStewardThread?.(group.id)}>
           {leadAvatar(name)}
           <span className="sidebar-lead-copy">
@@ -248,6 +278,8 @@ export function Sidebar(props: SidebarProps) {
             <small className="sidebar-lead-preview">{(group.steward && stewardDescription(group.steward)) || t("side.leadNoChats")}</small>
           </span>
         </button>
+        <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: name })} aria-haspopup="menu" aria-expanded={menu === group.id}
+          onClick={(event) => menu === group.id ? setMenu(undefined) : openMenu("steward", group.id, event, true)}><MoreHorizontal size={15} /></button>
       </div>
     </div>;
     const active = selected === session.id && tab === "workspace" && !props.selectedWorker;
@@ -329,6 +361,10 @@ export function Sidebar(props: SidebarProps) {
     </div>
     {footerMenu && <ContextMenu x={footerMenu.x} y={footerMenu.y} placement="above" className="sidebar-footer-menu" label={t("side.tools")} items={footerItems} onClose={() => setFooterMenu(undefined)} />}
     {menuState && <ContextMenu x={menuState.x} y={menuState.y} label={t("side.chatMenu")} onClose={() => setMenuState(undefined)} items={menuItems(menuState)} />}
+    {movingSteward && createPortal(<StewardMoveConfirm name={movingSteward.name} target={movingSteward.target}
+      workspaces={workspaces.filter((workspace) => workspace.id !== props.workspaceId)} busy={busy}
+      onTarget={(target) => setMovingSteward((old) => old && { ...old, target })} onCancel={() => setMovingSteward(undefined)}
+      onConfirm={() => void props.onMoveSteward?.(movingSteward.id, movingSteward.target).then((ok) => { if (ok) setMovingSteward(undefined); })} />, document.body)}
     {deleteDialog()}
     {drag && createPortal(<div className="sidebar-drag-ghost" style={{ left: drag.x + 14, top: drag.y + 10 }} aria-hidden="true"><AgentMark agent={drag.agent} size="small" /><span>{drag.title}</span></div>, document.body)}
   </aside>;
@@ -364,13 +400,26 @@ export function Sidebar(props: SidebarProps) {
         { kind: "action", label: t("side.deleteProject"), icon: <Trash2 size={15} />, danger: true, disabled: busy, onSelect: () => setDeleting({ kind: "group", id: group.id, name: group.name }) },
       ];
     }
+    if (state.kind === "steward") {
+      const steward = props.stewards?.find((item) => item.id === state.id);
+      const otherWorkspaces = workspaces.filter((workspace) => workspace.id !== props.workspaceId);
+      if (!steward || !props.onMoveSteward || !otherWorkspaces.length) return [];
+      return [{
+        kind: "action", label: t("workspace.moveToWorkspace"), icon: <ArrowLeftRight size={15} />, disabled: busy,
+        onSelect: () => setMovingSteward({ id: steward.id, name: steward.name, target: otherWorkspaces[0].id }),
+      }];
+    }
     const session = sessions.find((item) => item.id === state.id);
     if (!session) return [];
+    const otherWorkspaces = workspaces.filter((workspace) => workspace.id !== props.workspaceId);
     return [
       { kind: "action", label: t("side.rename"), icon: <Pencil size={15} />, disabled: busy, onSelect: () => setEditor({ kind: "session", id: session.id, value: session.title }) },
       ...(props.onSetSteward && !session.parentId ? [{ kind: "action" as const, label: t(session.steward ? "steward.unset" : "steward.set"), icon: <UserCheck size={15} />, disabled: busy, onSelect: () => void props.onSetSteward!(session.id, !session.steward) }] : []),
       { kind: "submenu", label: t("side.moveToGroup"), icon: <FolderInput size={15} />, disabled: busy, items: moveTree(session), onPick: (id) => void props.onAssign(session.id, id).then((ok) => { if (ok && id) expand(id); }) },
-      ...moveItems((target) => void props.onMoveSession?.(session.id, target), Boolean(props.onMoveSession)),
+      ...(session.steward && props.onMoveSteward && otherWorkspaces.length ? [{
+        kind: "action" as const, label: t("workspace.moveToWorkspace"), icon: <ArrowLeftRight size={15} />, disabled: busy,
+        onSelect: () => setMovingSteward({ id: stewardIdOf(session)!, name: leadName(session), target: otherWorkspaces[0].id }),
+      }] : moveItems((target) => void props.onMoveSession?.(session.id, target), Boolean(props.onMoveSession))),
       { kind: "separator" },
       { kind: "action", label: t("side.deleteChat"), icon: <Trash2 size={15} />, danger: true, disabled: busy || session.status === "running", title: session.status === "running" ? t("side.stopFirst") : undefined, onSelect: () => setDeleting({ kind: "session", id: session.id, name: session.title }) },
     ];

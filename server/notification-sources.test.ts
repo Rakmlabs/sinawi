@@ -29,3 +29,12 @@ test("a project lead's finished turn reads as a message from it", () => {
   assert.equal(note.title, "「api」 담당");
   assert.equal(note.body, "포트는 4000입니다.");
 });
+
+
+test("login and MCP failure notices launch authentication in the workspace account", () => {
+  const root = "/temporary/work-account";
+  assert.match(authNotification("work", "codex", "unauthenticated", undefined, root)?.action?.command ?? "", /CODEX_HOME='\/temporary\/work-account'/);
+  const session = { id: "s", workspaceId: "work", agent: "codex", status: "error", events: [{ id: "e", agent: "codex", type: "error", text: 'MCP server "docs" authentication required' }] } as unknown as Session;
+  const [notice] = sessionNotifications(session, { codex: root });
+  assert.match(notice.action?.command ?? "", /CODEX_HOME='\/temporary\/work-account'/);
+});

@@ -1,3 +1,4 @@
+import { installAccountSkills } from "./account-tooling.js";
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes } from "./setup.js";
 import { BrowserBridge, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
@@ -35,7 +36,7 @@ import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
 import { mediaRouteRequired, mediaUnavailableMessage } from "./media-routing.js";
-import { allowedAgentsForWorkspace, assertMediaAllowed, blockedToolMessage, defaultWorkspacePolicy, isToolLocked, lockedToolsFor, normalizeWorkspacePolicy, policyDenyPatterns, WorkspacePolicyError, type WorkspacePolicyResolver } from "./workspace-policy.js";
+import { accountDirFor, allowedAgentsForWorkspace, assertMediaAllowed, blockedToolMessage, defaultWorkspacePolicy, isToolLocked, lockedToolsFor, normalizeWorkspacePolicy, policyDenyPatterns, WorkspacePolicyError, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { loadUsage } from "./usage.js";
 import { loadProviderQuotas } from "./quota.js";
 import { exhaustionFromQuota } from "./quota-fallback.js";
@@ -316,7 +317,7 @@ export function stewardInput(body: any, create = false): StewardPatch {
     ...(body.mergePolicy !== undefined ? { mergePolicy: body.mergePolicy } : {}),
     ...(body.cwds !== undefined ? { cwds: ids(body.cwds, 20).map((cwd) => resolve(string(cwd, 4_096))) } : {}),
   };
-  if (!create && !Object.keys(patch).length && body.notes === undefined && body.report === undefined) throw new Error("담당 설정이 올바르지 않습니다.");
+  if (!create && !Object.keys(patch).length && body.notes === undefined && body.report === undefined && (body.workspaceId == null || body.workspaceId === "")) throw new Error("담당 설정이 올바르지 않습니다.");
   return patch;
 }
 
@@ -362,6 +363,15 @@ export function withWorkspaceMcpBlocks(runner: PlannerRunner, dataDir?: string, 
   };
 }
 
+/** Gives every planner run the CLI account its workspace keeps for the run's agent (CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME). */
+export function withWorkspaceAccounts(runner: PlannerRunner, policyFor?: WorkspacePolicyResolver): PlannerRunner {
+  return (options) => {
+    const workspaceId = options.usageContext?.workspaceId;
+    const accountDir = options.accountDir ?? (workspaceId ? accountDirFor(policyFor?.(workspaceId), options.agent) : undefined);
+    return runner(accountDir ? { ...options, accountDir } : options);
+  };
+}
+
 export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean } = {}) {
   const app = express();
   app.disable("x-powered-by");
@@ -386,7 +396,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const observedEvents = new Set<string>();
   const completedRuns = new Set<string>();
   const broadcast = (session: Session, publishOptions?: { full?: boolean }) => {
-    for (const note of sessionNotifications(session)) {
+    for (const note of sessionNotifications(session, workspaceState.settings?.[session.workspaceId]?.accounts)) {
       const seen = note.type === "run-finished" || note.type === "lead" ? completedRuns : observedEvents;
       if (note.key && !seen.has(note.key)) {
         seen.add(note.key); notify(note);
@@ -451,24 +461,24 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const quotaAwareAgents = async (agents: AgentId[], workspaceId: WorkspaceId) => {
     const defaults = workspaceState.defaults[workspaceId] ?? {};
     if (defaults.quotaFallback === false) return agents;
-    const quotas = await loadProviderQuotas(options.dataDir, options.modelHomeDir);
+    const quotas = await loadProviderQuotas(options.dataDir, options.modelHomeDir, policyFor(workspaceId).accounts);
     const eligible = agents.filter((id) => !exhaustionFromQuota(quotas.find((quota) => quota.agent === id), defaults.quotaThreshold ?? 3).exhausted);
     return eligible;
   };
   const fallbackContext = async (workspaceId: WorkspaceId) => {
     await modelsReady;
     const defaults = workspaceState.defaults[workspaceId] ?? {};
-    const settings = await routing.loadSettings();
+    const settings = await routing.loadSettings(policyFor(workspaceId).accounts);
     const available = await getAvailableAgents();
     const authenticated = available.filter((id) => settings.modelOptions[id].authStatus !== "unauthenticated");
     return { enabled: defaults.quotaFallback !== false, threshold: defaults.quotaThreshold ?? 3,
-      order: defaults.fallbackOrder, quotas: await loadProviderQuotas(options.dataDir, options.modelHomeDir),
+      order: defaults.fallbackOrder, quotas: await loadProviderQuotas(options.dataDir, options.modelHomeDir, policyFor(workspaceId).accounts),
       authenticated, authenticatedAgents: authenticated, allowedAgents: allowedFor(workspaceId) };
   };
-  const routingRunner = createQuotaFallbackRunner(withWorkspaceMcpBlocks(options.routingRunner ?? runCli, options.dataDir, policyFor), fallbackContext);
+  const routingRunner = createQuotaFallbackRunner(withWorkspaceAccounts(withWorkspaceMcpBlocks(options.routingRunner ?? runCli, options.dataDir, policyFor), policyFor), fallbackContext);
   const orchestra = new Orchestra(broadcast, undefined, scheduleSessions, broadcastRemoval, async (session, prompt, signal) => {
     await modelsReady;
-    const settings = await routing.loadSettings();
+    const settings = await routing.loadSettings(policyFor(session.workspaceId).accounts);
     const candidates = (await getAvailableAgents()).filter((id) => allowedFor(session.workspaceId).includes(id));
     return recommendAutoSwitch(prompt, session.cwd, settings, await quotaAwareAgents(candidates, session.workspaceId), routingRunner, signal, { workspaceId: session.workspaceId, sessionId: session.id, role: "router", dataDir: options.dataDir }, undefined, policyFor(session.workspaceId).mediaGeneration);
   }, allowedFor, options.dataDir, (session) => fallbackContext(session.workspaceId),
@@ -495,30 +505,52 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   orchestra.persistSchedules = (schedules) => saveSchedules(schedulesDir, schedules);
   const ready = Promise.all([loadSessions(options.dataDir), loadWorkspaceState(options.dataDir), loadStewards(options.dataDir), loadSchedules(schedulesDir)]).then(async ([sessions, state, stewards, schedules]) => {
     workspaceState = state;
+    for (const [workspaceId, policy] of Object.entries(state.settings ?? {})) {
+      try {
+        await installAccountSkills(policy.accounts);
+        await notifications.resolve(workspaceId, "account-skills");
+      }
+      catch (error) {
+        await notifications.add({ workspaceId, key: "account-skills", type: "error", title: "계정 폴더 스킬 설치 실패", body: error instanceof Error ? error.message : String(error) });
+      }
+    }
     await recoverStaleSessions(sessions, persistAllSessions);
     // Lead chats saved before leads were entities get one here (Orchestra.restore).
-    orchestra.restore(sessions, stewards, { legacyMergePolicy: state.stewardSettings?.legacyMergePolicy });
+    orchestra.restore(sessions, stewards, { legacyMergePolicy: state.stewardSettings?.legacyMergePolicy, defaultWorkspaceId: state.workspaces[0]?.id ?? state.currentWorkspaceId });
     // Missed while the app was off: the first stewardTick runs or skips them (MISSED_GRACE_MS).
     orchestra.restoreSchedules(schedules);
   });
   // Start discovery even when settings were saved by an earlier app version.
   // Settings errors remain visible through the API without blocking session recovery.
   const syncAuthNotifications = async () => {
-    const settings = await routing.loadSettings();
     for (const { id: workspaceId } of workspaceState.workspaces) {
+      const settings = await routing.loadSettings(policyFor(workspaceId).accounts);
       for (const id of agentIds) {
         const option = settings.modelOptions[id];
-        const note = allowedFor(workspaceId).includes(id) ? authNotification(workspaceId, id, option.authStatus, option.authDetail) : undefined;
+        const note = allowedFor(workspaceId).includes(id) ? authNotification(workspaceId, id, option.authStatus, option.authDetail, accountDirFor(policyFor(workspaceId), id)) : undefined;
         if (note) await notifications.add(note);
         else if (option.authStatus === "authenticated" || !allowedFor(workspaceId).includes(id)) await notifications.resolve(workspaceId, `auth:${id}`);
       }
     }
   };
-  const modelsReady = routing.refreshModels().then(async () => { await ready; await syncAuthNotifications(); }).then(() => undefined, () => undefined);
+  const refreshAllModels = async () => {
+    await ready;
+    const refreshed = new Set<string>();
+    for (const { id } of workspaceState.workspaces) {
+      const accounts = policyFor(id).accounts;
+      const key = JSON.stringify([accounts?.claude, accounts?.codex, accounts?.grok]);
+      if (refreshed.has(key)) continue;
+      await routing.refreshModels(accounts);
+      refreshed.add(key);
+    }
+    await syncAuthNotifications();
+    return routing.loadSettings(policyFor(currentWorkspace()).accounts);
+  };
+  const modelsReady = refreshAllModels().then(() => undefined, () => undefined);
   let authRefresh: Promise<unknown> | undefined;
   let lastFocusRefresh = 0;
   const refreshAuth = () => {
-    if (!authRefresh) authRefresh = routing.refreshModels().then(async (settings) => { await ready; await syncAuthNotifications(); return settings; }).finally(() => { authRefresh = undefined; });
+    if (!authRefresh) authRefresh = refreshAllModels().finally(() => { authRefresh = undefined; });
     return authRefresh;
   };
   const authInterval = setInterval(() => { void refreshAuth().catch(() => undefined); }, 5 * 60_000);
@@ -527,7 +559,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   websocket.once("close", () => { clearInterval(authInterval); terminal.close(); });
   const assertMediaAvailable = async (prompt: string, workspaceId: WorkspaceId) => {
     await modelsReady;
-    const settings = await routing.loadSettings();
+    const settings = await routing.loadSettings(policyFor(workspaceId).accounts);
     if (!mediaRouteRequired(prompt, settings.rules)) return;
     assertMediaAllowed(policyFor(workspaceId));
     const available = await quotaAwareAgents(await getAvailableAgents(), workspaceId);
@@ -547,6 +579,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       });
       const limitsPolicy = policyFor(currentWorkspace());
       const invocation = Promise.resolve().then(() => (options.limitsRunner ?? runCli)({
+        // The current workspace's Claude login, whose limits the app shows.
+        ...(accountDirFor(limitsPolicy, "claude") ? { accountDir: accountDirFor(limitsPolicy, "claude") } : {}),
         agent: "claude", prompt: ".", model: "haiku", cwd: process.cwd(), signal: controller.signal,
         blockedMcp: policyDenyPatterns(limitsPolicy, "claude"), lockedMcp: lockedToolsFor(limitsPolicy, "claude"),
         usageContext: { workspaceId: currentWorkspace(), sessionId: randomUUID(), role: "router", dataDir: options.dataDir },
@@ -682,7 +716,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const defaultCwd = homedir();
       const groups = await loadGroups(options.dataDir);
       const disabled = workspaceId ? workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId).disabledSkills : [];
-      res.json({ agents, skills: await enabledPublicSkills(undefined, false, disabled), bots: await loadBots(options.dataDir), groups: workspaceId ? groups.filter((group) => group.workspaceId === workspaceId) : groups, defaultCwd, homeCwd: homedir() });
+      res.json({ agents, skills: await enabledPublicSkills(undefined, false, disabled, workspaceId ? policyFor(workspaceId).accounts : undefined), bots: await loadBots(options.dataDir), groups: workspaceId ? groups.filter((group) => group.workspaceId === workspaceId) : groups, defaultCwd, homeCwd: homedir() });
     } catch (error) { errorResponse(res, error, 500); }
   });
 
@@ -692,7 +726,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
       const workspaceId = toolsWorkspace(req.query.workspace);
       const disabled = workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId).disabledSkills;
-      res.json(await enabledPublicSkills(cwd, false, disabled));
+      res.json(await enabledPublicSkills(cwd, false, disabled, policyFor(workspaceId).accounts));
     } catch (error) { errorResponse(res, error); }
   });
   app.post("/api/skills/refresh", async (req, res) => {
@@ -701,14 +735,14 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
       const workspaceId = toolsWorkspace(req.body?.workspace);
       const disabled = workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId).disabledSkills;
-      res.json(await enabledPublicSkills(cwd, true, disabled));
+      res.json(await enabledPublicSkills(cwd, true, disabled, policyFor(workspaceId).accounts));
     } catch (error) { errorResponse(res, error); }
   });
 
   const toolsPayload = async (workspaceId: WorkspaceId, cwd = process.cwd()) => {
     const settings = workspaceToolSettings(await loadToolSettings(options.dataDir), workspaceId);
     const skillLoader = options.toolSkillLoader ?? publicSkills;
-    const skills = await skillLoader(cwd);
+    const skills = await skillLoader(cwd, false, policyFor(workspaceId).accounts);
     const disabled = new Set(settings.disabledSkills.map((name) => name.toLocaleLowerCase()));
     return {
       mcp: await discoverMcpTools(workspaceId, { runner: options.toolRunner, disabledMcp: settings.disabledMcp, policy: policyFor(workspaceId) }).then(async (tools) => {
@@ -746,7 +780,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const name = string(req.body?.name, 200);
       if (typeof req.body?.enabled !== "boolean") throw new Error("도구 사용 설정이 올바르지 않습니다.");
       if (isToolLocked(policyFor(workspaceId), id, name)) throw new WorkspacePolicyError(blockedToolMessage(name));
-      await updateMcpTool({ agent: id, name, enabled: req.body.enabled }, { runner: options.toolRunner, codexConfigPath: options.codexConfigPath });
+      await updateMcpTool({ agent: id, name, enabled: req.body.enabled }, { runner: options.toolRunner, codexConfigPath: options.codexConfigPath, accounts: policyFor(workspaceId).accounts });
       await mutateToolSettings((settings) => {
         const key = `${id}:${name}`;
         const target = workspaceToolSettings(settings, workspaceId);
@@ -772,21 +806,22 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     } catch (error) { errorResponse(res, error); }
   });
 
-  app.get("/api/settings", async (_req, res) => {
-    try { await modelsReady; res.json(await routing.loadSettings()); }
+  app.get("/api/settings", async (req, res) => {
+    try { await modelsReady; res.json(await routing.loadSettings(policyFor(toolsWorkspace(req.query.workspace ?? req.body?.workspaceId)).accounts)); }
     catch (error) { errorResponse(res, error, 500); }
   });
   app.put("/api/settings", async (req, res) => {
-    try { await modelsReady; res.json(await routing.saveSettings(req.body)); }
+    try { await modelsReady; res.json(await routing.saveSettings(req.body, policyFor(toolsWorkspace(req.query.workspace ?? req.body?.workspaceId)).accounts)); }
     catch (error) { errorResponse(res, error); }
   });
-  app.post("/api/settings/models/refresh", async (_req, res) => {
+  app.post("/api/settings/models/refresh", async (req, res) => {
     try {
       await modelsReady;
-      const focus = _req.body?.reason === "focus";
-      if (focus && Date.now() - lastFocusRefresh < 60_000) { res.json(await routing.loadSettings()); return; }
+      const focus = req.body?.reason === "focus";
+      if (focus && Date.now() - lastFocusRefresh < 60_000) { res.json(await routing.loadSettings(policyFor(toolsWorkspace(req.query.workspace ?? req.body?.workspaceId)).accounts)); return; }
       if (focus) lastFocusRefresh = Date.now();
-      res.json(await refreshAuth());
+      await refreshAuth();
+      res.json(await routing.loadSettings(policyFor(toolsWorkspace(req.query.workspace ?? req.body?.workspaceId)).accounts));
     }
     catch (error) { errorResponse(res, error, 500); }
   });
@@ -816,14 +851,15 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     catch (error) { errorResponse(res, error, 500); }
   });
 
-  app.get("/api/limits", async (_req, res) => {
-    try { res.json({ providers: await loadProviderQuotas(options.dataDir, options.modelHomeDir) }); }
+  // Limits of the CLI logins a workspace uses (`?workspace=`, else the current one): its own accounts, else the default logins.
+  app.get("/api/limits", async (req, res) => {
+    try { res.json({ providers: await loadProviderQuotas(options.dataDir, options.modelHomeDir, policyFor(toolsWorkspace(req.query.workspace)).accounts) }); }
     catch (error) { errorResponse(res, error, 500); }
   });
-  app.post("/api/limits/refresh", async (_req, res) => {
+  app.post("/api/limits/refresh", async (req, res) => {
     try {
       await refreshClaudeLimits();
-      res.json({ providers: await loadProviderQuotas(options.dataDir, options.modelHomeDir) });
+      res.json({ providers: await loadProviderQuotas(options.dataDir, options.modelHomeDir, policyFor(toolsWorkspace(req.query.workspace)).accounts) });
     } catch (error) { errorResponse(res, error, 500); }
   });
 
@@ -851,15 +887,24 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const singleDefaults = req.body?.defaults == null ? undefined : workspaceDefaults(req.body.defaults);
       // Validate before touching the state; merged onto the stored policy below.
       if (req.body?.settings != null) normalizeWorkspacePolicy(req.body.settings, true);
-      workspaceState = await mutateWorkspaceState((state) => {
+      workspaceState = await mutateWorkspaceState(async (state) => {
         const known = new Set(state.workspaces.map((item) => item.id));
         for (const id of [currentWorkspaceId, singleWorkspaceId, ...Object.keys(defaultsByWorkspace ?? {})]) if (id && !known.has(id)) throw new Error("워크스페이스를 찾을 수 없습니다.");
         if (currentWorkspaceId) state.currentWorkspaceId = currentWorkspaceId;
         if (defaultsByWorkspace) Object.assign(state.defaults, defaultsByWorkspace);
         if (singleWorkspaceId && singleDefaults) state.defaults[singleWorkspaceId] = singleDefaults;
-        if (singleWorkspaceId && req.body?.settings != null) (state.settings ??= {})[singleWorkspaceId] = normalizeWorkspacePolicy(req.body.settings, true, state.settings[singleWorkspaceId]);
+        if (singleWorkspaceId && req.body?.settings != null) {
+          const policy = normalizeWorkspacePolicy(req.body.settings, true, state.settings?.[singleWorkspaceId]);
+          if (req.body.settings.accounts !== undefined) await installAccountSkills(policy.accounts);
+          (state.settings ??= {})[singleWorkspaceId] = policy;
+        }
         return state;
       }, options.dataDir);
+      if (singleWorkspaceId && req.body?.settings?.accounts !== undefined) {
+        await notifications.resolve(singleWorkspaceId, "account-skills");
+        await routing.refreshModels(policyFor(singleWorkspaceId).accounts);
+        await syncAuthNotifications();
+      }
       // Turning computer use off stops already-approved sessions now, not at their next approval.
       // Turning it on is possible through this API too (an agent can call it): that is not the
       // boundary. Every session still has to pass the native approval alert in the app.
@@ -871,14 +916,17 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try {
       const name = workspaceName(req.body?.name);
       if (req.body?.settings != null) normalizeWorkspacePolicy(req.body.settings, true);
-      workspaceState = await mutateWorkspaceState((state) => {
+      workspaceState = await mutateWorkspaceState(async (state) => {
         const id = newWorkspaceId(name, new Set(state.workspaces.map((item) => item.id)));
+        const policy = normalizeWorkspacePolicy(req.body?.settings, true, state.settings?.[state.currentWorkspaceId]);
+        await installAccountSkills(policy.accounts);
         state.workspaces.push({ id, name });
         // A new workspace starts from the current one's defaults (folder, allowed agents, team, ...) and settings.
         state.defaults[id] = structuredClone(state.defaults[state.currentWorkspaceId] ?? {});
-        (state.settings ??= {})[id] = normalizeWorkspacePolicy(req.body?.settings, true, state.settings[state.currentWorkspaceId]);
+        (state.settings ??= {})[id] = policy;
         return state;
       }, options.dataDir);
+      await refreshAllModels();
       res.status(201).json(workspacesPayload());
     } catch (error) { errorResponse(res, error); }
   });
@@ -889,13 +937,22 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       // Rename, update settings (merged onto the stored ones), or both.
       const name = req.body?.name == null && hasSettings ? undefined : workspaceName(req.body?.name);
       if (hasSettings) normalizeWorkspacePolicy(req.body.settings, true);
-      workspaceState = await mutateWorkspaceState((state) => {
+      workspaceState = await mutateWorkspaceState(async (state) => {
         const found = state.workspaces.find((item) => item.id === id);
         if (!found) throw new Error("워크스페이스를 찾을 수 없습니다.");
         if (name) found.name = name;
-        if (hasSettings) (state.settings ??= {})[id] = normalizeWorkspacePolicy(req.body.settings, true, state.settings[id]);
+        if (hasSettings) {
+          const policy = normalizeWorkspacePolicy(req.body.settings, true, state.settings?.[id]);
+          if (req.body.settings.accounts !== undefined) await installAccountSkills(policy.accounts);
+          (state.settings ??= {})[id] = policy;
+        }
         return state;
       }, options.dataDir);
+      if (hasSettings && req.body.settings.accounts !== undefined) {
+        await notifications.resolve(id, "account-skills");
+        await routing.refreshModels(policyFor(id).accounts);
+        await syncAuthNotifications();
+      }
       if (hasSettings && !isComputerUseAllowed(workspaceState, id)) computerBridge.revokeWorkspace(id);
       res.json(workspacesPayload());
     } catch (error) { errorResponse(res, error, workspaceNotFound(error) ? 404 : 400); }
@@ -914,9 +971,17 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         const remaining = state.workspaces.filter((item) => item.id !== id);
         moveTo = requestedMoveTo ?? remaining[0].id;
         if (!remaining.some((item) => item.id === moveTo)) throw new Error(requestedMoveTo === id ? "삭제할 워크스페이스로는 옮길 수 없습니다." : "옮길 워크스페이스를 찾을 수 없습니다.");
+        const destinationNames = new Set(orchestra.listStewards(moveTo).map((lead) => lead.name.toLowerCase()));
+        for (const lead of orchestra.listStewards(id)) {
+          if (destinationNames.has(lead.name.toLowerCase())) throw conflict(`옮길 공간에 이미 「${lead.name}」 담당이 있습니다. 담당 이름을 바꾼 뒤 다시 시도하세요.`);
+          destinationNames.add(lead.name.toLowerCase());
+        }
         // Move the contents before dropping the workspace so a failed write leaves nothing orphaned.
         await mutateGroups((groups) => { for (const group of groups) if (group.workspaceId === id) group.workspaceId = moveTo; }, options.dataDir);
+        // Leads (with or without chats) move along with their chats.
+        for (const steward of orchestra.listStewards(id)) orchestra.moveSteward(steward.id, moveTo, false);
         for (const session of orchestra.list()) if (session.workspaceId === id) orchestra.setWorkspace(session.id, moveTo, false);
+        await saveStewards(orchestra.listStewards(), options.dataDir);
         await persistSessions(orchestra.list());
         state.workspaces = remaining;
         delete state.defaults[id];
@@ -943,6 +1008,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try {
       const parsed = startInput(req.body, workspace, currentWorkspace());
       const workspaceId = parsed.workspaceId ?? currentWorkspace();
+      if (parsed.steward?.id) parsed.steward.id = resolveStewardId(parsed.steward.id, workspaceId);
       const input = withWorkspaceTeam(parsed, workspaceState.defaults[workspaceId] ?? {}, allowedFor(workspaceId));
       if (input.prompt) await assertMediaAvailable(input.prompt, input.workspaceId ?? currentWorkspace());
       if (input.groupId && !(await loadGroups(options.dataDir)).some((group) => group.id === input.groupId && group.workspaceId === input.workspaceId)) throw new Error("그룹을 찾을 수 없습니다.");
@@ -1015,7 +1081,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         notes: dir ? await readNotes(dir, stewardNotesId(session)) : "", transcript: dir ? transcriptPath(dir, session.id) : undefined,
         turns: session.steward.turns, rolloverAt: STEWARD_ROLLOVER_TURNS,
         name: stewardName(session), report: orchestra.stewardOf(session)?.report ?? session.steward.report ?? null, acceptWork: Boolean(session.steward.acceptWork),
-        peers: orchestra.list().filter((item) => item.steward && item.id !== session.id).map((item) => ({ id: item.id, name: stewardName(item), cwd: item.cwd })),
+        // The leads this one can ask: those of its own workspace (Orchestra.stewards).
+        peers: orchestra.list().filter((item) => item.steward && item.id !== session.id && item.workspaceId === session.workspaceId).map((item) => ({ id: item.id, name: stewardName(item), cwd: item.cwd })),
       });
     } catch (error) { errorResponse(res, error, 404); }
   });
@@ -1055,6 +1122,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
 
   // Project leads as entities (server/steward.ts): chats are their threads (`steward.id`).
+  const resolveStewardId = (value: string, workspaceId: WorkspaceId) => {
+    const steward = orchestra.resolveSteward(value, workspaceId);
+    if (!steward) throw new Error("담당을 찾을 수 없습니다.");
+    return steward.id;
+  };
   const stewardPayload = async (id: string) => {
     const steward = orchestra.getSteward(id);
     if (!steward) throw new Error("담당을 찾을 수 없습니다.");
@@ -1088,33 +1160,39 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       res.json({ policy, updated, stewards: orchestra.listStewards() });
     } catch (error) { errorResponse(res, error); }
   });
-  app.get("/api/stewards", async (_req, res) => {
-    try { await ready; res.json(orchestra.listStewards()); } catch (error) { errorResponse(res, error, 500); }
+  // `?workspace=`: only that workspace's leads (each workspace has its own); left out, every lead.
+  app.get("/api/stewards", async (req, res) => {
+    try {
+      await ready;
+      res.json(orchestra.listStewards(queryWorkspace(req.query.workspace)));
+    } catch (error) { errorResponse(res, error, error instanceof Error && error.message === "워크스페이스가 올바르지 않습니다." ? 400 : 500); }
   });
   app.post("/api/stewards", async (req, res) => {
     try {
       await ready;
       const report = req.body?.report == null || req.body.report === "" ? undefined : reportTime(req.body.report);
       if (req.body?.report != null && req.body.report !== "" && !report) throw new Error("보고 시각은 HH:MM 형식이어야 합니다.");
-      const steward = orchestra.createSteward(stewardInput(req.body, true) as StewardPatch & { name: string });
+      const steward = orchestra.createSteward({ ...stewardInput(req.body, true) as StewardPatch & { name: string }, workspaceId: workspace(req.body?.workspaceId, currentWorkspace()) });
       if (report) orchestra.setStewardReport(steward.id, report);
       await saveStewards(orchestra.listStewards(), options.dataDir);
       res.status(201).json(await stewardPayload(steward.id));
     } catch (error) { errorResponse(res, error); }
   });
   app.get("/api/stewards/:id", async (req, res) => {
-    try { await ready; res.json(await stewardPayload(routeParam(req.params.id))); } catch (error) { errorResponse(res, error, stewardStatus(error)); }
+    try { await ready; res.json(await stewardPayload(resolveStewardId(routeParam(req.params.id), toolsWorkspace(req.query.workspace)))); } catch (error) { errorResponse(res, error, stewardStatus(error)); }
   });
   app.patch("/api/stewards/:id", async (req, res) => {
     try {
       await ready;
-      const id = routeParam(req.params.id);
+      const id = resolveStewardId(routeParam(req.params.id), toolsWorkspace(req.query.workspace));
       if (!orchestra.getSteward(id)) throw new Error("담당을 찾을 수 없습니다.");
       const patch = stewardInput(req.body);
+      // Moving a lead to another workspace takes its chats along (Orchestra.moveSteward).
+      const moveTo = req.body.workspaceId == null || req.body.workspaceId === "" ? undefined : workspace(req.body.workspaceId);
       if (req.body.notes !== undefined && typeof req.body.notes !== "string") throw new Error("담당 노트가 올바르지 않습니다.");
       const report = req.body.report === null || req.body.report === "" ? null : req.body.report === undefined ? undefined : reportTime(req.body.report);
       if (report === undefined && req.body.report !== undefined) throw new Error("보고 시각은 HH:MM 형식이어야 합니다.");
-      if (Object.keys(patch).length) orchestra.patchSteward(id, patch);
+      if (Object.keys(patch).length || moveTo) orchestra.patchSteward(id, patch, moveTo);
       if (report !== undefined) orchestra.setStewardReport(id, report);
       // The user edits the notes by hand: the lead reads them at the start of its next turn.
       if (typeof req.body.notes === "string" && orchestra.stewardDataDir) await saveNotes(orchestra.stewardDataDir, id, req.body.notes.slice(0, 20_000));
@@ -1126,7 +1204,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.delete("/api/stewards/:id", async (req, res) => {
     try {
       await ready;
-      orchestra.deleteSteward(routeParam(req.params.id));
+      orchestra.deleteSteward(resolveStewardId(routeParam(req.params.id), toolsWorkspace(req.query.workspace)));
       await saveStewards(orchestra.listStewards(), options.dataDir);
       await persistSessions(orchestra.list());
       res.status(204).end();
@@ -1136,7 +1214,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.get("/api/stewards/:id/schedules", async (req, res) => {
     try {
       await ready;
-      const id = routeParam(req.params.id);
+      const id = resolveStewardId(routeParam(req.params.id), toolsWorkspace(req.query.workspace));
       if (!orchestra.getSteward(id)) throw new Error("담당을 찾을 수 없습니다.");
       res.json(orchestra.listSchedules(id));
     } catch (error) { errorResponse(res, error, stewardStatus(error)); }
@@ -1144,7 +1222,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.post("/api/stewards/:id/schedules", async (req, res) => {
     try {
       await ready;
-      const schedule = orchestra.createLeadSchedule(routeParam(req.params.id), scheduleInput(req.body), "user");
+      const schedule = orchestra.createLeadSchedule(resolveStewardId(routeParam(req.params.id), toolsWorkspace(req.query.workspace)), scheduleInput(req.body), "user");
       await Promise.all([saveSchedules(schedulesDir, orchestra.listSchedules()), persistSessions(orchestra.list())]);
       res.status(201).json(schedule);
     } catch (error) { errorResponse(res, error, stewardStatus(error)); }
@@ -1212,7 +1290,16 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     };
   };
   const toolContext = (caller: CallerContext): ToolContext => ({
-    dispatch, workspaceId: caller.workspaceId,
+    dispatch: (method, path, body) => {
+      const url = new URL(path, "http://sinawi.local");
+      const askedSession = method === "POST" ? /^\/api\/sessions\/([^/]+)\/live$/.exec(url.pathname) : null;
+      if (askedSession) {
+        const target = orchestra.get(decodeURIComponent(askedSession[1]));
+        if (target && target.workspaceId !== caller.workspaceId) throw new Error("같은 공간의 채팅에만 질문할 수 있습니다. 먼저 담당을 같은 공간으로 옮기세요.");
+      }
+      if (/^\/api\/(?:stewards|settings)(?:\/|$)/.test(url.pathname) && !url.searchParams.has("workspace")) url.searchParams.set("workspace", caller.workspaceId);
+      return dispatch(method, `${url.pathname}${url.search}`, body);
+    }, workspaceId: caller.workspaceId,
     ...(caller.surface === "lead" && caller.sessionId ? { leadCall: (name: string, args: Record<string, unknown>) => orchestra.leadToolCall(caller.sessionId!, name, args, caller.touch) } : {}),
   });
   /** A tool call from either surface: reads and creations run, the rest wait for the user. */
@@ -1402,6 +1489,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.patch("/api/sessions/:id/workspace", async (req, res) => {
     try {
       const session = orchestra.setWorkspace(routeParam(req.params.id), workspace(req.body?.workspaceId));
+      // A lead's chat takes its lead (and the lead's other chats) along (Orchestra.setWorkspace).
+      if (session.steward) await saveStewards(orchestra.listStewards(), options.dataDir);
       await persistSessions(orchestra.list());
       res.json(session);
     } catch (error) { errorResponse(res, error, error instanceof Error && /찾을 수 없습니다/.test(error.message) ? 404 : 400); }

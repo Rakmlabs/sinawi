@@ -114,3 +114,8 @@
 .workspace-rules > summary::-webkit-details-marker { display: none; }
 .workspace-rules > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
 .workspace-rules[open] > summary::before { transform: rotate(45deg); }
+
+/* Settings › Workspaces › CLI accounts: one row per agent, the login command under it. */
+.workspace-account { display: grid; gap: 4px; margin-top: 6px; }
+.workspace-account .workspace-inline-form > span { min-width: 72px; }
+.workspace-account code { overflow-wrap: anywhere; user-select: all; }

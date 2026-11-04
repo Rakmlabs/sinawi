@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Bell, Check, ExternalLink, FolderOpen, Keyboard, Layers, Monitor, MousePointerClick, Plug, RefreshCw, Sparkles, SquareTerminal, TriangleAlert, Wrench, X } from "lucide-react";
 import type { SetupTool, PermissionId, PermissionState } from "../server/setup";
 import type { WorkspaceId } from "../server/types";
+import { accountScopeKey } from "./app/api";
 import { CopyButton } from "./CopyButton";
 import { openTerminal } from "./terminal-events";
-import { permissionView, tauriInvoke, type PermState, loginStatus, saveProgress, SHORTCUTS, STEPS, toolsStatus, type AuthStatus, type OnboardingProgress, type StepStatus } from "./onboarding-state";
+import { environmentLoginCommand, environmentSettingsPath, permissionView, tauriInvoke, type PermState, loginStatus, saveProgress, SHORTCUTS, STEPS, toolsStatus, type AuthStatus, type OnboardingProgress, type StepStatus } from "./onboarding-state";
 import "./onboarding.css";
 import { t, tx } from "./i18n";
 import { WebLink } from "./WebLink";
@@ -45,7 +46,9 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const { workspaces } = useWorkspaces();
+  const { workspaces, settings } = useWorkspaces();
+  const accounts = settings[workspaceId]?.accounts ?? {};
+  const accountsKey = accountScopeKey(accounts);
   const [newGroup, setNewGroup] = useState<{ name: string; workspaceId: WorkspaceId }>({ name: "", workspaceId });
   const [native, setNative] = useState<Partial<Record<PermissionId, PermState>>>({});
   const [requesting, setRequesting] = useState<PermissionId>();
@@ -58,10 +61,10 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
   const check = useCallback(async (refreshAuth = false) => {
     setChecking(true); setError("");
     try {
-      if (refreshAuth) await json("/api/settings/models/refresh", { method: "POST" }).catch(() => undefined);
+      if (refreshAuth) await json("/api/settings/models/refresh", { method: "POST", body: JSON.stringify({ reason: "onboarding", workspaceId }) }).catch(() => undefined);
       const [info, settings, groupList] = await Promise.all([
         json<SetupInfo>("/api/setup"),
-        json<{ modelOptions?: Record<string, { authStatus?: AuthStatus }> }>("/api/settings").catch(() => ({ modelOptions: {} })),
+        json<{ modelOptions?: Record<string, { authStatus?: AuthStatus }> }>(environmentSettingsPath(workspaceId)).catch(() => ({ modelOptions: {} })),
         json<Group[]>("/api/groups").catch(() => []),
       ]);
       setSetup(info); setGroups(groupList);
@@ -70,7 +73,7 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
       setAuth(Object.fromEntries(Object.entries(settings.modelOptions ?? {}).map(([id, option]) => [id, (option as { authStatus?: AuthStatus } | undefined)?.authStatus])));
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setChecking(false); }
-  }, []);
+  }, [workspaceId, accountsKey]);
   useEffect(() => { void check(); }, [check]);
   useEffect(() => {
     if (mcp) return; // prefetch: MCP discovery runs each CLI and can take a few seconds
@@ -136,10 +139,11 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
         <p className="ob-lead">{t("ob.login.lead")}</p>
         <div className="ob-list">{agents.map((tool) => {
           const status = !tool.installed ? "none" : auth[tool.id] ?? "unknown";
+          const login = environmentLoginCommand(tool, accounts);
           return <div key={tool.id} className={`ob-row ${status === "authenticated" ? "ok" : status === "none" ? "optional" : "warn"}`}>
             <div className="ob-row-head"><strong>{tool.name}</strong><span className="ob-spacer" />
               {status === "authenticated" ? <Badge status="ok">{t("ob.loggedIn")}</Badge> : status === "none" ? <Badge status="info">{t("ob.notInstalled")}</Badge> : status === "unauthenticated" ? <Badge status="warn">{t("ob.loginRequired")}</Badge> : <Badge status="warn">{t("ob.unchecked")}</Badge>}</div>
-            {tool.installed && status !== "authenticated" && tool.login && <div className="ob-actions"><Command command={tool.login} label={t("ob.loginCommand", { name: tool.name })} /><button className="ob-btn primary" onClick={() => runLogin(tool.login!)}><SquareTerminal size={15} />{t("ob.loginInTerminal")}</button></div>}
+            {tool.installed && status !== "authenticated" && login && <div className="ob-actions"><Command command={login} label={t("ob.loginCommand", { name: tool.name })} /><button className="ob-btn primary" onClick={() => runLogin(login)}><SquareTerminal size={15} />{t("ob.loginInTerminal")}</button></div>}
           </div>;
         })}</div>
         <p className="ob-muted">{tx("ob.login.note")}</p>

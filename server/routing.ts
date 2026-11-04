@@ -5,11 +5,11 @@ import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { promisify, stripVTControlCharacters } from "node:util";
-import { runCli, type RunCliOptions } from "./cli.js";
+import { accountEnv, runCli, type RunCliOptions } from "./cli.js";
 import { filterEnabledSkills, publicSkills } from "./skills.js";
 import { loadToolSettings, workspaceToolSettings } from "./store.js";
-import type { AgentId, AgentSelection, SkillInfo, WorkspacePolicy } from "./types.js";
-import { assertMediaAllowed } from "./workspace-policy.js";
+import type { AgentId, AgentSelection, SkillInfo, WorkspaceAccounts, WorkspacePolicy } from "./types.js";
+import { ACCOUNT_ENV, assertMediaAllowed } from "./workspace-policy.js";
 import { defaultDataDir, envVar } from "./runtime.js";
 import { imageTextKeywords, imageVisualKeywords, isMediaRule, mediaGenerationRequired, mediaRouteRequired, mediaSkills, mediaUnavailableMessage, stripPreviewAttachments, videoKeywords } from "./media-routing.js";
 
@@ -32,7 +32,8 @@ export interface ModelOptions {
 }
 
 export interface ModelCommandResult { stdout: string; stderr?: string; }
-export type ModelCommandRunner = (command: string, args: string[]) => Promise<ModelCommandResult>;
+export interface ModelCommandOptions { env?: Record<string, string>; }
+export type ModelCommandRunner = (command: string, args: string[], options?: ModelCommandOptions) => Promise<ModelCommandResult>;
 export interface AuthDiscoveryOptions { sleep?: (milliseconds: number) => Promise<void>; }
 
 export interface RoutingRule {
@@ -210,24 +211,33 @@ async function jsonConfig(file: string): Promise<Record<string, any> | undefined
   } catch { return undefined; }
 }
 
+function effectiveAccounts(homeDirectory: string, accounts: WorkspaceAccounts = {}): WorkspaceAccounts {
+  return Object.fromEntries((["codex", "claude", "grok"] as const).map((agent) => [
+    agent,
+    accounts[agent] ?? process.env[ACCOUNT_ENV[agent]] ?? resolve(homeDirectory, `.${agent}`),
+  ]));
+}
+
 /** Reads only model identifiers from bounded, known local CLI configuration shapes. */
-export async function discoverLocalModels(homeDirectory = homedir()): Promise<RoutingSettings> {
+export async function discoverLocalModels(homeDirectory = homedir(), accounts?: WorkspaceAccounts): Promise<RoutingSettings> {
   const settings = cloneDefaults();
   const discovered: Record<AgentId, string[]> = { codex: [], claude: [], grok: [] };
+  const roots = effectiveAccounts(homeDirectory, accounts);
+  const accountRoot = (agent: AgentId) => roots[agent]!;
 
-  const codexConfig = await boundedText(resolve(homeDirectory, ".codex", "config.toml"), 256_000);
+  const codexConfig = await boundedText(resolve(accountRoot("codex"), "config.toml"), 256_000);
   if (codexConfig) addModel(discovered.codex, codexConfig.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1]);
-  const codexCache = await jsonConfig(resolve(homeDirectory, ".codex", "models_cache.json"));
+  const codexCache = await jsonConfig(resolve(accountRoot("codex"), "models_cache.json"));
   if (Array.isArray(codexCache?.models)) {
     for (const entry of codexCache.models.slice(0, 100)) addModel(discovered.codex, entry && typeof entry === "object" ? entry.slug : undefined);
   }
 
-  const claude = await jsonConfig(resolve(homeDirectory, ".claude", "settings.json"));
+  const claude = await jsonConfig(resolve(accountRoot("claude"), "settings.json"));
   addModel(discovered.claude, claude?.model);
   addModel(discovered.claude, claude?.env?.ANTHROPIC_MODEL);
 
   for (const name of ["config.json", "settings.json"]) {
-    const grok = await jsonConfig(resolve(homeDirectory, ".grok", name));
+    const grok = await jsonConfig(resolve(accountRoot("grok"), name));
     addModel(discovered.grok, grok?.model);
     addModel(discovered.grok, grok?.env?.GROK_MODEL);
   }
@@ -252,12 +262,12 @@ function modelCommand(agent: AgentId): string {
   })[agent] || agent;
 }
 
-const defaultModelRunner: ModelCommandRunner = async (command, args) => {
+const defaultModelRunner: ModelCommandRunner = async (command, args, options) => {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
       timeout: 10_000,
       maxBuffer: 256_000,
-      env: cliChildEnv(process.env, { CI: "1" }),
+      env: cliChildEnv(process.env, { CI: "1", ...options?.env }),
     });
     return { stdout, stderr };
   } catch (error) {
@@ -299,8 +309,8 @@ function isUnauthenticated(text: string) {
     && /not authenticated|not (?:logged|signed) in|unauthenticated/i.test(text);
 }
 
-async function commandResult(runner: ModelCommandRunner, agent: AgentId, args: string[]): Promise<ModelCommandResult | undefined> {
-  try { return await runner(modelCommand(agent), args); }
+async function commandResult(runner: ModelCommandRunner, agent: AgentId, args: string[], accountDir?: string): Promise<ModelCommandResult | undefined> {
+  try { return await runner(modelCommand(agent), args, { env: accountEnv(agent, accountDir) }); }
   catch (error) {
     const failure = error as { stdout?: unknown; stderr?: unknown };
     const stdout = typeof failure.stdout === "string" ? failure.stdout.slice(0, 256_000) : "";
@@ -315,11 +325,13 @@ export async function discoverCliModels(
   homeDirectory = homedir(),
   runner: ModelCommandRunner = defaultModelRunner,
   options: AuthDiscoveryOptions = {},
+  accounts?: WorkspaceAccounts,
 ): Promise<RoutingSettings> {
+  const effective = effectiveAccounts(homeDirectory, accounts);
   const settings = structuredClone(base);
   settings.modelOptions.grok.models = settings.modelOptions.grok.models.filter((model) => !isStaleGrokModel(model));
   if (!settings.modelOptions.grok.models.length) settings.modelOptions.grok.models = [...currentGrokModels];
-  const local = await discoverLocalModels(homeDirectory);
+  const local = await discoverLocalModels(homeDirectory, effective);
 
   for (const agent of ["codex", "claude", "grok"] as const) {
     if (local.modelOptions[agent].source !== "cli") continue;
@@ -330,9 +342,9 @@ export async function discoverCliModels(
   }
 
   let [grokResult, codexResult, claudeResult] = await Promise.all([
-    commandResult(runner, "grok", ["models"]),
-    commandResult(runner, "codex", ["login", "status"]),
-    commandResult(runner, "claude", ["auth", "status"]),
+    commandResult(runner, "grok", ["models"], effective.grok),
+    commandResult(runner, "codex", ["login", "status"], effective.codex),
+    commandResult(runner, "claude", ["auth", "status"], effective.claude),
   ]);
 
   const grokUnauthenticated = grokResult ? isUnauthenticated(output(grokResult)) : false;
@@ -345,9 +357,9 @@ export async function discoverCliModels(
   if (grokUnauthenticated || codexUnauthenticated || claudeUnauthenticated) {
     await (options.sleep ?? ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))))(5_000);
     const retried = await Promise.all([
-      grokUnauthenticated ? commandResult(runner, "grok", ["models"]) : Promise.resolve(grokResult),
-      codexUnauthenticated ? commandResult(runner, "codex", ["login", "status"]) : Promise.resolve(codexResult),
-      claudeUnauthenticated ? commandResult(runner, "claude", ["auth", "status"]) : Promise.resolve(claudeResult),
+      grokUnauthenticated ? commandResult(runner, "grok", ["models"], effective.grok) : Promise.resolve(grokResult),
+      codexUnauthenticated ? commandResult(runner, "codex", ["login", "status"], effective.codex) : Promise.resolve(codexResult),
+      claudeUnauthenticated ? commandResult(runner, "claude", ["auth", "status"], effective.claude) : Promise.resolve(claudeResult),
     ]);
     [grokResult, codexResult, claudeResult] = retried;
   }
@@ -384,7 +396,7 @@ export async function discoverCliModels(
   return settings;
 }
 
-export async function loadRoutingSettings(directory = defaultDataDir, homeDirectory = homedir()): Promise<RoutingSettings> {
+export async function loadRoutingSettings(directory = defaultDataDir, homeDirectory = homedir(), accounts?: WorkspaceAccounts): Promise<RoutingSettings> {
   try {
     const settings = validateRoutingSettings(JSON.parse(await readFile(settingsPath(directory), "utf8")));
     const legacyImageIndex = settings.rules.findIndex((rule) => sameRule(rule, legacyImageRule));
@@ -397,7 +409,7 @@ export async function loadRoutingSettings(directory = defaultDataDir, homeDirect
     return settings;
   }
   catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return discoverLocalModels(homeDirectory);
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return discoverLocalModels(homeDirectory, accounts);
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`저장된 라우팅 설정을 읽을 수 없습니다: ${detail}`, { cause: error });
   }
@@ -523,37 +535,50 @@ function plannerPrompt(prompt: string, settings: RoutingSettings, skills: SkillI
 }
 
 export class RoutingService {
-  private discoveredModelOptions?: RoutingSettings["modelOptions"];
+  private discoveredModelOptions = new Map<string, ModelOptions>();
   private modelMutation = Promise.resolve();
 
   constructor(private options: { dataDir?: string; homeDir?: string; runner?: PlannerRunner; modelRunner?: ModelCommandRunner; authDiscovery?: AuthDiscoveryOptions; skillLoader?: (cwd?: string) => Promise<SkillInfo[]>; timeoutMs?: number } = {}) {}
 
-  async loadSettings() {
-    const settings = await loadRoutingSettings(this.options.dataDir, this.options.homeDir);
-    if (this.discoveredModelOptions) settings.modelOptions = structuredClone(this.discoveredModelOptions);
+  private modelCacheKey(agent: AgentId, accounts?: WorkspaceAccounts) {
+    return `${agent}\0${effectiveAccounts(this.options.homeDir ?? homedir(), accounts)[agent]}`;
+  }
+
+  private applyDiscoveredModels(settings: RoutingSettings, accounts?: WorkspaceAccounts) {
+    for (const agent of ["codex", "claude", "grok"] as const) {
+      const discovered = this.discoveredModelOptions.get(this.modelCacheKey(agent, accounts));
+      if (discovered) settings.modelOptions[agent] = structuredClone(discovered);
+    }
     return settings;
   }
 
-  async saveSettings(settings: unknown) {
+  async loadSettings(accounts?: WorkspaceAccounts) {
+    const settings = await loadRoutingSettings(this.options.dataDir, this.options.homeDir, accounts);
+    return this.applyDiscoveredModels(settings, accounts);
+  }
+
+  async saveSettings(settings: unknown, accounts?: WorkspaceAccounts) {
     return this.withModelMutation(async () => {
-      const previous = this.discoveredModelOptions;
       const saved = await saveRoutingSettings(validateRoutingSettings(settings), this.options.dataDir);
       for (const agent of ["codex", "claude", "grok"] as const) {
-        if (!saved.modelOptions[agent].authStatus && previous?.[agent].authStatus) {
-          saved.modelOptions[agent].authStatus = previous[agent].authStatus;
-          saved.modelOptions[agent].authDetail = previous[agent].authDetail;
+        const previous = this.discoveredModelOptions.get(this.modelCacheKey(agent, accounts));
+        if (!saved.modelOptions[agent].authStatus && previous?.authStatus) {
+          saved.modelOptions[agent].authStatus = previous.authStatus;
+          saved.modelOptions[agent].authDetail = previous.authDetail;
         }
+        this.discoveredModelOptions.set(this.modelCacheKey(agent, accounts), structuredClone(saved.modelOptions[agent]));
       }
-      this.discoveredModelOptions = structuredClone(saved.modelOptions);
       return saved;
     });
   }
 
-  async refreshModels() {
+  async refreshModels(accounts?: WorkspaceAccounts) {
     return this.withModelMutation(async () => {
-      const settings = await loadRoutingSettings(this.options.dataDir, this.options.homeDir);
-      const refreshed = await discoverCliModels(settings, this.options.homeDir, this.options.modelRunner, this.options.authDiscovery);
-      this.discoveredModelOptions = structuredClone(refreshed.modelOptions);
+      const settings = await loadRoutingSettings(this.options.dataDir, this.options.homeDir, accounts);
+      const refreshed = await discoverCliModels(settings, this.options.homeDir, this.options.modelRunner, this.options.authDiscovery, accounts);
+      for (const agent of ["codex", "claude", "grok"] as const) {
+        this.discoveredModelOptions.set(this.modelCacheKey(agent, accounts), structuredClone(refreshed.modelOptions[agent]));
+      }
       return refreshed;
     });
   }
@@ -568,7 +593,7 @@ export class RoutingService {
   }
 
   async recommend(prompt: string, cwd: string, explicitSkills: string[] = [], availableAgents?: AgentId[], usageContext?: RunCliOptions["usageContext"], allowedAgents?: AgentId[], policy?: WorkspacePolicy): Promise<RouteRecommendation> {
-    let settings = await this.loadSettings();
+    let settings = await this.loadSettings(policy?.accounts);
     const workspaceId = usageContext?.workspaceId ?? "personal";
     const loadEnabledSkills = async () => {
       const disabled = workspaceToolSettings(await loadToolSettings(this.options.dataDir), workspaceId).disabledSkills;

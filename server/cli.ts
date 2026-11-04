@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import type { AgentId, NormalizedLine } from "./types.js";
 import { appendUsage, parseCliUsage, type CliUsageSnapshot, type UsageContext, type UsageStatus } from "./usage.js";
 import { parseProviderQuota, saveProviderQuota, type ProviderQuota } from "./quota.js";
+import { ACCOUNT_ENV } from "./workspace-policy.js";
 import { isQuotaExhaustion } from "./quota-fallback.js";
 import { ensureGrokMcpGuard } from "./grok-mcp-guard.js";
 import { bashHookSettings, ensureBashHookScript } from "./claude-bash-hook.js";
@@ -40,6 +41,11 @@ export interface RunCliOptions {
   /** MCP servers the workspace locks off; Grok also gets them disabled in the project config. */
   lockedMcp?: string[];
   usageContext?: UsageContext;
+  /**
+   * The CLI account folder this run uses (the workspace's, server.ts withWorkspaceAccounts):
+   * CLAUDE_CONFIG_DIR / CODEX_HOME / GROK_HOME. Unset: the CLI's default login.
+   */
+  accountDir?: string;
   signal?: AbortSignal;
   /** How long to wait for stdout to drain after the CLI exits before giving up on it (tests shorten it). */
   exitGraceMs?: number;
@@ -570,6 +576,11 @@ function installExitHook() {
   process.once("exit", () => killCliProcessGroups("SIGKILL"));
 }
 
+/** The env that points `agent`'s CLI at an account folder; empty for the default login. */
+export function accountEnv(agent: AgentId, dir: string | undefined): Record<string, string> {
+  return dir ? { [ACCOUNT_ENV[agent]]: dir } : {};
+}
+
 export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
   // SINAWI_SESSION_ID (display) + a per-run SINAWI_COMPUTER_TOKEN: ao-computer is attributed by the token only.
   const computerEnv = computerRunEnv(options.agent, options.usageContext);
@@ -596,7 +607,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     const child = spawn(invocation.command, invocation.args, {
       cwd: invocation.cwd,
       // A permission question waits for the user; Claude must not give up on that MCP call first.
-      env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv, ...(options.permissionMcp || options.leadMcp ? { MCP_TOOL_TIMEOUT: String(Math.max(options.permissionMcp ? PROMPT_TIMEOUT_MS : 0, options.leadMcp ? LEAD_TOOL_TIMEOUT_MS : 0) + 60_000) } : {}) }),
+      env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv, ...accountEnv(options.agent, options.accountDir), ...(options.permissionMcp || options.leadMcp ? { MCP_TOOL_TIMEOUT: String(Math.max(options.permissionMcp ? PROMPT_TIMEOUT_MS : 0, options.leadMcp ? LEAD_TOOL_TIMEOUT_MS : 0) + 60_000) } : {}) }),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
@@ -637,7 +648,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       if (reported) usage = { ...usage, ...reported };
       const quota = parseProviderQuota(options.agent, raw);
       if (quota) {
-        providerQuota = options.agent === "codex" ? { ...quota, source: "codex-stream" } : quota;
+        providerQuota = { ...(options.agent === "codex" ? { ...quota, source: "codex-stream" } : quota), ...(options.accountDir ? { account: options.accountDir } : {}) };
         if (options.usageContext) providerQuotaSave = saveProviderQuota(providerQuota, options.usageContext.dataDir).catch(() => undefined);
       }
       for (const normalized of normalizeCliLine(options.agent, raw)) {
@@ -713,6 +724,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
           workspaceId: context.workspaceId,
           sessionId: context.sessionId,
           role: context.role,
+          ...(options.accountDir ? { account: options.accountDir } : {}),
           ...(usage.tokens ? { tokens: usage.tokens } : {}),
           ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
           ...(usage.planLimits ? { planLimits: usage.planLimits } : {}),

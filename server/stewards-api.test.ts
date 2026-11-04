@@ -9,7 +9,7 @@ import type { Express } from "express";
 import { createServer, startInput } from "./server.js";
 import { loadSchedules } from "./schedules.js";
 import { issueComputerToken, revokeComputerToken } from "./computer-tokens.js";
-import { loadStewards, loadWorkspaceState, saveSessions, saveWorkspaceState } from "./store.js";
+import { loadSessions, loadStewards, loadWorkspaceState, saveSessions, saveStewards, saveWorkspaceState } from "./store.js";
 import { notesPath, saveNotes, userPreferencesPath } from "./steward.js";
 import type { Session } from "./types.js";
 
@@ -306,4 +306,189 @@ test("POST /api/sessions accepts a lead's chat with only steward:{id}", () => {
   assert.equal(startInput({ prompt: "안녕", cwd: "/tmp" }, workspace, "default" as never).agent, undefined, "a plain chat may leave the agent to the workspace (withWorkspaceTeam)");
   assert.throws(() => startInput({ prompt: "안녕", agent: "gpt", cwd: "/tmp" }, workspace, "default" as never), /에이전트/u, "an unknown agent is still refused");
   assert.equal(startInput({ cwd: "/tmp" }, workspace, "default" as never).prompt, "", "no prompt: an empty chat");
+});
+
+// ---------- leads per workspace (공간) ----------
+
+const twoWorkspaces = { currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }, { id: "side", name: "사이드" }, { id: "other", name: "기타" }], defaults: {} };
+
+async function spacesFixture(t: test.TestContext, sessions: Session[] = [], stewards: Parameters<typeof saveStewards>[0] = []) {
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-stewards-spaces-"));
+  await saveWorkspaceState(twoWorkspaces, directory);
+  if (sessions.length) await saveSessions(sessions, directory);
+  if (stewards.length) await saveStewards(stewards, directory);
+  const created = server(directory);
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true }); });
+  return { directory, ...created };
+}
+
+test("each workspace lists only its own leads; a new lead joins the workspace it was made in", async (t) => {
+  const { app } = await spacesFixture(t);
+  const home = await request(app, "POST", "/api/stewards", { name: "홈" });
+  assert.equal(home.body.workspaceId, "default", "no workspaceId: the current workspace");
+  const side = await request(app, "POST", "/api/stewards", { name: "사이드 담당", workspaceId: "side" });
+  assert.equal(side.status, 201);
+  assert.equal(side.body.workspaceId, "side");
+  assert.deepEqual((await request(app, "GET", "/api/stewards?workspace=default")).body.map((item: any) => item.name), ["홈"]);
+  assert.deepEqual((await request(app, "GET", "/api/stewards?workspace=side")).body.map((item: any) => item.name), ["사이드 담당"]);
+  assert.equal((await request(app, "GET", "/api/stewards")).body.length, 2, "no query: every lead");
+  assert.equal((await request(app, "GET", "/api/stewards?workspace=missing")).status, 400);
+  assert.equal((await request(app, "POST", "/api/stewards", { name: "x", workspaceId: "missing" })).status, 400);
+});
+
+test("lead names are unique inside a workspace and may repeat in another workspace", async (t) => {
+  const { app } = await spacesFixture(t);
+  const home = await request(app, "POST", "/api/stewards", { name: "API", workspaceId: "default" });
+  const side = await request(app, "POST", "/api/stewards", { name: "API", workspaceId: "side" });
+  assert.equal(home.status, 201);
+  assert.equal(side.status, 201, JSON.stringify(side.body));
+  assert.equal((await request(app, "POST", "/api/stewards", { name: "api", workspaceId: "side" })).status, 400);
+  assert.equal((await request(app, "PATCH", `/api/stewards/${side.body.id}`, { workspaceId: "default" })).status, 400, "moving must preserve destination name uniqueness");
+});
+
+test("lead names resolve in the requested workspace first and ambiguous cross-workspace names require an id", async (t) => {
+  const { app } = await spacesFixture(t);
+  const home = (await request(app, "POST", "/api/stewards", { name: "API", workspaceId: "default", systemPrompt: "home" })).body;
+  const side = (await request(app, "POST", "/api/stewards", { name: "API", workspaceId: "side", systemPrompt: "side" })).body;
+  const only = (await request(app, "POST", "/api/stewards", { name: "Only", workspaceId: "default" })).body;
+  const local = await request(app, "GET", "/api/stewards/API?workspace=side");
+  assert.equal(local.status, 200, JSON.stringify(local.body));
+  assert.equal(local.body.id, side.id);
+  assert.equal((await request(app, "GET", "/api/stewards/Only?workspace=other")).body.id, only.id);
+  const patched = await request(app, "PATCH", "/api/stewards/API?workspace=side", { systemPrompt: "side changed" });
+  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  assert.equal(patched.body.id, side.id);
+  assert.equal((await request(app, "GET", `/api/stewards/${home.id}`)).body.systemPrompt, "home");
+  assert.equal((await request(app, "GET", `/api/stewards/${side.id}`)).body.systemPrompt, "side changed");
+  const ambiguous = await request(app, "GET", "/api/stewards/API?workspace=other");
+  assert.equal(ambiguous.status, 400);
+  assert.match(ambiguous.body.error, /여러 공간.*ID/u);
+});
+
+test("deleting a workspace preflights duplicate lead names before moving any contents", async (t) => {
+  const { app } = await spacesFixture(t);
+  const home = (await request(app, "POST", "/api/stewards", { name: "API", workspaceId: "default" })).body;
+  const side = (await request(app, "POST", "/api/stewards", { name: "API", workspaceId: "side" })).body;
+  const group = (await request(app, "POST", "/api/groups", { name: "Side group", workspaceId: "side" })).body;
+  const removed = await request(app, "DELETE", "/api/workspaces/side?moveTo=default");
+  assert.equal(removed.status, 409);
+  assert.match(removed.body.error, /이미.*API.*담당/u);
+  assert.equal((await request(app, "GET", `/api/stewards/${home.id}`)).body.workspaceId, "default");
+  assert.equal((await request(app, "GET", `/api/stewards/${side.id}`)).body.workspaceId, "side");
+  assert.equal((await request(app, "GET", "/api/groups?workspace=side")).body.find((item: any) => item.id === group.id)?.workspaceId, "side");
+  assert.equal((await request(app, "GET", "/api/workspaces")).body.workspaces.some((item: any) => item.id === "side"), true);
+});
+
+test("a rejected combined lead rename and move leaves the lead unchanged", async (t) => {
+  const { app } = await spacesFixture(t);
+  await request(app, "POST", "/api/stewards", { name: "Taken", workspaceId: "default" });
+  const side = (await request(app, "POST", "/api/stewards", { name: "Original", workspaceId: "side", systemPrompt: "before" })).body;
+  const changed = await request(app, "PATCH", `/api/stewards/${side.id}`, { name: "Taken", workspaceId: "default", systemPrompt: "after" });
+  assert.equal(changed.status, 400);
+  const unchanged = (await request(app, "GET", `/api/stewards/${side.id}`)).body;
+  assert.equal(unchanged.name, "Original");
+  assert.equal(unchanged.workspaceId, "side");
+  assert.equal(unchanged.systemPrompt, "before");
+});
+
+test("leads saved before workspaces had leads go to their chats' workspace, else the first one", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const chat = { ...legacyLead(cwd), workspaceId: "side", steward: { ...legacyLead(cwd).steward!, id: "with-chat" } };
+  const old = (id: string, name: string) => ({ id, name, agent: "claude" as const, skills: [], systemPrompt: "", workers: [], mergePolicy: "ask" as const, cwds: [cwd], createdAt: "2026-01-01T00:00:00.000Z" });
+  const { app, directory } = await spacesFixture(t, [chat], [old("with-chat", "api"), old("no-chat", "빈 담당")]);
+  const side = (await request(app, "GET", "/api/stewards?workspace=side")).body;
+  assert.deepEqual(side.map((item: any) => item.id), ["with-chat"]);
+  assert.deepEqual((await request(app, "GET", "/api/stewards?workspace=default")).body.map((item: any) => item.id), ["no-chat"]);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const saved = await loadStewards(directory);
+  assert.deepEqual(Object.fromEntries(saved.map((item) => [item.id, item.workspaceId])), { "with-chat": "side", "no-chat": "default" }, "the placement is saved");
+});
+
+test("a lead's chats follow the lead between workspaces, and a new thread opens in the lead's workspace", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const { app, directory } = await spacesFixture(t);
+  const lead = (await request(app, "POST", "/api/stewards", { name: "이동", cwds: [cwd], workspaceId: "side" })).body;
+  // Asked for from the default workspace (an MCP call, say): the thread still goes to the lead's.
+  const thread = await request(app, "POST", "/api/sessions", { steward: { id: lead.id }, agent: "claude", workers: ["claude"], workspaceId: "default" });
+  assert.equal(thread.status, 201, JSON.stringify(thread.body));
+  assert.equal(thread.body.workspaceId, "side");
+
+  // Moving the lead moves its chats.
+  const moved = await request(app, "PATCH", `/api/stewards/${lead.id}`, { workspaceId: "default" });
+  assert.equal(moved.status, 200);
+  assert.equal(moved.body.workspaceId, "default");
+  assert.equal((await request(app, "GET", "/api/sessions?workspace=default")).body.find((item: any) => item.id === thread.body.id)?.workspaceId, "default");
+  assert.equal((await request(app, "PATCH", `/api/stewards/${lead.id}`, { workspaceId: "missing" })).status, 400);
+
+  // Moving one of its chats moves the lead too.
+  const chat = await request(app, "PATCH", `/api/sessions/${thread.body.id}/workspace`, { workspaceId: "side" });
+  assert.equal(chat.status, 200);
+  assert.equal((await request(app, "GET", `/api/stewards/${lead.id}`)).body.workspaceId, "side");
+  assert.equal((await loadStewards(directory)).find((item) => item.id === lead.id)?.workspaceId, "side");
+
+  // A deleted workspace hands its leads (with or without chats) to the one its contents move to.
+  const lonely = (await request(app, "POST", "/api/stewards", { name: "혼자", workspaceId: "side" })).body;
+  assert.equal((await request(app, "DELETE", "/api/workspaces/side?moveTo=default")).status, 200);
+  assert.deepEqual((await request(app, "GET", "/api/stewards?workspace=default")).body.map((item: any) => item.id).sort(), [lead.id, lonely.id].sort());
+  assert.equal((await loadSessions(directory)).find((item) => item.id === thread.body.id)?.workspaceId, "default");
+});
+
+test("re-enabling a lead chat moved elsewhere returns the chat to its lead's workspace", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const chat = legacyLead(cwd);
+  const { app, directory } = await spacesFixture(t, [chat]);
+  assert.equal((await request(app, "PATCH", "/api/sessions/lead-1/steward", { enabled: false })).status, 200);
+  assert.equal((await request(app, "PATCH", "/api/sessions/lead-1/workspace", { workspaceId: "side" })).status, 200);
+  const enabled = await request(app, "PATCH", "/api/sessions/lead-1/steward", { enabled: true });
+  assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
+  assert.equal(enabled.body.workspaceId, "default");
+  assert.equal((await loadSessions(directory)).find((item) => item.id === "lead-1")?.workspaceId, "default");
+});
+
+test("a disabled entity thread remembers its lead across a move and server restart", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const { app, directory } = await spacesFixture(t);
+  const lead = (await request(app, "POST", "/api/stewards", { name: "기억", cwds: [cwd], workspaceId: "side" })).body;
+  const thread = (await request(app, "POST", "/api/sessions", { steward: { id: lead.id }, workspaceId: "default" })).body;
+  assert.notEqual(thread.id, lead.id);
+  assert.equal((await request(app, "PATCH", `/api/sessions/${thread.id}/steward`, { enabled: false })).status, 200);
+  assert.equal((await request(app, "PATCH", `/api/sessions/${thread.id}/workspace`, { workspaceId: "default" })).status, 200);
+  assert.equal((await loadSessions(directory)).find((item) => item.id === thread.id)?.disabledStewardId, lead.id);
+
+  const restarted = server(directory);
+  t.after(() => { restarted.httpServer.close(); restarted.websocket.close(); });
+  const enabled = await request(restarted.app, "PATCH", `/api/sessions/${thread.id}/steward`, { enabled: true });
+  assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
+  assert.equal(enabled.body.workspaceId, "side");
+  assert.equal(enabled.body.steward.id, lead.id);
+  const saved = (await loadSessions(directory)).find((item) => item.id === thread.id)!;
+  assert.equal(saved.disabledStewardId, undefined);
+  assert.equal(saved.steward?.id, lead.id);
+});
+
+test("a disabled thread whose old lead was deleted safely becomes a new lead", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const { app } = await spacesFixture(t);
+  const lead = (await request(app, "POST", "/api/stewards", { name: "삭제 전", cwds: [cwd], workspaceId: "side" })).body;
+  const thread = (await request(app, "POST", "/api/sessions", { steward: { id: lead.id } })).body;
+  await request(app, "PATCH", `/api/sessions/${thread.id}/steward`, { enabled: false });
+  assert.equal((await request(app, "DELETE", `/api/stewards/${lead.id}`)).status, 204);
+  const enabled = await request(app, "PATCH", `/api/sessions/${thread.id}/steward`, { enabled: true, name: "새 담당" });
+  assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
+  assert.equal(enabled.body.steward.id, thread.id);
+  assert.equal((await request(app, "GET", `/api/stewards/${thread.id}`)).body.name, "새 담당");
+});
+
+test("a lead's peers are the leads of its own workspace", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const chat = (id: string, name: string, workspaceId: string): Session => ({ ...legacyLead(cwd), id, workspaceId, events: [], steward: { turns: 0, since: "2026-01-01T00:00:00.000Z", name } });
+  const { app } = await spacesFixture(t, [chat("a", "가", "default"), chat("b", "나", "default"), chat("c", "다", "side")]);
+  const peers = (await request(app, "GET", "/api/sessions/a/steward")).body.peers.map((item: any) => item.name);
+  assert.deepEqual(peers, ["나"]);
 });

@@ -52,3 +52,13 @@ body.sidebar-dragging, body.sidebar-dragging * { cursor: grabbing !important; us
 .ctx-meta kbd { font: inherit; color: var(--text-subtle); }
 .ctx-item.checked { font-weight: 600; }
 .ctx-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent-tint); color: var(--accent-fg); font-weight: 600; }
+
+.steward-move-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: var(--backdrop); }
+.steward-move-dialog { width: min(380px, 100%); display: grid; gap: 12px; padding: 18px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg-raised); box-shadow: var(--shadow-lg); color: var(--text); }
+.steward-move-dialog h4, .steward-move-dialog p { margin: 0; }
+.steward-move-dialog p { color: var(--text-secondary); font-size: calc(13px * var(--font-scale)); }
+.steward-move-dialog label { display: grid; gap: 6px; color: var(--text-secondary); font-size: calc(12px * var(--font-scale)); }
+.steward-move-dialog select { height: 34px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+.steward-move-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.steward-move-actions button { min-height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+.steward-move-actions button.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }

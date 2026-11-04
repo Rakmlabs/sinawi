@@ -1,14 +1,34 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { filterEnabledSkills, formatSkillPrompt, scanClaudePlugins, scanProjectSkills, scanSkillRoot } from "./skills.js";
+import { clearSkillsCache, filterEnabledSkills, formatSkillPrompt, loadSkills, scanClaudePlugins, scanProjectSkills, scanSkillRoot } from "./skills.js";
 
 test("disabled skill names are excluded from discovery and prompt injection", () => {
   const records = [{ id: "one", name: "Review", source: "Test", description: "", agents: ["codex" as const], content: "SECRET" }];
   assert.deepEqual(filterEnabledSkills(records, ["review"]), []);
   assert.equal(formatSkillPrompt(records, ["one"], ["Review"]), "");
+});
+
+test("skill discovery uses inherited CLI account roots", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-inherited-skills-"));
+  const cwd = await mkdtemp(join(tmpdir(), "orchestra-inherited-project-"));
+  const previous = process.env.CODEX_HOME;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previous;
+    clearSkillsCache();
+    await Promise.all([root, cwd].map((directory) => rm(directory, { recursive: true, force: true })));
+  });
+  const skill = join(root, "skills", "inherited-codex");
+  await mkdir(skill, { recursive: true });
+  await writeFile(join(skill, "SKILL.md"), "---\nname: inherited-codex\ndescription: Inherited account skill\n---\n");
+  process.env.CODEX_HOME = root;
+
+  const skills = await loadSkills(cwd, true);
+
+  assert.ok(skills.some((item) => item.name === "inherited-codex" && item.agents.includes("codex")));
 });
 
 test("skill discovery follows symlinked skill directories", async () => {

@@ -83,6 +83,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "ws-grok-mcp", category: "workspaces", section: "wsset.rules", label: "wsset.grokMcp", description: "wsset.grokMcpHint", keywords: "grok mcp" },
   { id: "ws-blocked", category: "workspaces", section: "wsset.rules", label: "wsset.blockedTools", description: "wsset.blockedToolsHint", keywords: "block tool mcp 차단 도구" },
   { id: "ws-alerts", category: "workspaces", section: "wsset.rules", label: "wsset.alertTools", description: "wsset.alertToolsHint", keywords: "auth alert 인증 알림" },
+  { id: "ws-accounts", category: "workspaces", section: "wsset.rules", label: "wsset.accounts", description: "wsset.accountsHint", keywords: "account login CLAUDE_CONFIG_DIR CODEX_HOME GROK_HOME 계정 로그인" },
   { id: "ws-media-prompt", category: "workspaces", section: "wsset.rules", label: "wsset.mediaPrompt", description: "wsset.mediaPromptHint", keywords: "media prompt 미디어 안내" },
   { id: "allowed", category: "agents", section: "set.agents.allowed", label: "set.agents.allowed", description: "set.agents.allowedDesc", keywords: "agent allow codex claude grok 에이전트 허용" },
   { id: "quotaFallback", category: "agents", section: "set.agents.switching", label: "allowed.autoSwitch", description: "set.agents.quotaDesc", keywords: "quota fallback switch 한도 자동 전환" },

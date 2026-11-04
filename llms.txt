@@ -1,6 +1,6 @@
 # Sinawi
 
-> Sinawi is a macOS app (Tauri + React + a local Node/Express server on 127.0.0.1:3001) that runs the Claude Code, Codex and Grok Build CLIs as one team: a lead plans and delegates to workers, project leads own a project long-term, and schedules, workspaces, skills and merge policies organize the work. Other AIs (Claude Desktop, Cursor, …) can drive it through an MCP server, connected with a button in the app's settings, `npx -y @rakmlabs/sinawi mcp` (the npm package `@rakmlabs/sinawi`), or the bridge bundled in the app (`/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`); its risky tools wait for the user's approval in the app.
+> Sinawi is a macOS app (Tauri + React + a local Node/Express server on 127.0.0.1:3001) that runs the Claude Code, Codex and Grok Build CLIs as one team: a lead plans and delegates to workers, project leads own a project long-term, and schedules, workspaces (spaces: each with its own chats, leads, policy and, optionally, its own CLI logins), skills and merge policies organize the work. Other AIs (Claude Desktop, Cursor, …) can drive it through an MCP server, connected with a button in the app's settings, `npx -y @rakmlabs/sinawi mcp` (the npm package `@rakmlabs/sinawi`), or the bridge bundled in the app (`/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`); its risky tools wait for the user's approval in the app.
 
 Start with the AI reference: it lists every MCP tool (generated from `server/app-tools.ts`), how to connect and authenticate, the HTTP API and the known limits.
 

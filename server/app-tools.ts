@@ -298,7 +298,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "create_session", risk: "write", method: "POST", route: "/api/sessions",
-    description: "새 채팅을 연다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 스레드로 열면 팀·폴더는 담당 것을 쓴다. 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다.",
+    description: "새 채팅을 연다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 스레드로 열면 팀·폴더·워크스페이스는 담당 것을 쓴다. 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다.",
     properties: {
       prompt: str("첫 메시지(할 일). 비우면 빈 채팅."),
       title: str("채팅 제목(선택). 비우면 첫 메시지에서 만든다."),
@@ -338,7 +338,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "ask_running_session", risk: "write", method: "POST", route: "/api/sessions/:id/live",
-    description: "실행 중인 채팅에 진행을 멈추지 않고 곁가지 질문을 한다(\"지금 어디까지 했어?\"). 답은 채팅에 따로 붙는다.",
+    description: "실행 중인 채팅에 진행을 멈추지 않고 곁가지 질문을 한다(\"지금 어디까지 했어?\"). 답은 채팅에 따로 붙는다. 호출자와 같은 공간의 채팅에만 물을 수 있다.",
     properties: { session_id: str("실행 중인 채팅 ID."), prompt: str("질문.") }, required: ["session_id", "prompt"],
     path: (args) => `/api/sessions/${seg(args, "session_id")}/live`,
     body: (args) => ({ prompt: args.prompt }),
@@ -442,7 +442,12 @@ const APP: AppTool[] = [
   }),
 
   // ----- 담당(프로젝트 리드) -----
-  routeTool({ name: "list_leads", risk: "read", method: "GET", route: "/api/stewards", description: "프로젝트 담당 목록: 이름, 팀, 병합 정책(auto/ask/never), 폴더, 일일 보고 시각." }),
+  routeTool({
+    name: "list_leads", risk: "read", method: "GET", route: "/api/stewards",
+    description: "프로젝트 담당 목록: 이름, 팀, 병합 정책(auto/ask/never), 폴더, 일일 보고 시각, 워크스페이스. 담당 이름은 워크스페이스 안에서 고유하며 다른 공간에서는 같을 수 있다. 기본은 지금 워크스페이스(담당이 부르면 그 담당의 워크스페이스)의 담당만.",
+    properties: { workspace_id: workspaceArg, all_workspaces: bool("true면 모든 워크스페이스의 담당.") },
+    path: (args, ctx) => `/api/stewards${args.all_workspaces === true ? "" : query({ workspace: args.workspace_id ?? ctx.workspaceId })}`,
+  }),
   routeTool({
     name: "get_lead", risk: "read", method: "GET", route: "/api/stewards/:id",
     description: "담당 하나의 설정, 노트(담당이 기억하는 것), 스레드(채팅) 목록.",
@@ -452,21 +457,22 @@ const APP: AppTool[] = [
     name: "create_lead", risk: "write", method: "POST", route: "/api/stewards",
     description: "프로젝트 담당을 만든다. 담당은 폴더(cwds)를 맡아 워커에게 일을 나누고 결과를 합친다. 병합 정책은 ask(기본, 병합 전에 사용자에게 물음) 또는 never만 정할 수 있다. auto는 update_lead로(승인 필요).",
     properties: {
-      name: str("담당 이름 (고유)."), agent: agentEnum("담당 자신의 CLI."), model: str("모델(선택)."),
+      name: str("담당 이름 (워크스페이스 안에서 고유)."), agent: agentEnum("담당 자신의 CLI."), model: str("모델(선택)."),
       system_prompt: str("담당 지침."), skills: strings("담당 스킬."),
       workers: { type: "array", items: { type: "object", properties: { agent: agentEnum("워커 CLI."), model: str("모델.") }, required: ["agent"] }, description: "담당의 워커들." },
       merge_policy: { type: "string", enum: ["ask", "never"], description: "ask: 병합 전에 물음 (기본). never: 병합 안 함." },
       cwds: strings("맡을 프로젝트 폴더 절대 경로."), report: str("일일 보고 시각 HH:MM (선택)."),
+      workspace_id: str("담당이 속할 워크스페이스(공간) ID. 비우면 지금 워크스페이스(담당이 부르면 그 담당의 워크스페이스)."),
     },
     required: ["name"],
-    body: (args) => {
+    body: (args, ctx) => {
       if (args.merge_policy !== undefined && args.merge_policy !== "ask" && args.merge_policy !== "never") throw new Error("새 담당의 merge_policy는 ask 또는 never입니다. auto는 update_lead로 바꾸세요(사용자 승인 필요).");
-      return defined({ name: args.name, agent: args.agent, model: args.model, systemPrompt: args.system_prompt, skills: args.skills, workers: workerSelections(args.workers), mergePolicy: args.merge_policy, cwds: args.cwds, report: args.report });
+      return defined({ name: args.name, agent: args.agent, model: args.model, systemPrompt: args.system_prompt, skills: args.skills, workers: workerSelections(args.workers), mergePolicy: args.merge_policy, cwds: args.cwds, report: args.report, workspaceId: args.workspace_id ?? ctx.workspaceId });
     },
   }),
   routeTool({
     name: "update_lead", risk: "approval", method: "PATCH", route: "/api/stewards/:id",
-    description: "담당 설정(이름, 지침, 팀, 병합 정책, 폴더, 노트, 보고 시각)을 바꾼다. 준 값만 바뀐다. 사용자 승인 후 적용된다.",
+    description: "담당 설정(이름, 지침, 팀, 병합 정책, 폴더, 노트, 보고 시각, 워크스페이스)을 바꾼다. 준 값만 바뀐다. workspace_id를 주면 담당과 그 채팅이 모두 그 워크스페이스로 옮겨진다. 사용자 승인 후 적용된다.",
     properties: {
       lead_id: str("담당 ID."), name: str("새 이름."), agent: agentEnum("담당 CLI."), model: str("모델."),
       reasoning_effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"] },
@@ -474,10 +480,11 @@ const APP: AppTool[] = [
       workers: { type: "array", items: { type: "object", properties: { agent: agentEnum("워커 CLI."), model: str("모델.") }, required: ["agent"] } },
       merge_policy: { type: "string", enum: ["auto", "ask", "never"], description: "auto: 검증되면 바로 병합. ask: 병합 전에 물음. never: 병합 안 함." },
       cwds: strings("맡을 폴더."), notes: str("담당 노트 전체(덮어씀)."), report: str("일일 보고 시각 HH:MM. 빈 문자열이면 끔."),
+      workspace_id: str("옮길 워크스페이스(공간) ID. 담당의 채팅도 함께 옮겨진다."),
     },
     required: ["lead_id"],
     path: (args) => `/api/stewards/${seg(args, "lead_id")}`,
-    body: (args) => defined({ name: args.name, agent: args.agent, model: args.model, reasoningEffort: args.reasoning_effort, systemPrompt: args.system_prompt, skills: args.skills, workers: workerSelections(args.workers), mergePolicy: args.merge_policy, cwds: args.cwds, notes: args.notes, report: args.report }),
+    body: (args) => defined({ name: args.name, agent: args.agent, model: args.model, reasoningEffort: args.reasoning_effort, systemPrompt: args.system_prompt, skills: args.skills, workers: workerSelections(args.workers), mergePolicy: args.merge_policy, cwds: args.cwds, notes: args.notes, report: args.report, workspaceId: args.workspace_id }),
     summary: (args, names) => `담당 ${names.lead(args.lead_id)} 설정 변경: ${Object.keys(args).filter((key) => key !== "lead_id").join(", ") || "(없음)"}`,
   }),
   routeTool({
@@ -488,7 +495,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "get_session_lead", risk: "read", method: "GET", route: "/api/sessions/:id/steward",
-    description: "담당 채팅의 담당 상태: 담당, 노트, 대기 병합, 턴 수, 보고 시각, 다른 담당 목록.",
+    description: "담당 채팅의 담당 상태: 담당, 노트, 대기 병합, 턴 수, 보고 시각, 같은 워크스페이스의 다른 담당 목록. 담당끼리 묻기(ASK)는 같은 워크스페이스 안에서만 된다.",
     properties: { session_id: str("담당 채팅 ID.") }, required: ["session_id"], path: (args) => `/api/sessions/${seg(args, "session_id")}/steward`,
   }),
   routeTool({
@@ -571,7 +578,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "update_workspace_settings", risk: "approval", method: "PATCH", route: "/api/workspaces",
-    description: "워크스페이스의 기본값(defaults: 폴더 cwd, 팀 agent/workers, 허용 에이전트 allowedAgents, 한도 자동 전환 quotaFallback 등 — 통째로 바뀜)이나 정책(policy: 미디어 생성, 컴퓨터 조작, 전체 권한, 차단 도구 등 — 준 값만 합쳐짐)을 바꾼다. list_workspaces로 지금 값을 읽고 고쳐서 보낸다. 사용자 승인 후 적용된다.",
+    description: "워크스페이스의 기본값(defaults: 폴더 cwd, 팀 agent/workers, 허용 에이전트 allowedAgents, 한도 자동 전환 quotaFallback 등 — 통째로 바뀜)이나 정책(policy: 미디어 생성, 컴퓨터 조작, 전체 권한, 차단 도구, CLI 계정 폴더 accounts {claude, codex, grok: 절대 경로, 빈 문자열이면 기본 로그인} 등 — 준 값만 합쳐짐)을 바꾼다. list_workspaces로 지금 값을 읽고 고쳐서 보낸다. 사용자 승인 후 적용된다.",
     properties: { workspace_id: str("워크스페이스 ID."), defaults: { type: "object", description: "공간 기본값 전체." }, policy: { type: "object", description: "바꿀 정책 항목." } },
     required: ["workspace_id"],
     body: (args) => {
@@ -582,7 +589,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "delete_workspace", risk: "approval", method: "DELETE", route: "/api/workspaces/:id",
-    description: "워크스페이스를 지운다. 그 안의 채팅과 그룹은 move_to(비우면 남은 첫 공간)로 옮겨진다. 실행 중인 채팅이 있으면 안 된다. 사용자 승인 후 지워진다.",
+    description: "워크스페이스를 지운다. 그 안의 채팅, 그룹, 담당은 move_to(비우면 남은 첫 공간)로 옮겨진다. 실행 중인 채팅이 있으면 안 된다. 사용자 승인 후 지워진다.",
     properties: { workspace_id: str("지울 워크스페이스 ID."), move_to: str("내용을 옮길 워크스페이스 ID.") }, required: ["workspace_id"],
     path: (args) => `/api/workspaces/${seg(args, "workspace_id")}${query({ moveTo: args.move_to })}`,
     summary: (args, names) => `워크스페이스 ${names.workspace(args.workspace_id)} 삭제${args.move_to ? ` (내용 → ${names.workspace(args.move_to)})` : ""}`,

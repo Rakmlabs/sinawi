@@ -1,4 +1,4 @@
-import type { Bot as Preset, Group, SkillInfo as Skill, WorkspaceId } from "../../server/types";
+import type { AgentId, Bot as Preset, Group, SkillInfo as Skill, WorkspaceId } from "../../server/types";
 import { t } from "../i18n";
 
 export type Bootstrap = {
@@ -16,6 +16,16 @@ export type Bootstrap = {
 };
 
 export type Api = <T>(path: string, body?: unknown, method?: string) => Promise<T>;
+
+/** Adds an explicit workspace selector to GET endpoints whose response depends on workspace policy. */
+export function workspacePath(path: string, workspaceId: WorkspaceId): string {
+  return `${path}${path.includes("?") ? "&" : "?"}workspace=${encodeURIComponent(workspaceId)}`;
+}
+
+/** Stable dependency key for the account folders that control model and auth discovery. */
+export function accountScopeKey(accounts: Partial<Record<AgentId, string>> | undefined): string {
+  return (["claude", "codex", "grok"] as AgentId[]).map((agent) => accounts?.[agent] ?? "").join("\u0000");
+}
 
 export async function workspaceApi<T>(
   path: string,

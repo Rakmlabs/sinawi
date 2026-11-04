@@ -132,7 +132,7 @@ export function stewardFromSession(session: Session, options: { id?: string; mer
     workers: structuredClone(session.workerConfigs ?? session.workers.map((agent) => ({ agent }))),
     skills: [...(session.skills ?? [])], systemPrompt: session.systemPrompt ?? "",
     mergePolicy,
-    cwds: [session.cwd], createdAt: session.steward?.since || session.createdAt || now,
+    cwds: [session.cwd], workspaceId: session.workspaceId, createdAt: session.steward?.since || session.createdAt || now,
   };
 }
 
@@ -263,6 +263,7 @@ function peerRules(peers: StewardPeer[]): string {
 ### 다른 프로젝트 담당
 ${peers.map((peer) => `- 「${peer.name}」 — \`${peer.cwd}\``).join("\n")}
 다른 프로젝트에 확인하거나 부탁할 일이 있으면 응답에 아래 블록을 씁니다. 그 폴더를 직접 고치지 않습니다. 앱이 이번 턴이 끝난 뒤 전달하고, 그 담당의 답을 이 채팅의 새 메시지로 가져옵니다. 답을 기다리는 일은 체크리스트에 열어 두지 말고 "물어봄"으로 표시해 끝냅니다.
+같은 공간의 담당에게만 물을 수 있습니다. 다른 공간 담당에게는 이름이나 ID로도 물을 수 없습니다.
 <<ASK to="담당 이름">>
 (질문이나 부탁: 그 담당이 이 대화를 모른다고 생각하고 필요한 맥락을 적습니다)
 <</ASK>>`;

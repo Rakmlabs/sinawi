@@ -20,6 +20,8 @@ export interface UsageRun {
   workspaceId: WorkspaceId;
   sessionId: string;
   role: UsageRole;
+  /** The CLI account folder the run used (the workspace's); unset for the default login. */
+  account?: string;
   tokens?: UsageTokens;
   costUsd?: number;
   durationMs: number;

@@ -1,6 +1,17 @@
 /** 설정 도우미: pure state helpers (tested). */
 import type { SetupTool } from "../server/setup";
+import { accountLoginCommand } from "../server/workspace-policy";
+import type { AgentId, WorkspaceId } from "../server/types";
 import { t, type MessageKey } from "./i18n";
+
+export function environmentSettingsPath(workspaceId: WorkspaceId | undefined): string {
+  return workspaceId ? `/api/settings?workspace=${encodeURIComponent(workspaceId)}` : "/api/settings";
+}
+
+export function environmentLoginCommand(tool: SetupTool, accounts: Partial<Record<AgentId, string>>): string | undefined {
+  if (!tool.agent || !(["claude", "codex", "grok"] as string[]).includes(tool.id)) return tool.login;
+  return accountLoginCommand(tool.id as AgentId, accounts[tool.id as AgentId]);
+}
 
 export const ONBOARDING_STORE = "orchestra.onboarding";
 export const ONBOARDING_OPEN_EVENT = "orchestra:open-onboarding";

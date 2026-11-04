@@ -4,9 +4,10 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Bell, ExternalLink, FolderOpen, Monitor, MousePointerClick, RefreshCw, Sparkles, SquareTerminal } from "lucide-react";
 import type { PermissionId, SetupTool } from "../../server/setup";
 import type { SetupInfo } from "../Onboarding";
+import { accountScopeKey } from "../app/api";
 import { CopyButton } from "../CopyButton";
 import { openTerminal } from "../terminal-events";
-import { loadProgress, ONBOARDING_OPEN_EVENT, permissionView, saveProgress, tauriInvoke, type AuthStatus, type PermState } from "../onboarding-state";
+import { environmentLoginCommand, environmentSettingsPath, loadProgress, ONBOARDING_OPEN_EVENT, permissionView, saveProgress, tauriInvoke, type AuthStatus, type PermState } from "../onboarding-state";
 import { t } from "../i18n";
 import { WebLink } from "../WebLink";
 import { ComputerUseWorkspaceRows } from "../ComputerUse";
@@ -32,15 +33,17 @@ export function EnvironmentPage({ onClose }: { onClose: () => void }) {
   const [notice, setNotice] = useState("");
   const [requesting, setRequesting] = useState<PermissionId>();
   const [notification, setNotification] = useState<string>(() => typeof Notification === "undefined" ? "unknown" : Notification.permission);
-  const { currentId } = useWorkspaces();
+  const { currentId, settings } = useWorkspaces();
+  const accounts = currentId ? settings[currentId]?.accounts ?? {} : {};
+  const accountsKey = accountScopeKey(accounts);
 
   const check = useCallback(async (refreshAuth = false) => {
     setChecking(true); setError("");
     try {
-      if (refreshAuth) await json("/api/settings/models/refresh", { method: "POST" }).catch(() => undefined);
+      if (refreshAuth) await json("/api/settings/models/refresh", { method: "POST", body: JSON.stringify({ reason: "settings", ...(currentId ? { workspaceId: currentId } : {}) }) }).catch(() => undefined);
       const [info, settings] = await Promise.all([
         json<SetupInfo>("/api/setup"),
-        json<{ modelOptions?: Record<string, { authStatus?: AuthStatus }> }>("/api/settings").catch(() => ({ modelOptions: {} })),
+        json<{ modelOptions?: Record<string, { authStatus?: AuthStatus }> }>(environmentSettingsPath(currentId)).catch(() => ({ modelOptions: {} })),
       ]);
       setSetup(info);
       setAuth(Object.fromEntries(Object.entries(settings.modelOptions ?? {}).map(([id, option]) => [id, (option as { authStatus?: AuthStatus } | undefined)?.authStatus])));
@@ -48,7 +51,7 @@ export function EnvironmentPage({ onClose }: { onClose: () => void }) {
       if (invoke) setNative(await invoke("permission_status").then((value) => value as Record<PermissionId, PermState>).catch(() => ({})));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setChecking(false); }
-  }, []);
+  }, [currentId, accountsKey]);
   useEffect(() => { void check(); }, [check]);
   useEffect(() => {
     // Coming back from System Settings: re-check.
@@ -117,10 +120,11 @@ export function EnvironmentPage({ onClose }: { onClose: () => void }) {
     <SettingsSection title={t("set.env.login")} description={t("set.env.loginDesc")}>
       {agents.length ? agents.map((tool) => {
         const status = !tool.installed ? "none" : auth[tool.id] ?? "unknown";
+        const login = environmentLoginCommand(tool, accounts);
         return <SettingRow key={tool.id} id={`login-${tool.id}`} label={tool.name}
-          description={status === "authenticated" ? undefined : status === "none" ? t("set.env.notInstalledDesc") : tool.login ? <code className="settings-code">{tool.login}</code> : undefined}
+          description={status === "authenticated" ? undefined : status === "none" ? t("set.env.notInstalledDesc") : login ? <code className="settings-code">{login}</code> : undefined}
           badges={status === "authenticated" ? <StatusBadge tone="ok">{t("ob.loggedIn")}</StatusBadge> : status === "none" ? <StatusBadge tone="muted">{t("ob.notInstalled")}</StatusBadge> : status === "unauthenticated" ? <StatusBadge tone="warn">{t("ob.loginRequired")}</StatusBadge> : <StatusBadge tone="muted">{t("ob.unchecked")}</StatusBadge>}>
-          {tool.installed && status !== "authenticated" && tool.login && <button type="button" className="settings-button" onClick={() => { openTerminal({ command: tool.login! }); onClose(); }}><SquareTerminal size={14} aria-hidden="true" />{t("ob.loginInTerminal")}</button>}
+          {tool.installed && status !== "authenticated" && login && <button type="button" className="settings-button" onClick={() => { openTerminal({ command: login }); onClose(); }}><SquareTerminal size={14} aria-hidden="true" />{t("ob.loginInTerminal")}</button>}
         </SettingRow>;
       }) : <div className="settings-skeleton" aria-busy="true"><span /><span /></div>}
     </SettingsSection>
