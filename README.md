@@ -16,7 +16,7 @@ Chat with a lead that writes the briefs and skills, hands the work out in parall
 
 <br />
 
-<img src="docs/assets/demo.gif" width="860" alt="Demo: a lead hands three tasks to Claude, Codex and Grok at once, reports back, waits for merge approval, then the user switches spaces" />
+<img src="docs/assets/demo.gif" width="860" alt="Demo: a lead delegates work to Claude, Codex and Grok in parallel, each space has its own leads, and risky actions wait for approval" />
 
 <sub>The lead sent two tasks to two Claude workers at the same time, checked both worktrees and reported the commits.</sub>
 

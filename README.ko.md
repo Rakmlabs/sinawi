@@ -16,7 +16,7 @@
 
 <br />
 
-<img src="docs/assets/demo.gif" width="860" alt="데모: 담당이 Claude, Codex, Grok에게 일을 동시에 맡기고 결과를 보고한 뒤 병합 승인을 기다리고, 공간을 바꾸는 화면" />
+<img src="docs/assets/demo.gif" width="860" alt="데모: 담당이 Claude, Codex, Grok에게 일을 동시에 나눠 맡기고, 공간마다 다른 담당이 있으며, 위험한 작업은 승인을 기다리는 화면" />
 
 <sub>담당이 Claude 워커 두 명에게 동시에 일을 맡기고, 두 worktree를 확인한 뒤 커밋을 보고했습니다.</sub>
 
