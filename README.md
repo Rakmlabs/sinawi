@@ -95,6 +95,10 @@ Both servers bind to `127.0.0.1` only. `SINAWI_PORT` and `SINAWI_DATA_DIR` chang
 
 The agents edit files and run commands in the folder you choose. *Plan* mode is read-only, *Auto* mode keeps writes inside the project folder, and *Full access* turns off the CLIs' own sandboxes (for example Claude Code's `--dangerously-skip-permissions`), so it is off unless a workspace explicitly allows it. Sinawi is not a sandbox itself: what an agent can touch ultimately depends on macOS and on each CLI. MCP approval cards guard the MCP tools only; an agent with a shell can still call Sinawi's local HTTP API directly.
 
+## For AI agents
+
+AI agents and MCP clients: start with [llms.txt](llms.txt) and [docs/ai/for-ai.md](docs/ai/for-ai.md) (concepts, MCP setup, every tool with its approval flag, limits). Coding agents working on this repo: [AGENTS.md](AGENTS.md).
+
 ## Contributing
 
 Issues and pull requests are welcome. Open or pick an issue, branch from `main`, and send a pull request that links it. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, checks and conventions.

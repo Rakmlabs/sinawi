@@ -1,0 +1,29 @@
+# Sinawi
+
+> Sinawi is a macOS app (Tauri + React + a local Node/Express server on 127.0.0.1:3001) that runs the Claude Code, Codex and Grok Build CLIs as one team: a lead plans and delegates to workers, project leads own a project long-term, and schedules, workspaces, skills and merge policies organize the work. Other AIs can drive it through an MCP server (`npm run sinawi-mcp`) whose risky tools wait for the user's approval in the app.
+
+Start with the AI reference: it lists every MCP tool (generated from `server/app-tools.ts`), how to connect and authenticate, the HTTP API and the known limits.
+
+## Docs for AI agents
+
+- [For AI agents](https://github.com/Rakmlabs/sinawi/blob/main/docs/ai/for-ai.md): concepts, MCP connection, token, full tool list with approval flags, HTTP API, limits
+- [AI 에이전트용 (Korean)](https://github.com/Rakmlabs/sinawi/blob/main/docs/ai/for-ai.ko.md): the same in Korean, with the registry's own tool descriptions
+- [AGENTS.md](https://github.com/Rakmlabs/sinawi/blob/main/AGENTS.md): for coding agents contributing to this repo — layout, commands, isolated dev setup, commit style, rules
+
+## Product docs
+
+- [README](https://github.com/Rakmlabs/sinawi/blob/main/README.md): what Sinawi does, install, development, safety
+- [Project leads and MCP](https://github.com/Rakmlabs/sinawi/blob/main/docs/mcp.md): leads, merge policy, `sinawi_lead` tools, schedules, Claude Desktop setup
+- [MCP tool coverage](https://github.com/Rakmlabs/sinawi/blob/main/docs/mcp-coverage.md): every tool with the HTTP route it drives, approvals, excluded routes (Korean)
+
+## Code
+
+- [server/app-tools.ts](https://github.com/Rakmlabs/sinawi/blob/main/server/app-tools.ts): the tool registry (`APP_TOOLS`, `ROUTE_EXCLUSIONS`) both MCP surfaces read
+- [scripts/sinawi-mcp.mjs](https://github.com/Rakmlabs/sinawi/blob/main/scripts/sinawi-mcp.mjs): the stdio MCP bridge for external clients
+
+## Optional
+
+- [CONTRIBUTING.md](https://github.com/Rakmlabs/sinawi/blob/main/CONTRIBUTING.md): how issues, branches and pull requests flow
+- [docs/RELEASING.md](https://github.com/Rakmlabs/sinawi/blob/main/docs/RELEASING.md): releases and signed auto-updates (Korean)
+- [docs/orchestration/OPERATING-RULES.md](https://github.com/Rakmlabs/sinawi/blob/main/docs/orchestration/OPERATING-RULES.md): rules the app enforces on leads and workers
+- [README (Korean)](https://github.com/Rakmlabs/sinawi/blob/main/README.ko.md)

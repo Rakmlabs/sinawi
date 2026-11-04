@@ -23,7 +23,8 @@
     "app:build": "tauri build",
     "preapp:dev": "npm run build",
     "release": "node scripts/release.mjs",
-    "sinawi-mcp": "node scripts/sinawi-mcp.mjs"
+    "sinawi-mcp": "node scripts/sinawi-mcp.mjs",
+    "docs:ai": "node --import tsx scripts/gen-ai-docs.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",

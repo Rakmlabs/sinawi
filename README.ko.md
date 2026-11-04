@@ -95,6 +95,10 @@ npm run build      # 타입 검사, Vite 빌드, 서버 번들
 
 에이전트는 고른 폴더에서 파일을 고치고 명령을 실행합니다. **계획** 모드는 읽기만 하고, **자동** 모드는 프로젝트 폴더 안에서만 씁니다. **전체 권한**은 CLI 자체의 샌드박스를 끄기 때문에(예: Claude Code의 `--dangerously-skip-permissions`) 작업 공간에서 명시적으로 허용해야만 켜집니다. 시나위 자체가 샌드박스는 아니며, 에이전트가 실제로 무엇에 접근할 수 있는지는 macOS와 각 CLI에 달려 있습니다. MCP 승인 카드는 MCP 도구만 막으며, 셸을 가진 에이전트는 시나위 로컬 HTTP API를 직접 부를 수 있습니다.
 
+## AI 에이전트용
+
+AI 에이전트와 MCP 클라이언트는 [llms.txt](llms.txt)와 [docs/ai/for-ai.ko.md](docs/ai/for-ai.ko.md)(개념, MCP 연결, 승인 여부가 붙은 전체 도구 목록, 한계)부터 보세요. 이 저장소에서 일하는 코딩 에이전트는 [AGENTS.md](AGENTS.md)를 봅니다.
+
 ## 기여
 
 이슈와 풀 리퀘스트를 환영합니다. 이슈를 열거나 고른 뒤 `main`에서 브랜치를 만들고, 그 이슈를 연결한 풀 리퀘스트를 보내 주세요. 개발 환경, 확인 절차, 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
