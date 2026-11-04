@@ -132,37 +132,3 @@ export function historyStep(entries: readonly string[], direction: -1 | 1, draft
   const index = Math.max(-1, Math.min(entries.length - 1, currentIndex) - 1);
   return { index, value: index === -1 ? draft : entries[index], draft };
 }
-
-// Marker + required space, so a bare "-" or "1." typed mid-sentence is never treated as a list item.
-const LIST_ITEM = /^(\s*)(?:([-*+])|(\d+)([.)]))[ \t](\[[ xX]\][ \t])?/;
-
-function lineBounds(value: string, from: number, to: number) {
-  return { start: value.lastIndexOf("\n", from - 1) + 1, end: (() => { const i = value.indexOf("\n", to); return i < 0 ? value.length : i; })() };
-}
-
-/** Shift+Enter inside a Markdown list item: continue the list, or end it when the item is empty. */
-export function continueListOnNewline(value: string, selectionStart: number, selectionEnd: number): { value: string; caret: number } | undefined {
-  const { start, end } = lineBounds(value, selectionStart, selectionEnd);
-  const line = value.slice(start, end);
-  const match = LIST_ITEM.exec(line);
-  if (!match) return undefined;
-  // Caret inside the marker itself (or in the indentation): plain newline.
-  if (selectionStart - start < match[0].length) return undefined;
-  if (selectionStart === selectionEnd && !line.slice(match[0].length).trim()) {
-    return { value: value.slice(0, start) + value.slice(end), caret: start };
-  }
-  const [, indent, bullet, digits, delimiter, checkbox] = match;
-  const marker = bullet ?? `${Number(digits) + 1}${delimiter}`;
-  const prefix = `${indent}${marker} ${checkbox ? "[ ] " : ""}`;
-  return { value: value.slice(0, selectionStart) + "\n" + prefix + value.slice(selectionEnd), caret: selectionStart + 1 + prefix.length };
-}
-
-/** Tab / Shift+Tab on a list item line: indent or outdent by two spaces. */
-export function indentListLine(value: string, selectionStart: number, outdent: boolean): { value: string; caret: number } | undefined {
-  const { start, end } = lineBounds(value, selectionStart, selectionStart);
-  const line = value.slice(start, end);
-  if (!LIST_ITEM.test(line)) return undefined;
-  if (!outdent) return { value: value.slice(0, start) + "  " + value.slice(start), caret: selectionStart + 2 };
-  const remove = /^(?: {1,2}|\t)/.exec(line)?.[0].length ?? 0;
-  return { value: value.slice(0, start) + value.slice(start + remove), caret: Math.max(start, selectionStart - remove) };
-}

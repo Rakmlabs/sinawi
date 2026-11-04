@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { STOP_CLICK_GRACE_MS, continueListOnNewline, indentListLine, fileToken, stopClickAllowed, handlesCompletionKey, historyEntries, historyStep, matchingSkills, numberedOptions, recentPaths, slashToken } from "./composer";
+import { STOP_CLICK_GRACE_MS, fileToken, stopClickAllowed, handlesCompletionKey, historyEntries, historyStep, matchingSkills, numberedOptions, recentPaths, slashToken } from "./composer";
 
 test("slash suggestions only open for a command at the start", () => {
   assert.deepEqual(slashToken("/", 1), { start: 0, end: 1, query: "" });
@@ -108,39 +108,4 @@ test("a click right after send turned into stop does not stop the run", () => {
   assert.equal(stopClickAllowed(1_000, 1_000 + 300), false);
   assert.equal(stopClickAllowed(1_000, 1_000 + STOP_CLICK_GRACE_MS), true);
   assert.equal(stopClickAllowed(0, 99_999), false);
-});
-
-test("Shift+Enter continues Markdown lists", () => {
-  assert.deepEqual(continueListOnNewline("1. foo", 6, 6), { value: "1. foo\n2. ", caret: 10 });
-  assert.deepEqual(continueListOnNewline("9) foo", 6, 6), { value: "9) foo\n10) ", caret: 11 });
-  assert.equal(continueListOnNewline("- foo", 5, 5)?.value, "- foo\n- ");
-  assert.equal(continueListOnNewline("* foo", 5, 5)?.value, "* foo\n* ");
-  assert.equal(continueListOnNewline("- [x] foo", 9, 9)?.value, "- [x] foo\n- [ ] ");
-  assert.equal(continueListOnNewline("- [ ] foo", 9, 9)?.value, "- [ ] foo\n- [ ] ");
-  assert.equal(continueListOnNewline("a\n  - foo", 9, 9)?.value, "a\n  - foo\n  - ");
-});
-
-test("Shift+Enter mid-line moves the rest into the new item", () => {
-  assert.deepEqual(continueListOnNewline("1. foobar", 6, 6), { value: "1. foo\n2. bar", caret: 10 });
-  assert.equal(continueListOnNewline("1. a\n- b", 4, 4)?.value, "1. a\n2. \n- b");
-});
-
-test("Shift+Enter on an empty list item ends the list", () => {
-  assert.deepEqual(continueListOnNewline("1. a\n2. b\n3. ", 14, 14), { value: "1. a\n2. b\n", caret: 10 });
-  assert.deepEqual(continueListOnNewline("- ", 2, 2), { value: "", caret: 0 });
-  assert.deepEqual(continueListOnNewline("- [ ] ", 6, 6), { value: "", caret: 0 });
-});
-
-test("Shift+Enter leaves non-list lines alone", () => {
-  assert.equal(continueListOnNewline("hello", 5, 5), undefined);
-  assert.equal(continueListOnNewline("-foo", 4, 4), undefined);
-  assert.equal(continueListOnNewline("1.5 liters", 10, 10), undefined);
-  assert.equal(continueListOnNewline("- foo", 1, 1), undefined);
-});
-
-test("Tab and Shift+Tab indent list lines by two spaces", () => {
-  assert.deepEqual(indentListLine("- a\n- b", 7, false), { value: "- a\n  - b", caret: 9 });
-  assert.deepEqual(indentListLine("- a\n    - b", 11, true), { value: "- a\n  - b", caret: 9 });
-  assert.deepEqual(indentListLine("- a", 3, true), { value: "- a", caret: 3 });
-  assert.equal(indentListLine("plain", 2, false), undefined);
 });

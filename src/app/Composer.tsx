@@ -1,7 +1,9 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Shuffle, Square, WandSparkles, X } from "lucide-react";
 import { ComposerPopover } from "../ComposerPopover";
-import { composerAction, composerLocked, continueListOnNewline, indentListLine, stopClickAllowed, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
+import { composerAction, composerLocked, stopClickAllowed, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
+import { continueListOnNewline, indentListLine, isImeComposing, listItemAt } from "../composer-lists";
+import { applyFieldEdit } from "./field-edit";
 import type { SlashItem } from "./useComposerCompletion";
 import { kindFromName } from "../../server/media-kinds";
 import { formatBytes, kindLabel, type MediaRef } from "../viewer-model";
@@ -114,6 +116,9 @@ export function Composer(props: ComposerProps) {
   const stopSince = useRef(0);
   useEffect(() => { stopSince.current = action === "stop" ? Date.now() : 0; }, [action]);
   const clickStop = () => { if (stopClickAllowed(stopSince.current, Date.now())) stopActive(); };
+  // Caret position, so a list line can show how Shift+Enter / Tab will continue it.
+  const [caret, setCaret] = useState(0);
+  const listItem = listItemAt(prompt, Math.min(caret, prompt.length));
   return <div className="composer-area">
     {routing && <div className="thinking" role="status"><Beat /> {t("comp.routing")}</div>}
     {liveNote && <div className="thinking" role="status"><Beat /> {liveNote}</div>}
@@ -182,6 +187,8 @@ export function Composer(props: ComposerProps) {
       </div>}
       <textarea
         ref={composerInput}
+        className={listItem ? "list-line" : undefined}
+        onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
         disabled={composerLocked(sessionRunning, busy)}
         onPaste={pasteImage}
         aria-controls={slash || fileCompletion ? "slash-skills" : undefined}
@@ -208,7 +215,8 @@ export function Composer(props: ComposerProps) {
           setSkillIndex(0); setFileIndex(0);
         }}
         onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing) return;
+          // Hangul IME: the key that commits a syllable must not send, continue a list or indent.
+          if (isImeComposing(e.nativeEvent)) return;
           // Enter with nothing to complete (`/xyz`, `@nomatch`) closes the list and sends as usual.
           const unmatchedEnter = e.key === "Enter" && !e.shiftKey && ((fileCompletion && !fileSuggestions.length) || (slash && !slashItems.length));
           if (unmatchedEnter) { setFileCompletion(undefined); setSlash(undefined); }
@@ -264,23 +272,20 @@ export function Composer(props: ComposerProps) {
             }
           }
           // Markdown list continuation; completion popups already returned above, so Tab only lands here when none is open.
+          // Read the DOM, not `prompt`: with fast typing the textarea is the source of truth.
+          const field = e.currentTarget;
           const listEdit = e.key === "Enter" && e.shiftKey
-            ? continueListOnNewline(prompt, e.currentTarget.selectionStart, e.currentTarget.selectionEnd)
+            ? continueListOnNewline(field.value, field.selectionStart, field.selectionEnd)
             : e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey
-              ? indentListLine(prompt, e.currentTarget.selectionStart, e.shiftKey)
+              ? indentListLine(field.value, field.selectionStart, e.shiftKey)
               : undefined;
           if (listEdit) {
             e.preventDefault();
-            setPrompt(listEdit.value);
-            historyDraft.current = listEdit.value;
-            requestAnimationFrame(() => composerInput.current?.setSelectionRange(listEdit.caret, listEdit.caret));
+            applyFieldEdit(field, listEdit.value, listEdit.caret);
+            setCaret(listEdit.caret);
             return;
           }
-          if (
-            e.key === "Enter" &&
-            !e.shiftKey &&
-            !e.nativeEvent.isComposing
-          ) {
+          if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             void send();
           }
@@ -320,6 +325,7 @@ export function Composer(props: ComposerProps) {
           onChange={(value) => props.setPermissionMode(value as PermissionMode)}
           options={permissionModes(props.fullAccessAllowed).map((item) => ({ value: item.mode, label: item.label, title: item.title, icon: <ShieldCheck size={13} aria-hidden="true" /> }))} />
         <span className="composer-bottom-spacer" />
+        {listItem && <span className="composer-list-hint" aria-hidden="true">{t(listItem.ordered ? "comp.listHintOrdered" : "comp.listHintBullet")}</span>}
         <input ref={fileInput} type="file" multiple hidden onChange={(event) => { attachFiles(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
         <button type="button" className="icon-button" aria-label={t("comp.attachFile")} title={t("comp.attachTitle")} onClick={() => fileInput.current?.click()}><Paperclip size={16} /></button>
         <button

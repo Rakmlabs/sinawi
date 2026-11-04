@@ -2,6 +2,7 @@ import { Children, isValidElement, memo, type ReactElement, type ReactNode } fro
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./CopyButton";
+import { highlightCode } from "./code-highlight";
 import { FileChip, ImageGrid, LinkCard } from "./media-ui";
 import { WebLink } from "./WebLink";
 import { clusterGallery, imageMedia, isUnfurlLink, localMediaRef, parseGalleryPayload } from "./viewer-model";
@@ -17,7 +18,9 @@ function CodeBlock({ className, children }: CodeProps) {
       <span className="code-language">{language ?? "text"}</span>
       <CopyButton text={code} ariaLabel={t("markdown.copyCode")} showLabel />
     </div>
-    <pre><code className={className}>{code}{"\n"}</code></pre>
+    <pre><code className={className}>{highlightCode(code, language).map((token, index) => token.kind === "plain"
+      ? token.text
+      : <span key={index} className={`tok-${token.kind}`}>{token.text}</span>)}{"\n"}</code></pre>
   </div>;
 }
 

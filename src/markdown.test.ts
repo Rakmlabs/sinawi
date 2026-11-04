@@ -42,7 +42,7 @@ test("renders GFM blocks, tables, task lists, and copyable fenced code", () => {
   assert.match(html, /class="code-block"/);
   assert.match(html, /class="code-language">ts<\/span>/);
   assert.match(html, /aria-label="코드 복사"/);
-  assert.match(html, /<code class="language-ts">const result = true;\n<\/code>/);
+  assert.match(html, /<code class="language-ts"><span class="tok-keyword">const<\/span> result = <span class="tok-literal">true<\/span>;\n<\/code>/);
 });
 
 test("escapes HTML and does not link unsafe protocols", () => {

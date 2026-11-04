@@ -101,6 +101,13 @@
   --terminal-cursor: #5bd6a0;
   --terminal-selection: rgba(91, 214, 160, 0.28);
 
+  /* — Code blocks in chat (src/code-highlight.ts) — */
+  --code-keyword: #b9a4ff;
+  --code-string: #7fe0b4;
+  --code-number: #f2b277;
+  --code-literal: #f08a76;
+  --code-comment: #808790;
+
   /* — Fixed (theme-independent) — */
   --traffic-close: #ff5f57;
   --traffic-min: #febc2e;
@@ -204,6 +211,12 @@
   --terminal-cursor: #0e7a4e;
   --terminal-selection: rgba(14, 122, 78, 0.18);
 
+  --code-keyword: #6741d9;
+  --code-string: #0e7a4e;
+  --code-number: #9a5512;
+  --code-literal: #b83a27;
+  --code-comment: #5f666e;
+
   --shadow-color: rgba(17, 19, 21, 0.1);
   --shadow-sm: 0 1px 2px rgba(17, 19, 21, 0.06);
   --shadow-md: 0 4px 14px rgba(17, 19, 21, 0.08);
@@ -278,6 +291,12 @@
     --terminal-fg: #1f2328;
     --terminal-cursor: #0e7a4e;
     --terminal-selection: rgba(14, 122, 78, 0.18);
+
+    --code-keyword: #6741d9;
+    --code-string: #0e7a4e;
+    --code-number: #9a5512;
+    --code-literal: #b83a27;
+    --code-comment: #5f666e;
 
     --shadow-color: rgba(17, 19, 21, 0.1);
     --shadow-sm: 0 1px 2px rgba(17, 19, 21, 0.06);

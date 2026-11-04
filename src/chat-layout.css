@@ -932,14 +932,102 @@ body,
 .markdown .markdown-image { display: inline-block; max-width: 100%; } .markdown .markdown-image img { display: block; width: min(100%, 560px); height: 320px; object-fit: contain; border-radius: 10px; border: 1px solid var(--border-subtle); margin: 6px 0; background: var(--bg-hover); }
 .composer.drop-target { outline: 2px dashed var(--accent); outline-offset: 3px; background: var(--accent-tint); }
 
-/* Markdown body type (moved from readability.css). */
-.markdown { font-size: calc(15px * var(--font-scale)); line-height: 1.65; overflow-wrap: anywhere; color: var(--text-prose); }
-.markdown > * + * { margin-top: 12px; }
-.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { font-size: calc(17px * var(--font-scale)); line-height: 1.5; font-weight: 600; }
-.markdown h1 { font-size: calc(21px * var(--font-scale)); }
-.markdown h2 { font-size: calc(19px * var(--font-scale)); }
-.markdown ul, .markdown ol { padding-left: 24px; }
-.markdown li + li { margin-top: 4px; }
-.markdown blockquote { border-left: 1px solid var(--accent); padding-left: 14px; color: var(--text-muted); }
-.markdown a { color: var(--accent-fg); text-decoration: underline; text-underline-offset: 3px; }
-.markdown :not(pre) > code { background: var(--bg-inset); padding: 2px 4px; border-radius: 4px; }
+/*
+ * Markdown body: reading rhythm for long replies. Korean wraps at word boundaries (keep-all) and only
+ * breaks inside a word when nothing else fits (paths, URLs).
+ */
+.markdown {
+  font-size: calc(15px * var(--font-scale));
+  line-height: 1.7;
+  color: var(--text-prose);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  line-break: strict;
+  text-wrap: pretty;
+}
+.message-text > .markdown { max-width: 46em; }
+.markdown > * + * { margin-top: 0.85em; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
+  font-size: calc(15px * var(--font-scale));
+  line-height: 1.45;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.markdown h1 { font-size: calc(20px * var(--font-scale)); }
+.markdown h2 { font-size: calc(18px * var(--font-scale)); }
+.markdown h3 { font-size: calc(16px * var(--font-scale)); }
+.markdown > * + :is(h1, h2, h3, h4, h5, h6) { margin-top: 1.5em; }
+.markdown > :is(h1, h2, h3, h4, h5, h6) + * { margin-top: 0.45em; }
+.markdown ul, .markdown ol { padding-left: 1.45em; }
+.markdown ul { list-style: disc; }
+.markdown ol { list-style: decimal; }
+.markdown li { padding-left: 0.15em; }
+.markdown li + li { margin-top: 0.4em; }
+.markdown li > :is(ul, ol), .markdown li > p + * { margin-top: 0.4em; }
+.markdown li::marker { color: var(--text-muted); }
+.markdown ol > li::marker { font-variant-numeric: tabular-nums; }
+.markdown strong { font-weight: 650; }
+.markdown blockquote {
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.markdown a {
+  color: var(--accent-fg);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-border);
+  text-underline-offset: 3px;
+}
+.markdown a:hover { text-decoration-color: currentColor; }
+.markdown :not(pre) > code {
+  padding: 0.1em 0.42em;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-active);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  word-break: break-all;
+}
+.markdown hr { border: 0; border-top: 1px solid var(--border); }
+.markdown table { font-size: calc(14px * var(--font-scale)); line-height: 1.55; }
+.markdown th { font-weight: 600; color: var(--text); white-space: nowrap; }
+.markdown td { min-width: 6em; vertical-align: top; }
+
+/* Fenced code: copy button in the toolbar, light token tint (src/code-highlight.ts). */
+.code-block pre code {
+  font-family: var(--font-mono);
+  font-size: calc(13px * var(--font-scale));
+  line-height: 1.6;
+}
+.code-block pre { word-break: normal; overflow-wrap: anywhere; tab-size: 2; }
+.code-language { font-family: var(--font-mono); text-transform: lowercase; }
+.tok-keyword { color: var(--code-keyword); }
+.tok-string { color: var(--code-string); }
+.tok-number { color: var(--code-number); }
+.tok-literal { color: var(--code-literal); }
+.tok-comment { color: var(--code-comment); font-style: italic; }
+
+/* User messages: right-aligned bubble; Korean wraps by word. */
+.user-message .message-text {
+  line-height: 1.6;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* Composer: a list line shows how ⇧Enter / Tab continue it. */
+.composer-list-hint {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--font-scale));
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 740px) {
+  .composer-list-hint { display: none; }
+}
+.composer textarea.list-line { tab-size: 2; }
