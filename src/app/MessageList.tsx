@@ -47,7 +47,7 @@ export type MessageListProps = {
 
 /** A message that is still arriving: revealed smoothly with a caret, replaced by the stored message when done. */
 function DraftMessage({ draft, continued }: { draft: SessionDraft; continued: boolean }) {
-  const text = useSmoothText(draft.text);
+  const text = conversationText(useSmoothText(draft.text));
   return <article className={`message assistant-message streaming-message${continued ? " continued" : ""}`} aria-busy="true">
     {!continued && <div className="message-author"><AgentMark agent={draft.agent} /><strong>{names[draft.agent] || draft.agent}</strong></div>}
     <div className="message-text"><Markdown text={text} /></div>

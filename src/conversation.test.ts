@@ -211,3 +211,12 @@ test("checklists leave the chat text and commander goals read as one line", () =
   const text = conversationText('계획입니다.\n<<CHECKLIST>>\n- [ ] A\n<</CHECKLIST>>\n<<GOAL id="g1" title="로그인">>\n## 목표\n길게\n<</GOAL>>');
   assert.equal(text, "계획입니다.\n\n- **[g1] 로그인**");
 });
+
+test("unfinished checklist and notes blocks stay out of streaming chat text", () => {
+  assert.equal(conversationText("진행 중입니다.\n<<CHECKLIST>>\n- [x] 조사"), "진행 중입니다.");
+  assert.equal(conversationText("정리했습니다.\n<<NOTES>>\n내부 기록"), "정리했습니다.");
+});
+
+test("orphan app block markers never render as chat text", () => {
+  assert.equal(conversationText("완료했습니다.\n<</CHECKLIST>>\n<</NOTES>>"), "완료했습니다.");
+});

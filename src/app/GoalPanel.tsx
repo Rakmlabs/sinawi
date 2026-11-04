@@ -64,7 +64,7 @@ function ChecklistPanel({ session, onStop }: { session: Session; onStop?: () => 
   const running = !goal.stopped;
   const blocked = goal.items.filter((item) => item.status === "blocked").length;
   const end = goal.outcome === "complete" ? (blocked ? t("goal.endBlocked", { count: blocked }) : t("goal.endDone")) : goal.stopped;
-  return <details className={`goal-panel${running ? " running" : ""}${goal.outcome && goal.outcome !== "complete" ? " ended-warn" : ""}`} open={running || blocked > 0}>
+  return <details className={`goal-panel checklist-panel${running ? " running" : ""}${goal.outcome && goal.outcome !== "complete" ? " ended-warn" : ""}`}>
     <summary>
       <ListChecks size={14} aria-hidden="true" />
       <strong>{t("goal.checklist", { done: settled(goal.items), total: goal.items.length })}</strong>
