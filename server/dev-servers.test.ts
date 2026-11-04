@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { createServer as createNetServer } from "node:net";
+import { connect, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,17 @@ async function freePort(): Promise<number> {
       const { port } = server.address() as { port: number };
       server.close(() => resolve(port));
     });
+  });
+}
+
+/** Whether something listens on 127.0.0.1:port, the address freePort picked (::1 may be another test's). */
+function loopbackOpen(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    const done = (open: boolean) => { socket.destroy(); resolve(open); };
+    socket.setTimeout(500, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
   });
 }
 
@@ -41,7 +52,7 @@ test("an app-owned dev server waits for its port, is reused by name, and stops w
     assert.deepEqual(devServers.list("s1").map((server) => [server.name, server.alive]), [["web", true]]);
     assert.deepEqual(devServers.list("s2"), [], "another session does not see it");
     assert.equal(await devServers.stop("s1", "web"), true);
-    assert.equal(await portOpen(port), false);
+    assert.equal(await loopbackOpen(port), false);
   } finally {
     devServers.stopAll("SIGKILL");
     await rm(dir, { recursive: true, force: true });

@@ -206,10 +206,13 @@ test("a lead's daily report opens a turn once its time has passed", async (t) =>
   orchestra.stewardTick(new Date(Date.now() + 60_000));
   assert.equal(prompts.length, 1, "set today: the first report waits for the next 08:00");
   orchestra.getSteward(chat.steward!.id!)!.reportedAt = new Date(Date.now() - 2 * 86_400_000).toISOString();
-  orchestra.stewardTick();
+  // A local clock past today's 08:00, whatever the machine's time zone and time of day.
+  const afterReport = new Date();
+  afterReport.setHours(9, 0, 0, 0);
+  orchestra.stewardTick(afterReport);
   await waitFor(() => chat.status === "done" && prompts.length === 2);
   assert.match(prompts[1], /정기 보고/u);
-  orchestra.stewardTick();
+  orchestra.stewardTick(afterReport);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(prompts.length, 2, "one report a day");
 });

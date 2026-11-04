@@ -22,7 +22,8 @@ async function waitFor(predicate: () => boolean, ms = 5_000) {
 
 async function tempRepo(t: test.TestContext) {
   const base = await realpath(await mkdtemp(join(tmpdir(), "sinawi-goal-")));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  // A stopped run prunes its worktrees in the background, so git may still be writing in .git here.
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const repo = join(base, "repo");
   git(base, "init", "-q", "-b", "main", repo);
   git(repo, "config", "user.name", "t");

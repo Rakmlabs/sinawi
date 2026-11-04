@@ -88,7 +88,8 @@ test("same-agent workers keep distinct labels, logs, and resume sessions", async
   await orchestra.followup(session.id, "again");
   await waitUntilSettled(session);
   const workers = calls.filter((call) => call.role === "worker");
-  assert.deepEqual(workers.slice(-2).map((call) => call.resumeSessionId), ["model-a-session", "model-b-session"]);
+  // The two workers run at once, so their calls may land in either order.
+  assert.deepEqual(Object.fromEntries(workers.slice(-2).map((call) => [call.model, call.resumeSessionId])), { "model-a": "model-a-session", "model-b": "model-b-session" });
 });
 
 test("orchestrator does not run unselected delegated workers", async () => {
