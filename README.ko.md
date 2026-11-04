@@ -311,7 +311,7 @@ AI 에이전트와 MCP 클라이언트는 [llms.txt](llms.txt)와 [docs/ai/for-a
 
 rakm은 AI 네이티브 제품과 개발 도구를 만들고, 외주와 협업도 맡습니다. AI 에이전트 워크플로, MCP 연동, 데스크톱 앱(Tauri), 웹 프론트엔드.
 
-**협업 문의:** [1rrock@rakm.co.kr](mailto:1rrock@rakm.co.kr) · [GitHub @Rakmlabs](https://github.com/Rakmlabs) · LinkedIn: <!-- TODO: LinkedIn 프로필 URL 추가 --> _준비 중_
+**협업 문의:** [1rrock@rakm.co.kr](mailto:1rrock@rakm.co.kr) · [GitHub @Rakmlabs](https://github.com/Rakmlabs) · [LinkedIn @rakmlabs](https://www.linkedin.com/company/rakmlabs/)
 
 </td>
 </tr>
