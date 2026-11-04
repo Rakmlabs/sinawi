@@ -16,8 +16,10 @@ export function sessionNotifications(session: Session, accounts?: WorkspacePolic
   const action = { label: "채팅으로 이동", sessionId: session.id };
   const notes: NotificationInput[] = [];
   const seenMcp = new Set<string>();
+  let requestId = "initial";
   for (const event of session.events) {
-    if (mcpAuthFailure.test(event.text)) {
+    if (event.agent === "user" && event.type === "message") requestId = event.id;
+    if (event.type === "error" && mcpAuthFailure.test(event.text)) {
       const agent = event.agent === "user" ? session.agent : event.agent;
       const name = mcpNameIn(event.text);
       const dedupe = `${agent}:${name ?? "?"}`;
@@ -31,15 +33,32 @@ export function sessionNotifications(session: Session, accounts?: WorkspacePolic
     }
     let type: NotificationInput["type"] | undefined;
     let title = "";
+    let key = `event:${event.id}`;
     // A lead's finished work held back from the main checkout: the user has to approve it, or merge it by hand.
     if (event.metadata?.mergeHold && session.steward) {
       notes.push({ workspaceId: session.workspaceId, key: `event:${event.id}`, type: "lead", title: `「${stewardName(session)}」 ${event.metadata.mergeHold === "ask" ? "병합 승인 대기" : "작업 브랜치에 남김"}`, body: event.text.slice(0, 2000), action });
       continue;
     }
-    if (/권한 거부|permission denied/i.test(event.text)) { type = "permission"; title = "명령 실행 권한이 필요합니다"; }
-    else if (event.metadata?.quotaFallback || /quota|한도.*소진|rate.limit/i.test(event.text)) { type = "quota"; title = "사용 한도 · 에이전트 전환"; }
-    else if (event.type === "error") { type = "error"; title = /응답|정체|inactiv|stalled/i.test(event.text) ? "작업 응답이 멈췄습니다" : "작업 오류"; }
-    if (type) notes.push({ workspaceId: session.workspaceId, key: `event:${event.id}`, type, title, body: event.text.slice(0, 2000), action });
+    if ((event.type === "error" || event.type === "warning") && /권한 거부|permission denied/i.test(event.text)) {
+      type = "permission"; title = "명령 실행 권한이 필요합니다"; key = `permission-run:${session.id}:${requestId}`;
+    } else if (event.metadata?.quotaFallback || event.type === "error" && /quota|한도.*소진|rate.limit/i.test(event.text)) {
+      type = "quota"; title = "사용 한도 · 에이전트 전환"; key = `quota-run:${session.id}:${requestId}`;
+    }
+    if (type) notes.push({ workspaceId: session.workspaceId, key, type, title, body: event.text.slice(0, 2000), action });
+  }
+  // CLI streams contain error events for failed tool calls, worker retries and stderr even when the
+  // orchestrator recovers. Only the session's terminal error is a task failure worth interrupting the user for.
+  if (session.status === "error") {
+    const failure = [...session.events].reverse().find((event) => event.type === "error");
+    if (failure && !mcpAuthFailure.test(failure.text)
+      && !/권한 거부|permission denied|quota|한도.*소진|rate.limit/i.test(failure.text)) notes.push({
+      workspaceId: session.workspaceId,
+      key: `failed:${session.id}:${session.endedAt ?? session.turnCount ?? 0}`,
+      type: "error",
+      title: /응답|정체|inactiv|stalled/i.test(failure.text) ? "작업 응답이 멈췄습니다" : "작업 오류",
+      body: failure.text.slice(0, 2000),
+      action,
+    });
   }
   // A project lead reads like a message from it: its name and what it said last.
   if (session.status === "done" && session.steward) {
