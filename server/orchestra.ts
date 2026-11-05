@@ -25,6 +25,7 @@ import { applyStewardPatch, askPrompt, DEFAULT_MERGE_POLICY, mergeThreadReports,
 import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 import { withJosa } from "./korean.js";
+import { existingEvidence, VerifyEvidenceGuard } from "./verify-evidence.js";
 
 const delegationPattern = /<<DELEGATE\b([^<>]{0,500})>>(.*?)<<\/DELEGATE>>/gis;
 const delegationAttributePattern = /\b([a-z][\w-]*)\s*=\s*(["'])(.*?)\2/giu;
@@ -41,6 +42,8 @@ const guardKey = (sessionId: string, workerId: string) => `${sessionId}:${worker
 
 /** What a lead's tools need from the turn that is running (Orchestra.leadTurns). */
 interface LeadTurn {
+  verification: VerifyEvidenceGuard;
+  detector: StallDetector;
   controller: AbortController;
   userPrompt: string;
   systemPrompt: string;
@@ -607,10 +610,11 @@ export class Orchestra {
     const stewardContext = await this.stewardContext(session);
     // Answering another lead without the user's leave to work for it: look and answer only.
     const answerOnly = Boolean(session.steward?.answering && !session.steward.acceptWork);
-    const turn: LeadTurn = { controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt, workers, answerOnly, tasks: [], worktrees: new Map() };
+    const turn: LeadTurn = { verification: new VerifyEvidenceGuard(), detector: new StallDetector({ ...this.stallOptions, repeatLimit: 2 }), controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt, workers, answerOnly, tasks: [], worktrees: new Map() };
     // A lead's own run gets its tools (lead-tools.ts) where the CLI can load MCP; Grok keeps the tags.
     const toolsGuide = session.steward && !planMode && this.stewardDataDir && session.agent !== "grok" ? `\n\n${LEAD_TOOLS_GUIDE}` : "";
-    if (session.steward && !planMode) this.leadTurns.set(session.id, turn);
+    // Tag-based leads need the same per-turn loop detection as stewards with MCP tools.
+    if (!planMode) this.leadTurns.set(session.id, turn);
     const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${stewardContext}${toolsGuide}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
     const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
@@ -710,7 +714,9 @@ export class Orchestra {
       const goalReview = session.goal ? `\n\n${goalRules(false)}${session.goal.items.length ? `\n\n이번 턴 시작 때의 체크리스트:\n<<CHECKLIST>>\n${renderChecklist(session.goal.items)}\n<</CHECKLIST>>` : ""}` : "";
       // The review is a fresh CLI session too: a lead needs its notes and transcript here as well.
       const stewardReview = await this.stewardContext(session);
-      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
+      const evidence = await existingEvidence(workerResults.join("\n"), session.cwd, [...(session.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR]);
+      const evidenceNote = evidence.length ? `\n\n앱이 존재를 확인한 증거 파일(내용의 정확성·완료 여부는 별도 판단):\n${evidence.map((file) => `- \`${file}\``).join("\n")}\n이 경로를 사용하세요. 메인 폴더에서 상대 경로가 없다는 이유로 다시 촬영하지 마세요.` : "";
+      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${evidenceNote}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
       const reviewStart = session.events.length;
       let review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
       if (controller.signal.aborted) return this.finishStopped(session, controller);
@@ -776,6 +782,7 @@ export class Orchestra {
     const worktree = await this.prepareWorktree(session, workerId, label);
     if (controller.signal.aborted) return STOPPED;
     if (worktree.info) roundWorktrees.set(workerId, worktree.info);
+    await turn.verification.check(task, session.cwd, [...(session.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR]);
     const designExtra = designBriefRequested(`${task}\n${extra}`) && !extra.includes(DESIGN_BRIEF) ? `\n\n${DESIGN_BRIEF}` : "";
     const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${workerSkillSection(task, installedSkills, worker.agent)}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${extra}${designExtra}${workerResume}`;
     const delegation = this.event(session, worker.agent, "delegation", task, { role: "worker", workerId, workerLabel: label, taskStatus: "running", model: worker.model, reasoningEffort: worker.reasoningEffort, ...(brief.missing.length ? { metadata: { briefAutofilled: brief.missing } } : {}) });
@@ -1111,7 +1118,10 @@ export class Orchestra {
     const blockedMcp = disabledMcp.filter((key) => key.startsWith(`${agent}:`))
       .map((key) => `mcp__${key.slice(agent.length + 1)}__*`);
     const guard = role === "worker" ? this.workerGuards.get(guardKey(session.id, workerId ?? agent)) : undefined;
-    const runSignal = guard ? AbortSignal.any([signal, guard.kill.signal]) : signal;
+    const leadDetector = role === "orchestrator" ? this.leadTurns.get(session.id)?.detector : undefined;
+    const leadKill = new AbortController();
+    let leadStall: StallSignal | undefined;
+    const runSignal = AbortSignal.any([signal, ...(guard ? [guard.kill.signal] : []), leadKill.signal]);
     // Workers run in their own worktree; read-only lead runs may read every worktree of the session.
     const cwd = role === "worker" && workerId ? session.worktrees?.find((item) => item.workerId === workerId)?.cwd ?? session.cwd : session.cwd;
     // Every run may also read the screenshots ao-browser/ao-computer save outside the worktree.
@@ -1140,6 +1150,14 @@ export class Orchestra {
         if (this.controllers.get(session.id)?.signal !== signal) return;
         if (line.type !== "message" && isPureNoise(line.text)) return;
         if (line.type !== "message") line = { ...line, text: stripToolNoise(line.text) };
+        if (leadDetector && !leadStall) {
+          // Native Read calls use a label rather than the shell command label.
+          leadStall = leadDetector.observe({ ...line, text: line.text.replace(/^파일 읽기:\s*/u, "명령: read ") });
+          if (leadStall) {
+            this.event(session, agent, "warning", `총괄 검증 반복을 멈췄습니다: ${leadStall.reason}`, { role, metadata: { phase: "verify-cut" } });
+            leadKill.abort();
+          }
+        }
         if (guard && !guard.stall) {
           const stall = guard.detector.observe(line);
           if (stall) this.tripStall(session, guard, stall, agent, workerId ?? agent, workerName ?? agent, delegationId);
@@ -1166,6 +1184,7 @@ export class Orchestra {
       inflight.delete(pending);
       if (!inflight.size && this.inflightRuns.get(session.id) === inflight) this.inflightRuns.delete(session.id);
     }
+    if (leadStall) throw new Error(`총괄 검증 반복을 멈췄습니다: ${leadStall.reason} 확인된 증거와 남은 문제를 사용자에게 보고하고, 다른 진단·방법으로 이어가거나 병합 여부를 물어보세요.`);
     // A run the stall guard stopped ended because the app killed it, not because a quota ran out.
     const stoppedByApp = Boolean(guard?.kill.signal.aborted);
     return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false };
@@ -2083,7 +2102,7 @@ export class Orchestra {
 
   private liveLeadTurn(session: Session): LeadTurn {
     const turn = this.leadTurns.get(session.id);
-    if (!turn || turn.controller.signal.aborted || !this.isCurrentRun(session, turn.controller.signal)) throw new Error("이 담당은 지금 진행 중인 턴이 없어 워커 일을 다룰 수 없습니다.");
+    if (!session.steward || !turn || turn.controller.signal.aborted || !this.isCurrentRun(session, turn.controller.signal)) throw new Error("이 담당은 지금 진행 중인 턴이 없어 워커 일을 다룰 수 없습니다.");
     return turn;
   }
 
@@ -2142,6 +2161,7 @@ export class Orchestra {
     }, (error: unknown) => {
       task.status = "error";
       task.result = `[${label} 결과 — 실패]\n${error instanceof Error ? error.message : String(error)}`;
+      this.event(session, worker.agent, "warning", task.result, { role: "worker", workerId: worker.id!, workerLabel: label });
     }).finally(() => { task.endedAt = new Date().toISOString(); });
     turn.tasks.push(task);
     return { task_id: task.id, worker: worker.id, agent: worker.agent, status: "running", ...(skillText.missing.length ? { missing_skills: skillText.missing } : {}), next: "다른 일도 맡기고, collect_results(wait)로 결과를 받으세요." };

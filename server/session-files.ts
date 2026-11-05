@@ -57,8 +57,20 @@ async function resolveInside(cwd: string, requested: string, extraRoots: string[
   let decoded = raw;
   try { decoded = decodeURIComponent(raw); } catch { /* keep raw */ }
   if (!decoded || decoded.includes("\0")) throw httpError("경로가 올바르지 않습니다.", 400);
-  const file = await realpath(isAbsolute(decoded) ? decoded : resolve(cwd, decoded)).catch(() => { throw httpError("파일이 없습니다.", 404); });
-  const roots = await Promise.all([cwd, ...extraRoots].map((root) => realpath(root).catch(() => undefined)));
+  const roots = (await Promise.all([cwd, ...extraRoots].map((root) => realpath(root).catch(() => undefined))))
+    .filter((root): root is string => Boolean(root));
+  let file: string | undefined;
+  if (isAbsolute(decoded)) {
+    file = await realpath(decoded).catch(() => undefined);
+  } else {
+    const candidates = roots.map((root) => ({ root, file: resolve(root, decoded) }));
+    if (candidates.some((candidate) => !inside(candidate.root, candidate.file))) throw httpError("작업 폴더 밖의 파일입니다.", 403);
+    for (const candidate of candidates) {
+      file = await realpath(candidate.file).catch(() => undefined);
+      if (file) break;
+    }
+  }
+  if (!file) throw httpError("파일이 없습니다.", 404);
   if (!roots.some((root) => root && inside(root, file))) throw httpError("작업 폴더 밖의 파일입니다.", 403);
   if (!(await stat(file)).isFile()) throw httpError("파일이 아닙니다.", 404);
   return file;

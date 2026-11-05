@@ -1,7 +1,7 @@
 import { installAccountSkills } from "./account-tooling.js";
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes, SETUP_TOOLS } from "./setup.js";
-import { BrowserBridge, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
+import { BrowserBridge, QUEUE_DIR, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
 import { ComputerBridge, registerComputerRoutes, SHOT_DIR, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
 import { findTool, handleToolMcp, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
 import { withJosa } from "./korean.js";
@@ -1041,7 +1041,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   registerSessionFileRoutes(app, {
     lookup: (id) => orchestra.get(id),
     // A worker's result (a design screenshot copied into its worktree) shows in the chat too.
-    extraRoots: (session) => [previewAssetsDir(options.dataDir), ...(session?.worktrees?.map((item) => item.path) ?? []), SHOT_DIR],
+    extraRoots: (session) => [previewAssetsDir(options.dataDir), ...(session?.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR],
     previewRoot: () => previewAssetsDir(options.dataDir),
     cacheDir: () => join(options.dataDir ?? join(homedir(), ".sinawi"), "file-previews"),
   });

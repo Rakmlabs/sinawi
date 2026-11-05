@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSessionImage } from "./session-files";
@@ -17,6 +17,42 @@ test("session images resolve inside the work folder only", async () => {
   await assert.rejects(resolveSessionImage(cwd, "link.png"), /밖/);
   await assert.rejects(resolveSessionImage(cwd, "notes.txt"), /이미지/);
   assert.ok(await resolveSessionImage(cwd, join(base, "secret.png"), [base]));
+});
+
+test("relative session images fall back to a listed worktree", async () => {
+  const base = mkdtempSync(join(tmpdir(), "ao-img-worktree-"));
+  const cwd = join(base, "site");
+  const worktree = join(base, "worktree");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(worktree, "docs/design"), { recursive: true });
+  writeFileSync(join(worktree, "docs/design/detail.png"), "x");
+
+  const resolved = await resolveSessionImage(cwd, "docs/design/detail.png", [worktree]);
+
+  assert.equal(resolved.file, realpathSync(join(worktree, "docs/design/detail.png")));
+});
+
+test("relative session image paths cannot escape into an extra root", async () => {
+  const base = mkdtempSync(join(tmpdir(), "ao-img-escape-"));
+  const cwd = join(base, "site");
+  const worktree = join(base, "worktree");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  writeFileSync(join(base, "secret.png"), "x");
+
+  await assert.rejects(resolveSessionImage(cwd, "../secret.png", [base, worktree]), /밖/);
+});
+
+test("absolute browser queue images resolve when the queue is listed", async () => {
+  const base = mkdtempSync(join(tmpdir(), "ao-img-browser-"));
+  const cwd = join(base, "site");
+  const queueDir = join(base, "sinawi-browser");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(queueDir, { recursive: true });
+  const screenshot = join(queueDir, "shot.png");
+  writeFileSync(screenshot, "x");
+
+  assert.equal((await resolveSessionImage(cwd, screenshot, [queueDir])).file, realpathSync(screenshot));
 });
 
 test("download copies into the downloads folder without overwriting", async () => {
