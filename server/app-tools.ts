@@ -203,7 +203,7 @@ const LEAD_ONLY: AppTool[] = [
     properties: {
       brief: str("워커에게 줄 구체적인 지시. 목표, 맥락, 바꿀 파일, 완료 조건, 보고 형식을 적는다."),
       worker: str("기존 워커 ID(예: 'codex-2'). 비우면 agent로 고른다."),
-      agent: agentEnum("워커 CLI. 쉬는 같은 CLI 워커가 없으면 새 워커를 만든다."),
+      agent: agentEnum("워커 CLI. 작업에 필요한 기능을 가진 CLI를 직접 고른다. 팀에 없거나 쉬는 워커가 없으면 새 워커를 만든다(작업공간이 허용한 CLI만)."),
       model: str("모델(선택)."),
       skills: strings("브리프에 붙일 스킬 이름(write_skill로 만든 것 또는 설치된 스킬)."),
       group: str("묶음 이름(선택). collect_results에서 group으로 모아 받는다."),

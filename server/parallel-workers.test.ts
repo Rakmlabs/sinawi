@@ -84,7 +84,7 @@ test("the lead sees installed skills and a brief's skills reach the worker", () 
   ];
   const catalog = skillCatalog(skills);
   assert.match(catalog, /## 설치된 스킬/);
-  assert.match(catalog, /- impeccable: Design and polish frontend UI\. Long text/);
+  assert.match(catalog, /- impeccable \[claude,codex\]: Design and polish frontend UI\. Long text/);
   assert.equal(catalog.match(/- impeccable/g)?.length, 1, "each name once");
   assert.equal(skillCatalog([]), "");
 

@@ -92,20 +92,24 @@ test("same-agent workers keep distinct labels, logs, and resume sessions", async
   assert.deepEqual(Object.fromEntries(workers.slice(-2).map((call) => [call.model, call.resumeSessionId])), { "model-a": "model-a-session", "model-b": "model-b-session" });
 });
 
-test("orchestrator does not run unselected delegated workers", async () => {
+test("a lead that delegates to an allowed CLI outside its team gets that worker", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-test-"));
-  let calls = 0;
+  const agents: string[] = [];
   const runner = async (options: RunCliOptions) => {
-    calls += 1;
-    const text = '<<DELEGATE to="grok">>Do something<</DELEGATE>>';
-    options.onLine({ type: "message", text, finalText: text });
-    return { exitCode: 0, finalText: text };
+    agents.push(options.agent);
+    if (agents.length === 1) {
+      const text = '<<DELEGATE to="grok">>Do something<</DELEGATE>>';
+      options.onLine({ type: "message", text, finalText: text });
+      return { exitCode: 0, finalText: text };
+    }
+    return { exitCode: 0, finalText: options.agent === "grok" ? "Worker done" : "Synthesized" };
   };
   const orchestra = new Orchestra(() => undefined, runner);
   const session = await orchestra.create({ prompt: "Do work", agent: "codex", workers: ["claude"], cwd });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  for (let i = 0; i < 100 && session.status === "running"; i++) await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(session.status, "done");
-  assert.equal(calls, 1);
+  assert.deepEqual(agents.slice(0, 2), ["codex", "grok"]);
+  assert.ok(session.workers.includes("grok"));
 });
 
 test("follow-up preserves system prompt, workers, and CLI resume id", async () => {

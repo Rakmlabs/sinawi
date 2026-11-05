@@ -1,3 +1,4 @@
+import { AGENT_CAPABILITIES } from "./agent-capabilities.js";
 import { cliChildEnv } from "./supervision.js";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -95,6 +96,15 @@ const legacyVideoRule: RoutingRule = {
   reason: "bbanana MCP와 Grok Imagine으로 영상을 생성합니다.",
 };
 
+// Keyword rules older versions shipped. The lead now picks CLIs itself from the capability list, so
+// saved copies the user never edited are dropped on load; edited ones are the user's own and stay.
+const legacyKeywordRules: RoutingRule[] = [
+  { id: "docs-review", label: "문서·디자인·리뷰", keywords: ["문서", "리뷰", "code review", "검토", "디자인 리뷰"], orchestrator: "claude", workers: ["codex"], reason: "문서 작성, 디자인 정리, 코드 리뷰는 Claude가 맡습니다." },
+  { id: "frontend", label: "프론트엔드 UI", keywords: ["프론트", "ui", "ux", "디자인", "react", "css"], orchestrator: "claude", workers: ["codex"], reason: "화면 설계와 사용성 판단이 중심인 작업" },
+  { id: "refactor", label: "대규모 리팩터·테스트", keywords: ["리팩터", "refactor", "테스트", "마이그레이션", "성능"], orchestrator: "codex", workers: ["claude"], reason: "코드 변경과 검증 비중이 큰 작업" },
+  { id: "research", label: "빠른 조사", keywords: ["조사", "검색", "research", "찾아", "비교"], orchestrator: "grok", workers: ["claude"], reason: "빠른 정보 탐색이 중심인 작업" },
+];
+
 function sameRule(left: RoutingRule, right: RoutingRule): boolean {
   return left.id === right.id && left.label === right.label && left.orchestrator === right.orchestrator
     && left.reason === right.reason && left.keywords.length === right.keywords.length
@@ -112,10 +122,6 @@ export const defaultRoutingSettings: RoutingSettings = {
   },
   rules: [
     ...smartMediaRules,
-    { id: "docs-review", label: "문서·디자인·리뷰", keywords: ["문서", "리뷰", "code review", "검토", "디자인 리뷰"], orchestrator: "claude", workers: ["codex"], reason: "문서 작성, 디자인 정리, 코드 리뷰는 Claude가 맡습니다." },
-    { id: "frontend", label: "프론트엔드 UI", keywords: ["프론트", "ui", "ux", "디자인", "react", "css"], orchestrator: "claude", workers: ["codex"], reason: "화면 설계와 사용성 판단이 중심인 작업" },
-    { id: "refactor", label: "대규모 리팩터·테스트", keywords: ["리팩터", "refactor", "테스트", "마이그레이션", "성능"], orchestrator: "codex", workers: ["claude"], reason: "코드 변경과 검증 비중이 큰 작업" },
-    { id: "research", label: "빠른 조사", keywords: ["조사", "검색", "research", "찾아", "비교"], orchestrator: "grok", workers: ["claude"], reason: "빠른 정보 탐색이 중심인 작업" },
   ],
 };
 
@@ -416,6 +422,7 @@ export async function loadRoutingSettings(directory = defaultDataDir, homeDirect
       const replacements = smartMediaRules.map((fallback) => remaining.find((rule) => rule.id === fallback.id) ?? structuredClone(fallback));
       settings.rules = [...replacements, ...remaining.filter((rule) => !smartIds.has(rule.id))];
     }
+    settings.rules = settings.rules.filter((rule) => !legacyKeywordRules.some((legacy) => sameRule(rule, legacy)));
     return settings;
   }
   catch (error) {
@@ -486,7 +493,10 @@ function normalizeRecommendation(raw: unknown, settings: RoutingSettings, skills
     ? choice(settings, cleanAgent(value.planner.agent), "플래너가 선택한 계획 전문 에이전트", value.planner)
     : choice(settings, settings.planner.agent, "요청 분류와 실행 계획에 적합한 기본 플래너", settings.planner);
   const rule = matchedRule(prompt, settings);
-  const orchestratorAgent = rule?.orchestrator ?? defaultOrchestrator(availableAgents);
+  // A rule the user wrote wins; otherwise the planner's own choice of orchestrator stands.
+  const plannedOrchestrator = value.orchestrator?.agent && agentIds.has(value.orchestrator.agent) && (!availableAgents || availableAgents.includes(value.orchestrator.agent))
+    ? value.orchestrator.agent as AgentId : undefined;
+  const orchestratorAgent = rule?.orchestrator ?? plannedOrchestrator ?? defaultOrchestrator(availableAgents);
   const proposedWorkers = Array.isArray(value.workers) ? value.workers.slice(0, 3).map((worker: any) => choice(settings, cleanAgent(worker?.agent), "플래너가 선택한 작업자", worker)) : [];
   const workers = rule ? rule.workers.map((agent) => choice(settings, agent, `${rule.label} 규칙이 선택한 작업자`)) : proposedWorkers;
   if (!workers.length) {
@@ -494,7 +504,9 @@ function normalizeRecommendation(raw: unknown, settings: RoutingSettings, skills
   }
   return {
     planner: plannedBy,
-    orchestrator: choice(settings, orchestratorAgent, rule?.reason ?? "범용 작업에 적합한 기본 오케스트레이터"),
+    orchestrator: rule || !plannedOrchestrator
+      ? choice(settings, orchestratorAgent, rule?.reason ?? "범용 작업에 적합한 기본 오케스트레이터")
+      : choice(settings, orchestratorAgent, "플래너가 선택한 오케스트레이터", value.orchestrator),
     workers,
     skills: [...new Set([...cleanStringArray(value.skills ?? [], "스킬", 20).filter((id) => knownSkills.has(id)), ...matchedSkills(prompt, skills)])].slice(0, 20),
     reason: rule ? `${rule.label} 규칙: ${rule.reason}` : cleanString(value.reason, "추천 이유", 1_000), source: "planner",
@@ -540,7 +552,7 @@ function recommendationIsAvailable(recommendation: RouteRecommendation, availabl
 function plannerPrompt(prompt: string, settings: RoutingSettings, skills: SkillInfo[]): string {
   return `당신은 Sinawi 라우터입니다. 도구를 사용하거나 작업을 실행하지 말고 사용자 요청을 분석해 JSON 하나만 반환하세요.\n` +
     `형식: {"planner":{"agent":"codex|claude|grok","model":"...","reasoningEffort":"low|medium|high|xhigh|max","reason":"계획 담당 이유"},"orchestrator":{동일 형식},"workers":[{"id":"worker-1","label":"Codex 1","agent":"codex|claude|grok","model":"...","reasoningEffort":"...","reason":"작업자 이유"}],"skills":["skill id"],"reason":"전체 이유 한 줄"}\n` +
-    `일치하는 규칙이 없으면 Claude를 기본 오케스트레이터로 선택하세요. 이미지/영상 생성은 Grok이 오케스트레이션하고 Codex와 Grok을 워커로 선택하세요. 쇼츠/릴스/마케팅 영상은 marketing-shorts 스킬을 첨부하세요. 설정과 라우팅 규칙을 반드시 존중하세요. 목록에 있는 모델과 스킬만 선택하세요. 워커는 최대 3명이며 오케스트레이터와 같은 에이전트 또는 같은 에이전트의 여러 독립 워커를 선택할 수 있습니다. 각 워커에는 고유 id와 구분 가능한 label을 지정하세요.\n` +
+    `각 에이전트가 할 수 있는 일:\n${(Object.keys(AGENT_CAPABILITIES) as AgentId[]).map((agent) => `- ${agent}: ${AGENT_CAPABILITIES[agent]}`).join("\n")}\n이 정보와 사용 가능한 스킬 설명으로 직접 판단하세요. 사용자가 만든 라우팅 규칙이 있으면 존중하세요. 목록에 있는 모델과 스킬만 선택하세요. 워커는 최대 3명이며 오케스트레이터와 같은 에이전트 또는 같은 에이전트의 여러 독립 워커를 선택할 수 있습니다. 각 워커에는 고유 id와 구분 가능한 label을 지정하세요.\n` +
     `설정: ${JSON.stringify(settings)}\n사용 가능한 스킬: ${JSON.stringify(skills.slice(0, 300).map(({ id, name, description }) => ({ id, name, description: description.slice(0, 500) })))}\n사용자 요청: ${prompt}`;
 }
 

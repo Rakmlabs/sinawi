@@ -1,4 +1,5 @@
 import { runCli } from "./cli.js";
+import { AGENT_CAPABILITIES } from "./agent-capabilities.js";
 import type { RoutingRule, RoutingSettings } from "./routing.js";
 import type { AgentId } from "./types.js";
 import type { UsageContext } from "./usage.js";
@@ -10,34 +11,6 @@ export interface AutoSwitchRecommendation {
   confidence: number;
   reason: string;
 }
-
-interface SignalGroup {
-  agent: AgentId;
-  label: string;
-  patterns: RegExp[];
-  workers: AgentId[];
-}
-
-const builtInSignals: SignalGroup[] = [
-  {
-    agent: "claude",
-    label: "기획·설계",
-    patterns: [/기획/u, /설계/u, /아키텍처/u, /architecture/iu, /\bplan(?:ning)?\b/iu, /\bdesign(?:ing)?\b/iu],
-    workers: ["codex"],
-  },
-  {
-    agent: "codex",
-    label: "코딩·수정",
-    patterns: [/구현/u, /코딩/u, /수정/u, /고쳐/u, /버그/u, /리팩터/u, /\bimplement(?:ation)?\b/iu, /\bfix(?:es|ed|ing)?\b/iu, /\brefactor(?:ing)?\b/iu, /\bdebug(?:ging)?\b/iu],
-    workers: ["claude"],
-  },
-  {
-    agent: "grok",
-    label: "리서치",
-    patterns: [/리서치/u, /조사/u, /검색/u, /찾아/u, /비교/u, /\bresearch\b/iu, /\binvestigat(?:e|ion)\b/iu, /\bcompare\b/iu],
-    workers: ["claude"],
-  },
-];
 
 function keywordPattern(keyword: string): RegExp | undefined {
   const value = keyword.trim();
@@ -109,25 +82,8 @@ export function classifyTask(prompt: string, rules: RoutingRule[], mediaAllowed 
     };
   }
 
-  const matched = builtInSignals
-    .map((group) => ({ group, score: group.patterns.filter((pattern) => pattern.test(prompt)).length }))
-    .filter(({ score }) => score > 0)
-    .sort((left, right) => right.score - left.score);
-  // Mixed task categories are intentionally delegated to the cheap classifier;
-  // a keyword count alone is not enough to call one intent decisively primary.
-  if (!matched[0] || matched.length > 1) return;
-  const { group, score } = matched[0];
-  return {
-    agent: group.agent,
-    workers: group.workers,
-    confidence: score > 1 ? 0.94 : 0.9,
-    reason: `${group.label} 표현이 명확하게 감지되었습니다.`,
-  };
-}
-
-function hasClassificationSignal(prompt: string, rules: RoutingRule[]): boolean {
-  if (rules.some((rule) => rule.keywords.some((keyword) => keywordScore(prompt, keyword) > 0))) return true;
-  return builtInSignals.some((group) => group.patterns.some((pattern) => pattern.test(prompt)));
+  // No user rule matched: the AI classifier decides, not built-in keyword lists.
+  return;
 }
 
 function authenticated(agent: AgentId, settings: RoutingSettings, available: Set<AgentId>): boolean {
@@ -179,18 +135,6 @@ export async function recommendAutoSwitch(
   }
 
   if (mediaGenerationRequired(prompt)) return;
-  if (!hasClassificationSignal(prompt, routingRules)) {
-    const agent = (["claude", "codex", "grok"] as AgentId[]).find((candidate) => authenticated(candidate, settings, available));
-    if (!agent) return;
-    const workers = fallbackWorkers(agent, settings, available);
-    return workers.length ? {
-      agent,
-      workers,
-      confidence: 0.9,
-      reason: agent === "claude" ? "일치하는 규칙이 없어 기본 오케스트레이터 Claude를 추천합니다." : "Claude를 사용할 수 없어 기본 순서에 따라 대체 오케스트레이터를 추천합니다.",
-    } : undefined;
-  }
-
   const configuredPlanner = settings.planner.agent;
   const planner = authenticated(configuredPlanner, settings, available)
     ? configuredPlanner
@@ -218,7 +162,7 @@ export async function recommendAutoSwitch(
     prompt: "사용자 요청의 주 작업에 가장 적합한 오케스트레이터를 짧게 분류하세요. 도구를 쓰지 말고 JSON만 반환하세요. " +
       '형식: {"agent":"codex|claude|grok","confidence":0.0,"reason":"한 줄 이유"}. ' +
       `허용된 에이전트: ${availableAgents.join(", ")}. 이 목록 안에서만 선택하세요. ` +
-      "기획·설계는 claude, 코딩·수정은 codex, 리서치는 grok입니다. 애매하면 confidence를 낮추세요.\n\n사용자 요청:\n" + prompt,
+      "각 에이전트가 할 수 있는 일:\n" + availableAgents.map((agent) => `- ${agent}: ${AGENT_CAPABILITIES[agent]}`).join("\n") + "\n이 정보로 직접 판단하세요. 애매하면 confidence를 낮추세요.\n\n사용자 요청:\n" + prompt,
   })).then((result) => {
     if (result.exitCode !== 0 || controller.signal.aborted) return undefined;
     const parsed = parsePlannerResult(result.finalText);

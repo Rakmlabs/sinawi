@@ -277,11 +277,6 @@ export interface StewardRuleOptions {
   allowedAgents?: AgentId[];
 }
 
-function switchRule(allowed: AgentId[] | undefined): string {
-  if (!allowed?.length) return "";
-  return `\n- 사용자가 워커 CLI를 바꿔 달라고 하면(예: "코덱스 말고 클로드로 해") 그 에이전트 이름으로 위임합니다: <<DELEGATE to="claude">>…<</DELEGATE>>. 팀에 없으면 앱이 그 워커를 팀에 넣고 실행합니다. 이 작업공간에서 쓸 수 있는 에이전트: ${allowed.join(", ")}. 다른 에이전트는 앱이 막습니다.`;
-}
-
 export function stewardRules(notes: string, transcript: string, peers: StewardPeer[] = [], appNotes: string[] = [], options: StewardRuleOptions = {}): string {
   return `## 프로젝트 담당 (앱이 붙임)
 당신은 이 프로젝트의 담당입니다. 사용자는 이 채팅 하나에서 계속 일을 시킵니다. 이전 대화가 기억나지 않아도 아래 노트와 기록으로 이어 갑니다.
@@ -290,7 +285,7 @@ export function stewardRules(notes: string, transcript: string, peers: StewardPe
 (노트 전체)
 <</NOTES>>
 - 이 채팅의 전체 기록: \`${transcript}\`. 사용자가 예전에 말한 것·정한 것을 가리키면 이 파일을 검색해서 찾습니다. 추측하지 않습니다.
-- ${mergeRule(options.mergePolicy)}${switchRule(options.allowedAgents)}${peerRules(peers)}
+- ${mergeRule(options.mergePolicy)}${peerRules(peers)}
 
 ${appNotes.length ? `\n### 지난 턴이 끝난 뒤 앱이 한 일\n${appNotes.map((note) => `- ${note}`).join("\n")}\n노트에 아직 반영되지 않았다면 이번 응답 끝에 고쳐 씁니다.\n` : ""}
 ### 지금 담당 노트

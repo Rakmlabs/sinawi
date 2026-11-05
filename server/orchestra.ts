@@ -8,6 +8,7 @@ import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSet
 import { clearSkillsCache, enabledPublicSkills, filterEnabledSkills, formatSkillPrompt, loadSkills, resolveSkillPrompt, scanSkillRoot, type SkillRecord } from "./skills.js";
 import { applySchedulePatch, createSchedule, describeSchedule, dueSchedules, SCHEDULE_LIMIT, type Schedule, type ScheduleInput } from "./schedules.js";
 import { LEAD_TOOLS_GUIDE, LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
+import { capabilityCatalog } from "./agent-capabilities.js";
 import { skillCatalog, workerSkillSection } from "./skill-routing.js";
 import type { AgentId, AgentSelection, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
@@ -562,7 +563,7 @@ export class Orchestra {
     const workerContext = workers.map((worker) => `${worker.id}: ${worker.sessionMode !== "new" && workerSessionId(session, worker.id!) ? "이전 작업의 맥락을 가진 세션을 이어서 사용합니다. 기존 설명을 반복하지 않고 후속 작업을 지시할 수 있습니다." : "새 세션으로 시작합니다. 필요한 맥락을 전달하세요."}`).join("\n");
     const exampleWorker = workers[0]?.id ?? "claude";
     const worktreeNotice = await this.worktreeNotice(session);
-    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 선택되지 않은 워커에게 위임하지 마세요. 서로 다른 워커에게 준 위임은 동시에 실행되고, 같은 워커에게 준 위임은 그 워커 세션에서 차례로 실행됩니다. 독립적인 일을 병렬로 돌리려면 다른 워커에게 나누세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}${skillCatalog(installedSkills)}`;
+    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 서로 다른 워커에게 준 위임은 동시에 실행되고, 같은 워커에게 준 위임은 그 워커 세션에서 차례로 실행됩니다. 독립적인 일을 병렬로 돌리려면 다른 워커에게 나누세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}${capabilityCatalog(this.allowedAgents(session), workers.map((worker) => worker.agent))}${skillCatalog(installedSkills)}`;
     const planningContext = plan ? `\n\n계획 전문 에이전트가 작성한 실행 계획:\n${plan}` : "";
     const handoffContext = session.handoffContext ? `\n\n이전 오케스트라의 대화 요약:\n${session.handoffContext}` : "";
     const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";
@@ -606,8 +607,8 @@ export class Orchestra {
       const legacyAgent = request.target.toLowerCase();
       const named = legacyAgent === "codex" || legacyAgent === "claude" || legacyAgent === "grok" ? legacyAgent : undefined;
       const worker = exact ?? (named ? workers.find((candidate) => candidate.agent === named) : undefined)
-        // A lead asked for a CLI its team lacks ("코덱스 말고 클로드로 해"): add that worker when the workspace allows it.
-        ?? (named && session.steward ? this.addStewardWorker(session, workers, named) : undefined);
+        // The lead chose a CLI its team lacks: add that worker when the workspace allows it.
+        ?? (named ? this.addStewardWorker(session, workers, named) : undefined);
       return worker ? [{ request, worker }] : [];
     });
     let requests = resolveRequests(first.finalText);

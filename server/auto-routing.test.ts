@@ -28,12 +28,11 @@ test("custom rules preserve same-agent duplicate worker slots", () => {
   assert.deepEqual(classifyTask("parallel", rules)?.workers, ["codex", "codex"]);
 });
 
-test("built-in rules distinguish planning, coding, and research", () => {
-  assert.equal(classifyTask("서비스 아키텍처를 설계해줘", [])?.agent, "claude");
-  assert.equal(classifyTask("로그인 버그를 수정해줘", [])?.agent, "codex");
-  assert.equal(classifyTask("공식 문서를 조사하고 비교해줘", [])?.agent, "grok");
-  assert.equal(classifyTask("설계하고 구현해줘", []), undefined);
-  assert.equal(classifyTask("설계하고 구현해줘", defaultRoutingSettings.rules), undefined);
+test("no built-in keyword rules: without a user rule the AI classifier decides", () => {
+  for (const prompt of ["서비스 아키텍처를 설계해줘", "로그인 버그를 수정해줘", "공식 문서를 조사하고 비교해줘", "클로드 디자인으로 시안 만들어줘"]) {
+    assert.equal(classifyTask(prompt, []), undefined, prompt);
+    assert.equal(classifyTask(prompt, defaultRoutingSettings.rules, false), undefined, prompt);
+  }
 });
 
 test("smart media rules keep video ahead of image matches and preserve worker priority", () => {
@@ -65,16 +64,9 @@ test("automatic routing never selects media requests or media rule ids when the 
 });
 
 test("ordinary image and video terminology is not treated as media generation", () => {
-  const cases = [
-    ["Docker image 버그 수정", "codex"],
-    ["CSS clip-path 디자인", "claude"],
-    ["photo storage metadata 조사", "grok"],
-    ["video player 구현", "codex"],
-  ] as const;
-
-  for (const [prompt, expectedAgent] of cases) {
+  for (const prompt of ["Docker image 버그 수정", "CSS clip-path 디자인", "photo storage metadata 조사", "video player 구현"]) {
     assert.equal(mediaRouteRequired(prompt, defaultRoutingSettings.rules), false, prompt);
-    assert.equal(classifyTask(prompt, defaultRoutingSettings.rules, false)?.agent, expectedAgent, prompt);
+    assert.equal(classifyTask(prompt, defaultRoutingSettings.rules, false), undefined, prompt);
   }
 });
 
@@ -95,39 +87,38 @@ test("a tied custom match is ambiguous", () => {
   ];
   assert.equal(classifyTask("작업", rules), undefined);
   assert.equal(classifyTask("UI looks okay", defaultRoutingSettings.rules), undefined);
-  assert.equal(classifyTask("React UI를 구현해줘", defaultRoutingSettings.rules)?.agent, "claude");
-  assert.equal(classifyTask("문서를 작성해줘", defaultRoutingSettings.rules)?.agent, "claude");
-  assert.equal(classifyTask("코드를 검토해줘", defaultRoutingSettings.rules)?.agent, "claude");
-  assert.equal(classifyTask("디자인 리뷰", defaultRoutingSettings.rules)?.agent, "claude");
+  assert.equal(classifyTask("React UI를 구현해줘", defaultRoutingSettings.rules), undefined);
   assert.equal(classifyTask("로고 목업", defaultRoutingSettings.rules)?.agent, "grok");
-  assert.equal(classifyTask("React", defaultRoutingSettings.rules), undefined);
   assert.equal(classifyTask("build a reaction", defaultRoutingSettings.rules), undefined);
 });
 
-test("clear rules avoid fallback while unmatched input defaults to Claude", async () => {
+const codeRule: RoutingRule = { id: "code", label: "코드", keywords: ["버그"], orchestrator: "codex", workers: ["claude"], reason: "사용자 규칙" };
+test("a user rule avoids the classifier while unmatched input is classified by the AI", async () => {
   const config = settings();
+  config.rules.push(codeRule);
   let calls = 0;
+  let prompt = "";
   const runner: PlannerRunner = async (options) => {
     calls += 1;
+    prompt = options.prompt;
     assert.equal(options.agent, "claude");
     assert.equal(options.model, "haiku");
-    assert.equal(options.reasoningEffort, undefined);
     assert.equal(options.readOnly, true);
-    return { exitCode: 0, finalText: '{"agent":"codex","confidence":0.91,"reason":"구현 후속 작업"}' };
+    return { exitCode: 0, finalText: '{"agent":"grok","confidence":0.91,"reason":"리서치"}' };
   };
   assert.equal((await recommendAutoSwitch("버그를 수정해줘", process.cwd(), config, ["codex", "claude", "grok"], runner))?.agent, "codex");
   assert.equal(calls, 0);
   const unmatched = await recommendAutoSwitch("다음 단계로 진행해줘", process.cwd(), config, ["codex", "claude", "grok"], runner);
-  assert.equal(unmatched?.agent, "claude");
-  assert.match(unmatched?.reason ?? "", /기본 오케스트레이터 Claude/);
-  assert.equal(calls, 0);
+  assert.equal(unmatched?.agent, "grok");
+  assert.equal(calls, 1);
+  // The classifier gets facts about each CLI, not a keyword table.
+  assert.match(prompt, /Claude Design/);
+  assert.doesNotMatch(prompt, /기획·설계는 claude/);
 });
 
-test("unmatched automatic routing falls back from unavailable Claude to Codex then Grok", async () => {
-  const config = settings();
-  assert.equal((await recommendAutoSwitch("계속해줘", process.cwd(), config, ["claude", "codex"]))?.agent, "claude");
-  assert.equal((await recommendAutoSwitch("계속해줘", process.cwd(), config, ["codex"]))?.agent, "codex");
-  assert.equal((await recommendAutoSwitch("계속해줘", process.cwd(), config, ["grok"]))?.agent, "grok");
+test("an unmatched request does not switch when the AI classifier fails", async () => {
+  const failing: PlannerRunner = async () => ({ exitCode: 1, finalText: "" });
+  assert.equal(await recommendAutoSwitch("계속해줘", process.cwd(), settings(), ["claude", "codex"], failing), undefined);
 });
 
 test("non-Claude fallback uses low effort", async () => {
@@ -144,6 +135,7 @@ test("non-Claude fallback uses low effort", async () => {
 test("automatic routing uses the orchestrator agent as worker when it is the only authenticated CLI", async () => {
   const config = settings();
   config.planner = { agent: "codex" };
+  config.rules.push(codeRule);
   assert.deepEqual((await recommendAutoSwitch("버그를 수정해줘", process.cwd(), config, ["codex"]))?.workers, ["codex"]);
   let calls = 0;
   const runner: PlannerRunner = async () => {
@@ -214,6 +206,7 @@ test("fallback failures, low confidence, unavailable authentication, and timeout
 test("unknown authentication does not block automatic routing", async () => {
   const config = settings();
   for (const id of ["codex", "claude", "grok"] as const) config.modelOptions[id].authStatus = "unknown";
+  config.rules.push(codeRule);
   const result = await recommendAutoSwitch("로그인 버그를 수정해줘", process.cwd(), config, ["codex", "claude", "grok"], async () => { throw new Error("rule should avoid planner"); });
   assert.equal(result?.agent, "codex");
 });
