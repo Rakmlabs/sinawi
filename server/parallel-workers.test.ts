@@ -101,3 +101,21 @@ test("the lead sees installed skills and a brief's skills reach the worker", () 
   assert.match(codex, /FRONTEND BODY/, "a skill the CLI lacks is attached");
   assert.equal(workerSkillSection("## 목표\nx", skills, "claude"), "");
 });
+
+test("Claude Design is not advertised or opened headlessly while local design skills remain runnable", () => {
+  const designSkills = [
+    { id: "design", name: "design", description: "Claude Design", agents: ["claude" as const], source: "claude", content: "Use /design" },
+    { id: "claude-design", name: "Claude Design", description: "Artboards", agents: ["claude" as const], source: "claude", content: "Use /design" },
+    { id: "frontend", name: "frontend-design", description: "Local UI guidance", agents: ["claude" as const, "codex" as const], source: "project", content: "Build HTML" },
+  ];
+  const catalog = skillCatalog(designSkills);
+  assert.doesNotMatch(catalog, /^- (?:design|Claude Design)\b/mu);
+  assert.match(catalog, /frontend-design/);
+  assert.match(catalog, /disable-model-invocation/);
+  assert.deepEqual(briefSkillNames("스킬: /design, Claude Design, frontend-design"), ["frontend-design"]);
+
+  const claude = workerSkillSection("스킬: /design, frontend-design\n## 목표\n목업", designSkills, "claude");
+  assert.match(claude, /frontend-design/);
+  assert.match(claude, /\/design.*호출하지 않는다/);
+  assert.match(claude, /사용자.*터미널.*선택.*수동/);
+});

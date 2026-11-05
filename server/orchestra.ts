@@ -10,7 +10,7 @@ import { applySchedulePatch, createSchedule, describeSchedule, dueSchedules, SCH
 import { LEAD_TOOLS_GUIDE, LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
 import { capabilityCatalog } from "./agent-capabilities.js";
 import { workerInvocationWarnings } from "./worker-invocation.js";
-import { briefSkillNames, skillCatalog, workerSkillSection } from "./skill-routing.js";
+import { briefSkillNames, isHeadlessClaudeDesign, skillCatalog, workerSkillSection } from "./skill-routing.js";
 import type { AgentId, AgentSelection, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
@@ -35,7 +35,7 @@ const maxReplanRounds = 2;
 const stallCheckMs = 15_000;
 /** A worker's run ended because the session was stopped. */
 const STOPPED = Symbol("stopped");
-/** A feature failed, but its diagnostic report should still reach tag-based leads. */
+/** A failed CLI run whose feature diagnostic should still reach tag-based leads. */
 class WorkerFeatureError extends Error {}
 const guardKey = (sessionId: string, workerId: string) => `${sessionId}:${workerId}`;
 
@@ -77,6 +77,9 @@ const skillSlug = (name: string) => name.trim().toLowerCase().replace(/[^a-z0-9-
 
 /** delegate_task kind "design": the worker shows its result, so the lead (and the chat) can see it. */
 export const DESIGN_BRIEF = `## 디자인 작업
+- 로컬 디자인 스킬(frontend-design, impeccable, canvas-design, web-artifacts-builder 등)을 사용해 HTML/목업 산출물을 완성하세요.
+- Claude Design /design은 disable-model-invocation 때문에 모델/Skill 도구로 호출할 수 없습니다. 동의로 해결되지 않으므로 먼저 실행하거나 재시도하지 마세요. 사용자 터미널의 대화형 /design은 선택 사항이며 필수가 아닙니다.
+- /design이 없거나 막혀도 작업을 실패 처리하거나 재위임하지 마세요. 필요하면 선택 사항이라는 참고를 한 번만 남기고 로컬 목업으로 마무리하세요.
 - 화면을 만들거나 고친 뒤 실제로 띄워 브라우저(orchestra-browser 스킬, ao-browser)로 열고 확인하세요.
 - 확인한 화면의 스크린샷을 저장하고, 보고 끝에 한 줄씩 \`![무엇을 찍었는지](스크린샷 절대 경로)\` 형식으로 붙이세요. 채팅에서 그 이미지가 보입니다.
 - 색·간격·글꼴은 프로젝트에 있는 디자인 토큰과 컴포넌트를 먼저 쓰고, 바꾼 이유를 한 줄로 적으세요.`;
@@ -822,7 +825,7 @@ export class Orchestra {
     const invocationNote = invocationWarnings.length ? `\n\n기능 실행 확인(최선 노력):\n${invocationWarnings.map((warning) => `- ${warning}`).join("\n")}` : "";
     if (result.exitCode !== 0) {
       this.event(session, result.agent, "error", `${label} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.`, { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
-      // A recognizable feature blocker is actionable feedback for the lead, even on a failed CLI run.
+      // A nonzero CLI exit remains an error; an optional /design note alone never fails a run.
       if (invocationWarnings.some((warning) => warning.startsWith("Claude /design 사용이 막혔습니다:"))) throw new WorkerFeatureError(`${result.finalText}${invocationNote}`);
       throw new Error(`${agentNames[result.agent]} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.${invocationNote}`);
     }
@@ -2125,13 +2128,14 @@ export class Orchestra {
     if (turn.tasks.filter((task) => task.status === "running").length >= maxDelegations * 2) throw new Error(`동시에 맡길 수 있는 일은 ${maxDelegations * 2}건입니다. collect_results로 끝난 일을 받은 뒤 맡기세요.`);
     const picked = this.pickLeadWorker(session, turn, args);
     const worker = picked instanceof Promise ? await picked : picked;
-    const names = Array.isArray(args.skills) ? args.skills.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 10) : [];
+    const requestedNames = Array.isArray(args.skills) ? args.skills.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 10) : [];
+    const names = requestedNames.filter((name) => !isHeadlessClaudeDesign(name));
     const skillText = names.length ? await this.leadSkillText(session, names) : { text: "", missing: [] as string[] };
     const kind = args.kind === "design" || args.kind === "research" ? args.kind : undefined;
     const group = typeof args.group === "string" && args.group.trim() ? args.group.trim().slice(0, 60) : undefined;
     const label = workerLabel(worker);
     const task: LeadTask = { id: `t${turn.tasks.length + 1}-${randomUUID().slice(0, 6)}`, workerId: worker.id!, label, agent: worker.agent, brief, ...(group ? { group } : {}), ...(kind ? { kind } : {}), status: "running", collected: false, startedAt: new Date().toISOString(), done: Promise.resolve() };
-    const extra = `${names.length ? `\n\n스킬: ${names.join(", ")}` : ""}${skillText.text}${kind === "design" ? `\n\n${DESIGN_BRIEF}` : ""}`;
+    const extra = `${names.length ? `\n\n스킬: ${names.join(", ")}` : ""}${skillText.text}${kind === "design" || requestedNames.some(isHeadlessClaudeDesign) ? `\n\n${DESIGN_BRIEF}` : ""}`;
     task.done = this.runBrief(session, turn, brief, worker, turn.worktrees, extra).then((out) => {
       if (out === STOPPED) { task.status = "stopped"; task.result = `[${label} 결과 — 멈춤]`; }
       else { task.status = "done"; task.result = out; }

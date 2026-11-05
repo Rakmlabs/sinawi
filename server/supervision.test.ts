@@ -29,7 +29,12 @@ test("shared prompts keep the six-field brief and add read, verify, and replan r
   assert.match(ORCHESTRATOR_RULES, /## 이 앱에서 일하기/);
   assert.match(WORKER_RULES, /## 이 앱에서 일하기/);
   assert.match(ORCHESTRATOR_RULES, /이미 띄워 둔 다른 서버의 포트/);
+  assert.match(ORCHESTRATOR_RULES, /\/design.*disable-model-invocation/);
+  assert.match(ORCHESTRATOR_RULES, /frontend-design.*impeccable.*canvas-design.*web-artifacts-builder/);
+  assert.match(ORCHESTRATOR_RULES, /재위임.*실패.*하지 않는다/);
   assert.match(WORKER_RULES, /orchestra-attachments/);
+  assert.match(WORKER_RULES, /\/design.*Skill 도구.*호출하지 않는다/);
+  assert.match(WORKER_RULES, /HTML.*목업/);
   assert.match(WORKER_RULES, /앱 창이 열려 있지 않습니다/);
   assert.match(WORKER_RULES, /python3 -m http\.server 8765/);
   assert.match(reviewPrompt(["done"], "", 1), /ao-browser snapshot 또는 screenshot/);

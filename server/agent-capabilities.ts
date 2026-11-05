@@ -6,8 +6,8 @@ import type { AgentId } from "./types.js";
  * no "if the user says X, use Y" rules.
  */
 export const AGENT_CAPABILITIES: Record<AgentId, string> = {
-  claude: "Claude Code. 설치된 Claude 스킬을 Skill 도구로 연다(아래 스킬 목록의 [claude] 표시). 내장 기능: Claude Design 연동(`/design`: 사용자가 터미널의 Claude에서 한 번 `/design consent`를 실행해 동의해야 사용할 수 있다. 동의와 계정의 Claude Design 접근 권한이 있으면 Claude Design 프로젝트·아트보드를 에이전트가 다룰 수 있다), claude.ai 아티팩트용 HTML(web-artifacts-builder), Figma·플러그인 MCP. 긴 맥락 읽기, 설계·리뷰·문서에 강하다.",
-  codex: "Codex CLI. apply_patch 기반의 빠르고 정확한 코드 수정, 테스트·빌드 반복, 대규모 리팩터에 강하다. Codex 스킬([codex] 표시)을 쓴다.",
+  claude: "Claude Code. 설치된 Claude 스킬을 Skill 도구로 연다(아래 스킬 목록의 [claude] 표시). 단, Claude Design `/design`은 disable-model-invocation 때문에 모델이나 Skill 도구가 호출할 수 없다. 동의 여부로 이 headless 제한을 풀 수 없다. 디자인·목업은 Claude 또는 Codex 워커가 로컬 스킬 frontend-design, impeccable, canvas-design, web-artifacts-builder 등을 사용해 HTML·목업 아티팩트로 만든다. 사용자가 자기 터미널에서 대화형 `/design`을 여는 것은 선택 가능한 수동 단계일 뿐 작업의 필수 조건이 아니다. Figma·플러그인 MCP, 긴 맥락 읽기, 설계·리뷰·문서에 강하다.",
+  codex: "Codex CLI. apply_patch 기반의 빠르고 정확한 코드 수정, 테스트·빌드 반복, 대규모 리팩터에 강하다. Codex 스킬([codex] 표시)을 쓴다. frontend-design, impeccable, canvas-design, web-artifacts-builder 같은 로컬 디자인 스킬을 전달받아 HTML·목업 아티팩트를 만들 수 있다.",
   grok: "Grok Build. 이미지·영상 생성 도구(미디어)가 있는 유일한 CLI다. 실시간 웹·X 검색과 리서치에 강하다. Grok 스킬([grok] 표시)을 쓴다.",
 };
 
