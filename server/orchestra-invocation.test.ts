@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { Orchestra } from "./orchestra.js";
+import { DESIGN_BRIEF, Orchestra } from "./orchestra.js";
 import type { RunCliOptions } from "./cli.js";
 
 for (const exitCode of [0, 1]) test(`Claude design failures reach the user and lead even with exit code ${exitCode}`, async () => {
@@ -22,7 +22,7 @@ for (const exitCode of [0, 1]) test(`Claude design failures reach the user and l
   const session = await orchestra.create({ prompt: "Create design", agent: "grok", workers: ["claude"], cwd });
   for (let attempt = 0; session.status === "running" && attempt < 1000; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(session.status, "done");
-  assert.ok(session.events.some((event) => event.type === "warning" && event.role === "worker" && /터미널.*\/design consent/.test(event.text)));
+  assert.ok(session.events.some((event) => event.type === "warning" && event.role === "worker" && /선택 사항/.test(event.text)));
   assert.match(leadPrompts[1], /access denied.*\/design consent/);
 });
 
@@ -68,4 +68,48 @@ for (const exitCode of [0, 1]) test(`tool delegation infers design skills and pr
   assert.equal(collected.results[0].status, exitCode ? "error" : "done");
   assert.match(collected.results[0].result, /Skill.*확인할 수 없/);
   if (exitCode) assert.match(collected.results[0].result, /access denied.*\/design consent/);
+});
+
+for (const toolBased of [false, true]) test(`blocked /design does not fail a finished local mockup (${toolBased ? "tool" : "tag"})`, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-local-design-"));
+  let chatId = "";
+  const blockedSkillDir = join(cwd, ".claude", "skills", "design");
+  await mkdir(blockedSkillDir, { recursive: true });
+  await writeFile(join(blockedSkillDir, "SKILL.md"), "---\nname: design\ndescription: Claude Design\n---\nRUN_HEADLESS_DESIGN_FIRST\n");
+  let workerCalls = 0;
+  let leadCalls = 0;
+  let collected: any;
+  const orchestra: Orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      workerCalls++;
+      assert.ok(options.prompt.includes(DESIGN_BRIEF));
+      assert.match(options.prompt, /disable-model-invocation/);
+      assert.match(options.prompt, /frontend-design/);
+      assert.doesNotMatch(options.prompt, /RUN_HEADLESS_DESIGN_FIRST/);
+      options.onLine({ type: "tool", text: "Skill design cannot be used with Skill tool due to disable-model-invocation" });
+      options.onLine({ type: "tool", text: "Write: /tmp/mockup.html" });
+      return { exitCode: 0, finalText: "Created /tmp/mockup.html with local design skills" };
+    }
+    if (options.readOnly) return { exitCode: 0, finalText: "Review" };
+    leadCalls++;
+    if (toolBased) {
+      await orchestra.leadToolCall(chatId, "delegate_task", { worker: "claude", brief: "Use /design to create a mockup", kind: "design", skills: ["design"] });
+      collected = await orchestra.leadToolCall(chatId, "collect_results", {});
+    } else if (leadCalls === 1) {
+      return { exitCode: 0, finalText: '<<DELEGATE to="claude" kind="design">>Use /design to create a mockup<</DELEGATE>>' };
+    } else {
+      assert.match(options.prompt, /mockup.html/);
+      assert.doesNotMatch(options.prompt, /결과 — 실패/);
+    }
+    return { exitCode: 0, finalText: "Finished local mockup" };
+  });
+  orchestra.stewardDataDir = join(cwd, "data");
+  const session = await orchestra.create({ prompt: "Create a mockup", agent: "codex", workers: ["claude"], cwd, ...(toolBased ? { steward: { name: "Design" } } : {}) });
+  chatId = session.id;
+  for (let attempt = 0; session.status === "running" && attempt < 1000; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(session.status, "done");
+  assert.equal(workerCalls, 1);
+  assert.ok(session.events.some((event) => event.role === "worker" && event.taskStatus === "done"));
+  assert.ok(!session.events.some((event) => event.role === "worker" && event.taskStatus === "error"));
+  if (toolBased) assert.equal(collected.results[0].status, "done");
 });

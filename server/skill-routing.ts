@@ -14,6 +14,8 @@ const ATTACH_CHARS = 40_000;
 
 type Skill = Pick<SkillRecord, "id" | "name" | "description" | "agents" | "source"> & { content?: string };
 
+export const isHeadlessClaudeDesign = (name: string) => /^(?:design|claude[ \t]+design)$/iu.test(name.replace(/^\/+|[`*]/gu, "").trim());
+
 const oneLine = (text: string, max: number) => {
   const line = text.replace(/\s+/gu, " ").trim();
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
@@ -24,6 +26,7 @@ export function skillCatalog(skills: readonly Skill[]): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const skill of skills) {
+    if (isHeadlessClaudeDesign(skill.name)) continue;
     const key = skill.name.toLocaleLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -33,12 +36,11 @@ export function skillCatalog(skills: readonly Skill[]): string {
   }
   if (!lines.length) return "";
   return `\n\n## 설치된 스킬
-사용자가 스킬 이름을 말하지 않아도, 위임할 작업에 맞는 스킬이 아래에 있으면 고른다. 각 <<DELEGATE>> 브리프 첫 줄에 \`스킬: 이름1, 이름2\`처럼 정확한 이름으로 적는다(최대 4개). 앱이 그 스킬을 워커에게 넘긴다. [claude] 같은 표시는 그 스킬을 기본으로 가진 CLI다. 다른 CLI 워커에게는 지침을 붙여 넘기므로, 어느 워커에게 맡길지는 작업 전체를 보고 판단한다. 맞는 스킬이 없으면 이 줄을 쓰지 않는다.
+사용자가 스킬 이름을 말하지 않아도, 위임할 작업에 맞는 스킬이 아래에 있으면 고른다. 각 <<DELEGATE>> 브리프 첫 줄에 \`스킬: 이름1, 이름2\`처럼 정확한 이름으로 적는다(최대 4개). 앱이 그 스킬을 워커에게 넘긴다. [claude] 같은 표시는 그 스킬을 기본으로 가진 CLI다. 다른 CLI 워커에게는 지침을 붙여 넘기므로, 어느 워커에게 맡길지는 작업 전체를 보고 판단한다. Claude Design \`/design\`은 disable-model-invocation이라 이 목록에서 제외하며, 디자인에는 아래의 로컬 디자인 스킬을 고른다. 맞는 스킬이 없으면 이 줄을 쓰지 않는다.
 ${lines.join("\n")}`;
 }
 
-/** Skill names from a brief's `스킬: a, b` line(s). */
-export function briefSkillNames(brief: string): string[] {
+function requestedSkillNames(brief: string): string[] {
   const names: string[] = [];
   for (const match of brief.matchAll(/^[ \t]*(?:#{1,6}[ \t]*)?(?:사용할[ \t]*)?스킬[ \t]*[:：][ \t]*(.+)$/gmu)) {
     for (const raw of match[1].split(/[,，、]/u)) {
@@ -47,6 +49,11 @@ export function briefSkillNames(brief: string): string[] {
     }
   }
   return names.slice(0, 6);
+}
+
+/** Skill names from a brief's `스킬: a, b` line(s) that a headless worker can invoke. */
+export function briefSkillNames(brief: string): string[] {
+  return requestedSkillNames(brief).filter((name) => !isHeadlessClaudeDesign(name));
 }
 
 function findSkill(name: string, skills: readonly Skill[], agent: AgentId): Skill | undefined {
@@ -67,7 +74,8 @@ const OPEN_HOW: Record<AgentId, string> = {
 /** Worker prompt section for the skills its brief names; "" when it names none. */
 export function workerSkillSection(brief: string, skills: readonly Skill[], agent: AgentId): string {
   const names = briefSkillNames(brief);
-  if (!names.length) return "";
+  const requestedClaudeDesign = requestedSkillNames(brief).some(isHeadlessClaudeDesign);
+  if (!names.length && !requestedClaudeDesign) return "";
   const native: string[] = [];
   const attached: Skill[] = [];
   const missing: string[] = [];
@@ -78,6 +86,7 @@ export function workerSkillSection(brief: string, skills: readonly Skill[], agen
     else attached.push(skill);
   }
   const parts: string[] = [];
+  if (requestedClaudeDesign) parts.push("Claude Design `/design`은 disable-model-invocation 때문에 headless 모델이나 Skill 도구로 호출하지 않는다. 디자인은 로컬 디자인 스킬과 HTML·목업 아티팩트로 완성한다. 사용자가 자기 터미널에서 대화형 `/design`을 여는 것은 선택 가능한 수동 단계다.");
   if (native.length) parts.push(`작업을 시작하기 전에 다음 스킬을 ${OPEN_HOW[agent]}: ${native.map((name) => `\`${name}\``).join(", ")}. 구현 단계에서도 그 지침을 따르고, 스킬이 요구하는 준비 단계를 건너뛰지 않는다.`);
   let remaining = ATTACH_CHARS;
   const bodies: string[] = [];
