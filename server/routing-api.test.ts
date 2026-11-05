@@ -368,6 +368,30 @@ test("settings API discovers at startup and refreshes catalogs and auth without 
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("worker readiness refreshes authentication after a terminal login", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orchestra-worker-auth-"));
+  let loggedIn = false;
+  const { orchestra, websocket } = createServer({
+    dataDir: directory,
+    modelHomeDir: directory,
+    availableAgents: ["claude"],
+    authDiscovery: { sleep: async () => {} },
+    modelRunner: async (command, args) => {
+      if (command === "claude" && args.join(" ") === "auth status") return { stdout: JSON.stringify({ loggedIn }) };
+      return { stdout: "Logged in authenticated" };
+    },
+  });
+  try {
+    const session = { workspaceId: "default" } as any;
+    assert.equal((await orchestra.workerReadiness!(session, "claude")).authenticated, false);
+    loggedIn = true;
+    assert.equal((await orchestra.workerReadiness!(session, "claude")).authenticated, true);
+  } finally {
+    websocket.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("auto handoff undo API restores the persisted team and rejects stale undo or invalid preferences", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-auto-undo-api-"));
   const previousConfig = { agent: "codex" as const, model: "original", workers: ["claude" as const] };

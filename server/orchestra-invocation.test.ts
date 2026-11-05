@@ -1,0 +1,71 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { Orchestra } from "./orchestra.js";
+import type { RunCliOptions } from "./cli.js";
+
+for (const exitCode of [0, 1]) test(`Claude design failures reach the user and lead even with exit code ${exitCode}`, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-invocation-"));
+  const leadPrompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      options.onLine({ type: "tool", text: 'Skill: {"skill":"design"}' });
+      options.onLine({ type: "tool", text: "Claude Design access denied: run /design consent first" });
+      return { exitCode, finalText: "Cannot complete design" };
+    }
+    leadPrompts.push(options.prompt);
+    return { exitCode: 0, finalText: leadPrompts.length === 1 ? '<<DELEGATE to="claude">>Use /design to create an artboard<</DELEGATE>>' : "Reported blocker" };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "Create design", agent: "grok", workers: ["claude"], cwd });
+  for (let attempt = 0; session.status === "running" && attempt < 1000; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(session.status, "done");
+  assert.ok(session.events.some((event) => event.type === "warning" && event.role === "worker" && /터미널.*\/design consent/.test(event.text)));
+  assert.match(leadPrompts[1], /access denied.*\/design consent/);
+});
+
+test("missing skill invocation evidence is included in worker results for the lead", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-invocation-"));
+  const leadPrompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") return { exitCode: 0, finalText: "Done" };
+    leadPrompts.push(options.prompt);
+    return { exitCode: 0, finalText: leadPrompts.length === 1 ? '<<DELEGATE to="claude">>스킬: frontend-design\nBuild the page<</DELEGATE>>' : "Reported gap" };
+  };
+  const session = await new Orchestra(undefined, runner).create({ prompt: "Build page", agent: "grok", workers: ["claude"], cwd });
+  for (let attempt = 0; session.status === "running" && attempt < 1000; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(session.status, "done");
+  assert.ok(session.events.some((event) => event.type === "warning" && /Skill.*확인할 수 없/.test(event.text)));
+  assert.match(leadPrompts[1], /Skill.*확인할 수 없/);
+});
+
+for (const exitCode of [0, 1]) test(`tool delegation infers design skills and preserves failure status (${exitCode})`, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "sinawi-invocation-"));
+  const skillDir = join(cwd, ".claude", "skills", "fixture-design");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, "SKILL.md"), "---\nname: fixture-design\ndescription: Visual fixture\n---\nUse Skill for this design task.\n");
+  let chatId = "";
+  let workerPrompt = "";
+  let collected: any;
+  const orchestra: Orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      workerPrompt = options.prompt;
+      return { exitCode, finalText: exitCode ? "Claude Design access denied: run /design consent first" : "Done" };
+    }
+    if (options.readOnly) return { exitCode: 0, finalText: "Review" };
+    await orchestra.leadToolCall(chatId, "delegate_task", { worker: "claude", brief: "Create the visual", skills: ["fixture-design"] });
+    collected = await orchestra.leadToolCall(chatId, "collect_results", {});
+    return { exitCode: 0, finalText: "Reported result" };
+  });
+  orchestra.stewardDataDir = join(cwd, "data");
+  const session = await orchestra.create({ prompt: "Build page", agent: "codex", workers: ["claude"], cwd, steward: { name: "Design" } });
+  chatId = session.id;
+  for (let attempt = 0; session.status === "running" && attempt < 1000; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(session.status, "done");
+  assert.match(workerPrompt, /스크린샷 절대 경로/);
+  assert.equal(collected.results[0].status, exitCode ? "error" : "done");
+  assert.match(collected.results[0].result, /Skill.*확인할 수 없/);
+  if (exitCode) assert.match(collected.results[0].result, /access denied.*\/design consent/);
+});

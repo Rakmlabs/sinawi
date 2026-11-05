@@ -3,7 +3,7 @@ import type { AgentId, Session, SessionEvent, SessionStatus } from "../server/ty
 import { t } from "./i18n";
 
 export function conversationText(text: string): string {
-  return text.replace(/<<DELEGATE\s+to=["'][^"'<>]+["']>>[\s\S]*?<<\/DELEGATE>>/gi, "")
+  return text.replace(/<<DELEGATE\b[^<>]{0,500}>>[\s\S]*?<<\/DELEGATE>>/gi, "")
     // The goal panel shows the checklist; a commander's goals read as one line each.
     // While a reply streams, the closing marker may not have arrived yet. Hide the app-only block
     // from its opening marker onward, then remove any orphan closing marker left by older output.

@@ -25,6 +25,7 @@ test("main chat only contains user, orchestrator, task card and handoff, includi
 
 test("delegation syntax is removed while preserving normal reply and user text", () => {
   assert.equal(conversationText('검토합니다.\n<<DELEGATE to="claude">>내부 작업<</DELEGATE>>\n곧 알려드릴게요.'), "검토합니다.\n\n곧 알려드릴게요.");
+  assert.equal(conversationText('검토합니다.\n<<DELEGATE to="claude" model="sonnet" kind="design">>내부 작업<</DELEGATE>>\n곧 알려드릴게요.'), "검토합니다.\n\n곧 알려드릴게요.");
 });
 
 test("repeated tasks for one worker retain separate status, elapsed time and threads", () => {

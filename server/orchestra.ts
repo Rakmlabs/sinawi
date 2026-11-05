@@ -9,7 +9,8 @@ import { clearSkillsCache, enabledPublicSkills, filterEnabledSkills, formatSkill
 import { applySchedulePatch, createSchedule, describeSchedule, dueSchedules, SCHEDULE_LIMIT, type Schedule, type ScheduleInput } from "./schedules.js";
 import { LEAD_TOOLS_GUIDE, LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
 import { capabilityCatalog } from "./agent-capabilities.js";
-import { skillCatalog, workerSkillSection } from "./skill-routing.js";
+import { workerInvocationWarnings } from "./worker-invocation.js";
+import { briefSkillNames, skillCatalog, workerSkillSection } from "./skill-routing.js";
 import type { AgentId, AgentSelection, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
@@ -25,7 +26,8 @@ import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 import { withJosa } from "./korean.js";
 
-const delegationPattern = /<<DELEGATE\s+to=["']([\w.-]{1,100})["']>>(.*?)<<\/DELEGATE>>/gis;
+const delegationPattern = /<<DELEGATE\b([^<>]{0,500})>>(.*?)<<\/DELEGATE>>/gis;
+const delegationAttributePattern = /\b([a-z][\w-]*)\s*=\s*(["'])(.*?)\2/giu;
 const maxEvents = 2_000;
 const maxDelegations = 6;
 /** Extra delegation rounds the orchestrator may use to re-plan after verification. */
@@ -33,6 +35,8 @@ const maxReplanRounds = 2;
 const stallCheckMs = 15_000;
 /** A worker's run ended because the session was stopped. */
 const STOPPED = Symbol("stopped");
+/** A feature failed, but its diagnostic report should still reach tag-based leads. */
+class WorkerFeatureError extends Error {}
 const guardKey = (sessionId: string, workerId: string) => `${sessionId}:${workerId}`;
 
 /** What a lead's tools need from the turn that is running (Orchestra.leadTurns). */
@@ -113,15 +117,37 @@ export interface QuotaFallbackContext {
 
 export type QuotaFallbackResolver = (session: Session) => Promise<QuotaFallbackContext>;
 
-export interface DelegationRequest { target: string; task: string }
+export interface WorkerReadiness {
+  installed: boolean;
+  authenticated: boolean;
+  detail: string;
+}
+
+export type WorkerReadinessResolver = (session: Session, agent: AgentId) => Promise<WorkerReadiness>;
+
+export interface DelegationRequest { target: string; task: string; model?: string; kind?: "design" | "research" }
 export function parseDelegations(text: string): DelegationRequest[] {
   const requests: DelegationRequest[] = [];
   for (const match of text.matchAll(delegationPattern)) {
+    const attributes = new Map<string, string>();
+    for (const attribute of match[1].matchAll(delegationAttributePattern)) attributes.set(attribute[1].toLowerCase(), attribute[3].trim());
+    const target = attributes.get("to");
     const task = match[2].trim();
-    if (task) requests.push({ target: match[1], task });
+    const model = attributes.get("model")?.slice(0, 100);
+    const rawKind = attributes.get("kind")?.toLowerCase();
+    const kind = rawKind === "design" || rawKind === "research" ? rawKind : undefined;
+    if (target && /^[\w.-]{1,100}$/u.test(target) && task) requests.push({ target, task, ...(model ? { model } : {}), ...(kind ? { kind } : {}) });
     if (requests.length >= maxDelegations) break;
   }
   return requests;
+}
+
+function designBriefRequested(task: string, kind?: DelegationRequest["kind"]): boolean {
+  if (kind === "design" || /(?:^|\s)\/design\b/iu.test(task)) return true;
+  if (briefSkillNames(task).some((name) => /(?:^|[-_:])(?:design|impeccable)(?:$|[-_:])/iu.test(name))) return true;
+  const visual = String.raw`(?:UI|UX|화면|웹\s*페이지|랜딩\s*페이지|대시보드|인터페이스|프론트엔드|screen|web\s*page|landing\s*page|dashboard|interface|frontend)`;
+  const design = String.raw`(?:디자인|시안|목업|design|redesign|mockup)`;
+  return new RegExp(`${visual}[^\n]{0,60}${design}|${design}[^\n]{0,60}${visual}`, "iu").test(task);
 }
 
 /** An empty chat's title until its first message names it (followup). */
@@ -213,6 +239,8 @@ export class Orchestra {
   quietLimitMs = 20 * 60 * 1_000;
   /** Set by the server: whether the user denied or stopped computer use for a session since a time. */
   computerHalt?: (sessionId: string, since: number) => "denied" | "stopped" | undefined;
+  /** Set by the server: confirms a missing CLI is installed and logged in before a lead adds it. */
+  workerReadiness?: WorkerReadinessResolver;
   /** Time of the last session event per running session (see quietLimitMs). */
   private lastEventAt = new Map<string, number>();
   /**
@@ -563,7 +591,7 @@ export class Orchestra {
     const workerContext = workers.map((worker) => `${worker.id}: ${worker.sessionMode !== "new" && workerSessionId(session, worker.id!) ? "이전 작업의 맥락을 가진 세션을 이어서 사용합니다. 기존 설명을 반복하지 않고 후속 작업을 지시할 수 있습니다." : "새 세션으로 시작합니다. 필요한 맥락을 전달하세요."}`).join("\n");
     const exampleWorker = workers[0]?.id ?? "claude";
     const worktreeNotice = await this.worktreeNotice(session);
-    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 서로 다른 워커에게 준 위임은 동시에 실행되고, 같은 워커에게 준 위임은 그 워커 세션에서 차례로 실행됩니다. 독립적인 일을 병렬로 돌리려면 다른 워커에게 나누세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}${capabilityCatalog(this.allowedAgents(session), workers.map((worker) => worker.agent))}${skillCatalog(installedSkills)}`;
+    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 특정 모델이 필요하면 여는 태그에 model="모델명"을, 디자인 작업이면 kind="design"을 추가하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 서로 다른 워커에게 준 위임은 동시에 실행되고, 같은 워커에게 준 위임은 그 워커 세션에서 차례로 실행됩니다. 독립적인 일을 병렬로 돌리려면 다른 워커에게 나누세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}${capabilityCatalog(this.allowedAgents(session), workers.map((worker) => worker.agent))}${skillCatalog(installedSkills)}`;
     const planningContext = plan ? `\n\n계획 전문 에이전트가 작성한 실행 계획:\n${plan}` : "";
     const handoffContext = session.handoffContext ? `\n\n이전 오케스트라의 대화 요약:\n${session.handoffContext}` : "";
     const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";
@@ -597,34 +625,52 @@ export class Orchestra {
     }
 
     let refused = false;
-    const resolveRequests = (text: string) => parseDelegations(text).flatMap((request) => {
-      if (answerOnly) {
-        if (!refused) this.event(session, session.agent, "warning", "다른 담당의 질문에 답하는 중이라 워커에게 일을 맡기지 않았습니다. 이 프로젝트에서 작업하려면 사용자가 이 채팅에서 시키거나, 담당 패널에서 '다른 담당의 부탁으로 작업하기'를 켜세요.");
-        refused = true;
-        return [];
+    const resolveRequests = async (text: string) => {
+      const resolved: Array<{ request: DelegationRequest; worker: AgentSelection }> = [];
+      const failures: string[] = [];
+      for (const request of parseDelegations(text)) {
+        if (answerOnly) {
+          if (!refused) this.event(session, session.agent, "warning", "다른 담당의 질문에 답하는 중이라 워커에게 일을 맡기지 않았습니다. 이 프로젝트에서 작업하려면 사용자가 이 채팅에서 시키거나, 담당 패널에서 '다른 담당의 부탁으로 작업하기'를 켜세요.");
+          refused = true;
+          continue;
+        }
+        const exact = workers.find((candidate) => candidate.id === request.target);
+        const legacyAgent = request.target.toLowerCase();
+        const named = legacyAgent === "codex" || legacyAgent === "claude" || legacyAgent === "grok" ? legacyAgent : undefined;
+        let worker = exact ?? (named ? workers.find((candidate) => candidate.agent === named) : undefined);
+        if (!worker && named) {
+          try {
+            // The lead chose a CLI its team lacks: add it only after install/login readiness passes.
+            worker = await this.addStewardWorker(session, workers, named);
+          } catch (error) {
+            failures.push(`[${agentNames[named]} 위임 실패]\n${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        if (worker) resolved.push({ request, worker: request.model ? { ...worker, model: request.model } : worker });
       }
-      const exact = workers.find((candidate) => candidate.id === request.target);
-      const legacyAgent = request.target.toLowerCase();
-      const named = legacyAgent === "codex" || legacyAgent === "claude" || legacyAgent === "grok" ? legacyAgent : undefined;
-      const worker = exact ?? (named ? workers.find((candidate) => candidate.agent === named) : undefined)
-        // The lead chose a CLI its team lacks: add that worker when the workspace allows it.
-        ?? (named ? this.addStewardWorker(session, workers, named) : undefined);
-      return worker ? [{ request, worker }] : [];
-    });
-    let requests = resolveRequests(first.finalText);
+      return { resolved, failures };
+    };
+    const firstResolution = await resolveRequests(first.finalText);
+    let requests = firstResolution.resolved;
     // Work the lead handed out with delegate_task and has not collected: the review checks it like a round.
     const uncollected = turn.tasks.filter((item) => !item.collected);
     if (uncollected.length) await Promise.all(uncollected.map((item) => item.done));
     if (controller.signal.aborted || uncollected.some((item) => item.status === "stopped")) return this.finishStopped(session, controller);
-    const toolResults = uncollected.map((item) => { item.collected = true; return item.result ?? ""; }).filter(Boolean);
+    const toolResults = [...firstResolution.failures, ...uncollected.map((item) => { item.collected = true; return item.result ?? ""; }).filter(Boolean)];
     if (!requests.length && !toolResults.length) return this.finish(session);
+    let pendingResults = toolResults;
 
     for (let round = 0; ; round++) {
-      const workerResults: string[] = round === 0 ? [...toolResults] : [];
+      const workerResults: string[] = pendingResults;
+      pendingResults = [];
       const roundWorktrees = round === 0 ? new Map(uncollected.flatMap((item) => { const info = turn.worktrees.get(item.workerId); return info ? [[item.workerId, info] as const] : []; })) : new Map<string, NonNullable<Session["worktrees"]>[number]>();
       // Different workers run at once (each has its own worktree and CLI session); one worker's
       // briefs run in order inside its session. Reports keep the lead's delegation order.
-      const runRequest = (item: (typeof requests)[number]) => this.runBrief(session, turn, item.request.task, item.worker, roundWorktrees);
+      const runRequest = (item: (typeof requests)[number]) => this.runBrief(session, turn, item.request.task, item.worker, roundWorktrees,
+        item.request.kind === "design" ? `\n\n${DESIGN_BRIEF}` : "").catch((error: unknown) => {
+          if (error instanceof WorkerFeatureError) return `[${workerLabel(item.worker)} 결과 — 실패]\n${error.message}`;
+          throw error;
+        });
       const queues = new Map<string, Array<{ index: number; item: (typeof requests)[number] }>>();
       requests.forEach((item, index) => queues.set(item.worker.id!, [...(queues.get(item.worker.id!) ?? []), { index, item }]));
       const outcomes: Array<string | typeof STOPPED | undefined> = new Array(requests.length);
@@ -673,7 +719,9 @@ export class Orchestra {
         this.event(session, session.agent, "message", workerResults.join("\n\n"), { role: "orchestrator", metadata: { phase: "worker-report", round } });
         return this.finish(session);
       }
-      let next = roundsLeft > 0 ? resolveRequests(review.finalText) : [];
+      const nextResolution = roundsLeft > 0 ? await resolveRequests(review.finalText) : { resolved: [], failures: [] };
+      let next = nextResolution.resolved;
+      pendingResults.push(...nextResolution.failures);
       if (roundFailed && !next.length) {
         const selfWork = session.events.slice(reviewStart).filter((event) => event.role === "orchestrator" && (event.type === "edit" || event.type === "command" || event.type === "tool") && /^(명령|파일 (수정|쓰기|생성)|편집|쓰기)\s*:/u.test(event.text));
         this.event(session, session.agent, "warning", `검증 실패 후 총괄이 재위임하지 않고 ${selfWork.length ? `직접 작업했습니다 (${selfWork.length}건: ${selfWork.slice(0, 3).map((event) => event.text.slice(0, 60)).join(", ")})` : "마무리하려 합니다"}.`, { role: "orchestrator", metadata: { phase: "self-work", round } });
@@ -682,14 +730,19 @@ export class Orchestra {
           review = await this.runAgent(session, session.agent, `방금 응답에 <<DELEGATE>>가 없습니다. 실패한 작업을 다른 접근으로 워커에게 재위임하세요(6개 제목 사용). 정말 재위임이 불가능하면 그 이유를 한 줄로 쓰고 끝내세요.`, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
           if (review.sessionId) session.cliSessionId = review.sessionId;
           if (controller.signal.aborted) return this.finishStopped(session, controller);
-          next = review.exitCode === 0 ? resolveRequests(review.finalText) : [];
+          const enforcedResolution = review.exitCode === 0 ? await resolveRequests(review.finalText) : { resolved: [], failures: [] };
+          next = enforcedResolution.resolved;
+          pendingResults.push(...enforcedResolution.failures);
           if (review.exitCode === 0) this.noteChecklist(session, review.finalText);
         }
       }
       // The lead gave up on a blocked worker: that is not a finished task, whatever the lead wrote.
       // A worker the app cut off is the lead's to judge: it often finished before the cut, and the review checks git.
-      if (!next.length) return this.finish(session, workerResults.some((text) => BLOCKED_REPORT.test(text)));
-      this.event(session, session.agent, "status", `총괄이 다시 계획해 ${next.length}건을 재위임합니다 (남은 기회 ${roundsLeft - 1}회).`, { role: "orchestrator", metadata: { phase: "replan", round: round + 1 } });
+      if (!next.length && !pendingResults.length) return this.finish(session, workerResults.some((text) => BLOCKED_REPORT.test(text)));
+      const status = next.length
+        ? `총괄이 다시 계획해 ${next.length}건을 재위임합니다 (남은 기회 ${roundsLeft - 1}회).`
+        : `재위임할 CLI를 사용할 수 없어 원인을 총괄에게 전달합니다 (남은 기회 ${roundsLeft - 1}회).`;
+      this.event(session, session.agent, "status", status, { role: "orchestrator", metadata: { phase: "replan", round: round + 1 } });
       requests = next;
     }
   }
@@ -720,7 +773,8 @@ export class Orchestra {
     const worktree = await this.prepareWorktree(session, workerId, label);
     if (controller.signal.aborted) return STOPPED;
     if (worktree.info) roundWorktrees.set(workerId, worktree.info);
-    const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${workerSkillSection(task, installedSkills, worker.agent)}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${extra}${workerResume}`;
+    const designExtra = designBriefRequested(`${task}\n${extra}`) && !extra.includes(DESIGN_BRIEF) ? `\n\n${DESIGN_BRIEF}` : "";
+    const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${workerSkillSection(task, installedSkills, worker.agent)}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${extra}${designExtra}${workerResume}`;
     const delegation = this.event(session, worker.agent, "delegation", task, { role: "worker", workerId, workerLabel: label, taskStatus: "running", model: worker.model, reasoningEffort: worker.reasoningEffort, ...(brief.missing.length ? { metadata: { briefAutofilled: brief.missing } } : {}) });
     const delegationId = delegation?.id;
     if (worktree.info) this.event(session, worker.agent, "status", `작업 브랜치 ${worktree.info.branch} — ${worktree.info.path}${worktree.info.mainDirty ? " (메인 폴더의 커밋되지 않은 변경은 포함되지 않음)" : ""}`, { role: "worker", workerId, workerLabel: label, delegationId });
@@ -763,11 +817,16 @@ export class Orchestra {
     }
     if (!result) throw new Error("작업자 세션을 시작할 수 없습니다.");
     if (result.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
+    const invocationWarnings = workerInvocationWarnings({ agent: result.agent, brief: `${task}\n${extra}`, skills: `${skills}\n${extra.includes("선택된 스킬 지침:") ? extra : ""}`, tools: result.toolText, output: result.outputText });
+    for (const warning of invocationWarnings) this.event(session, result.agent, "warning", warning, { role: "worker", workerId, workerLabel: label, delegationId });
+    const invocationNote = invocationWarnings.length ? `\n\n기능 실행 확인(최선 노력):\n${invocationWarnings.map((warning) => `- ${warning}`).join("\n")}` : "";
     if (result.exitCode !== 0) {
       this.event(session, result.agent, "error", `${label} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.`, { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
-      throw new Error(`${agentNames[result.agent]} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.`);
+      // A recognizable feature blocker is actionable feedback for the lead, even on a failed CLI run.
+      if (invocationWarnings.some((warning) => warning.startsWith("Claude /design 사용이 막혔습니다:"))) throw new WorkerFeatureError(`${result.finalText}${invocationNote}`);
+      throw new Error(`${agentNames[result.agent]} 워커가 종료 코드 ${result.exitCode}로 끝났습니다.${invocationNote}`);
     }
-    const report = result.finalText || `${agentNames[result.agent]}가 결과 없이 종료되었습니다(코드 ${result.exitCode}).`;
+    const report = (result.finalText || `${agentNames[result.agent]}가 결과 없이 종료되었습니다(코드 ${result.exitCode}).`) + invocationNote;
     // Exit code 0 but the CLI reported it stopped early (e.g. Grok "cancelled"): not a success.
     const interrupted = session.events.slice(eventStart).find((event) => event.type === "error" && event.delegationId === delegationId && /중단되었습니다 \(/.test(event.text));
     if (interrupted) {
@@ -1042,6 +1101,7 @@ export class Orchestra {
     // What the CLI itself said. Tool output (a file, a grep, a screenshot read as base64) can contain
     // "429" or "quota" and is never the provider refusing the run.
     const cliOutput: string[] = [];
+    const toolOutput: string[] = [];
     let quotaErrorEvidence = false;
     const disabledMcp = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledMcp;
     this.requireCurrentRun(session, signal);
@@ -1082,6 +1142,7 @@ export class Orchestra {
           if (stall) this.tripStall(session, guard, stall, agent, workerId ?? agent, workerName ?? agent, delegationId);
         }
         output.push(line.text);
+        if (line.type === "tool" || line.type === "command") toolOutput.push(line.text);
         if (line.type !== "tool" && line.type !== "command") cliOutput.push(line.text);
         if (line.type === "error" && isQuotaExhaustion(line.text)) quotaErrorEvidence = true;
         if (trackPrimarySession && line.sessionId && agent === session.agent) session.cliSessionId = line.sessionId;
@@ -1104,7 +1165,7 @@ export class Orchestra {
     }
     // A run the stall guard stopped ended because the app killed it, not because a quota ran out.
     const stoppedByApp = Boolean(guard?.kill.signal.aborted);
-    return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false };
+    return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false };
   }
 
   private async quotaFallbackContext(session: Session, signal?: AbortSignal): Promise<QuotaFallbackContext | undefined> {
@@ -2024,31 +2085,36 @@ export class Orchestra {
   }
 
   /** Worker for a delegate_task: the named one, or an idle one of the CLI, or a new one of it (parallel). */
-  private pickLeadWorker(session: Session, turn: LeadTurn, args: Record<string, unknown>): AgentSelection {
+  private pickLeadWorker(session: Session, turn: LeadTurn, args: Record<string, unknown>): AgentSelection | Promise<AgentSelection> {
     const workers = turn.workers;
     const busy = (id: string) => turn.tasks.some((task) => task.workerId === id && task.status === "running");
     const isAgent = (value: unknown): value is AgentId => value === "claude" || value === "codex" || value === "grok";
     const requested = typeof args.worker === "string" ? args.worker.trim() : "";
+    const model = typeof args.model === "string" && args.model.trim() ? args.model.trim().slice(0, 100) : undefined;
     let agent = isAgent(args.agent) ? args.agent : undefined;
     if (requested) {
       const exact = workers.find((worker) => worker.id === requested);
-      if (exact) return exact;
+      if (exact) {
+        if (model) exact.model = model;
+        return { ...exact };
+      }
       const named = requested.toLowerCase();
       if (!isAgent(named)) throw new Error(`워커 ${requested}가 없습니다. 있는 워커: ${workers.map((worker) => worker.id).join(", ")}. agent로 CLI를 정하면 새 워커를 만듭니다.`);
       agent = named;
     }
-    const model = typeof args.model === "string" && args.model.trim() ? args.model.trim().slice(0, 100) : undefined;
     if (!agent) {
       const any = workers.find((worker) => !busy(worker.id!)) ?? workers[0];
       if (!any) throw new Error("팀에 워커가 없습니다. agent를 정하세요.");
-      return any;
+      if (model) any.model = model;
+      return { ...any };
     }
     const idle = workers.find((worker) => worker.agent === agent && (!model || worker.model === model) && !busy(worker.id!));
-    if (idle) return idle;
+    if (idle) return { ...idle };
     // Every worker of that CLI is busy (or none has the model): another one joins so both run at once.
-    const added = this.addStewardWorker(session, workers, agent, model);
-    if (!added) throw new Error(`${agentNames[agent]} 워커를 쓸 수 없습니다. 이 작업공간에서 허용된 에이전트: ${this.allowedAgents(session).join(", ")}`);
-    return added;
+    return this.addStewardWorker(session, workers, agent, model).then((added) => {
+      if (!added) throw new Error(`${agentNames[agent]} 워커를 쓸 수 없습니다. 이 작업공간에서 허용된 에이전트: ${this.allowedAgents(session).join(", ")}`);
+      return { ...added };
+    });
   }
 
   private async delegateTask(session: Session, args: Record<string, unknown>) {
@@ -2057,14 +2123,15 @@ export class Orchestra {
     const brief = typeof args.brief === "string" ? args.brief.trim().slice(0, 40_000) : "";
     if (!brief) throw new Error("brief가 비었습니다. 워커에게 줄 지시를 적으세요.");
     if (turn.tasks.filter((task) => task.status === "running").length >= maxDelegations * 2) throw new Error(`동시에 맡길 수 있는 일은 ${maxDelegations * 2}건입니다. collect_results로 끝난 일을 받은 뒤 맡기세요.`);
-    const worker = this.pickLeadWorker(session, turn, args);
+    const picked = this.pickLeadWorker(session, turn, args);
+    const worker = picked instanceof Promise ? await picked : picked;
     const names = Array.isArray(args.skills) ? args.skills.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 10) : [];
     const skillText = names.length ? await this.leadSkillText(session, names) : { text: "", missing: [] as string[] };
     const kind = args.kind === "design" || args.kind === "research" ? args.kind : undefined;
     const group = typeof args.group === "string" && args.group.trim() ? args.group.trim().slice(0, 60) : undefined;
     const label = workerLabel(worker);
     const task: LeadTask = { id: `t${turn.tasks.length + 1}-${randomUUID().slice(0, 6)}`, workerId: worker.id!, label, agent: worker.agent, brief, ...(group ? { group } : {}), ...(kind ? { kind } : {}), status: "running", collected: false, startedAt: new Date().toISOString(), done: Promise.resolve() };
-    const extra = `${skillText.text}${kind === "design" ? `\n\n${DESIGN_BRIEF}` : ""}`;
+    const extra = `${names.length ? `\n\n스킬: ${names.join(", ")}` : ""}${skillText.text}${kind === "design" ? `\n\n${DESIGN_BRIEF}` : ""}`;
     task.done = this.runBrief(session, turn, brief, worker, turn.worktrees, extra).then((out) => {
       if (out === STOPPED) { task.status = "stopped"; task.result = `[${label} 결과 — 멈춤]`; }
       else { task.status = "done"; task.result = out; }
@@ -2276,10 +2343,17 @@ export class Orchestra {
    * A lead delegated to an agent its team does not have. When the workspace allows that agent, a
    * worker for it joins the team (kept for later turns) and the user is told; otherwise it is refused.
    */
-  private addStewardWorker(session: Session, workers: AgentSelection[], agent: AgentId, model?: string): AgentSelection | undefined {
+  private async addStewardWorker(session: Session, workers: AgentSelection[], agent: AgentId, model?: string): Promise<AgentSelection | undefined> {
     if (!this.agentAllowed(session.workspaceId, agent)) {
       this.event(session, session.agent, "warning", `${agentNames[agent]}는 이 작업공간에서 허용되지 않은 에이전트라 위임하지 않았습니다. 작업공간 설정에서 허용하거나 팀에 있는 워커에게 맡기세요.`);
       return undefined;
+    }
+    if (this.workerReadiness) {
+      const readiness = await this.workerReadiness(session, agent);
+      if (!readiness.installed || !readiness.authenticated) {
+        this.event(session, session.agent, "warning", readiness.detail);
+        throw new Error(readiness.detail);
+      }
     }
     const nextAgents = [...session.workers, agent];
     const configs = normalizeWorkerConfigs(nextAgents, [...(session.workerConfigs ?? []), { agent, ...(model ? { model } : {}) }]);
