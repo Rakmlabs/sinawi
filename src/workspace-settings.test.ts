@@ -14,7 +14,7 @@ const api: WorkspacesApi = {
   defaults: { default: {}, team: { allowedAgents: ["claude"] } },
   settings: { default: defaultWorkspacePolicy(), team: { ...defaultWorkspacePolicy(), mediaGeneration: false, computerUse: true, blockedTools: ["image-tool", "grok:search"] } },
   running: {},
-  switchTo: () => {}, create: noop, rename: noop, remove: noop, saveDefaults: noop, saveSettings: noop,
+  switchTo: () => {}, create: noop, rename: noop, remove: noop, saveDefaults: noop, saveSettings: noop, loginAccount: async () => undefined,
 };
 
 test("workspace settings render every rule per workspace with its current value", () => {
@@ -53,4 +53,13 @@ test("environment settings show this workspace's computer-use state with a link 
   const on = render("team");
   assert.match(on, /이 작업 공간에서 켜짐/);
   assert.match(on, /작업 공간 설정 열기/);
+});
+
+
+test("workspace accounts offer a named login button for every agent and retain advanced folders", () => {
+  const html = renderToStaticMarkup(createElement(WorkspacesContext.Provider, { value: api },
+    createElement(WorkspaceSettings, { currentId: "default", busy: false, cwd: "/project", onPickFolder: () => {} })));
+  assert.equal(html.match(/data-account-login=/g)?.length, 6);
+  assert.equal(html.match(/class="workspace-account"/g)?.length, 6);
+  for (const agent of ["claude", "codex", "grok"]) assert.match(html, new RegExp(`data-account-login="${agent}"`));
 });

@@ -3,7 +3,7 @@ import { createWorkspaceSaver, normalizeWorkspaces, workspaceShortcut, type Work
 import { readPreference, savedAutoSwitch, savedMode } from "../preferences";
 import { terminalOwnsKeyboardEvent } from "../terminal-events";
 import { workspaceApi } from "./api";
-import type { WorkspaceDefaults, WorkspaceId, WorkspacePolicy, WorkspaceState } from "../../server/types";
+import type { AgentId, WorkspaceDefaults, WorkspaceId, WorkspacePolicy, WorkspaceState } from "../../server/types";
 
 /** User-defined workspaces: list, current id and per-workspace defaults, persisted to the server. */
 export function useWorkspaceState() {
@@ -66,6 +66,13 @@ export function useWorkspaceState() {
   const createWorkspace = useCallback((name: string) => mutate("/workspaces", { name }, "POST"), [mutate]);
   const renameWorkspace = useCallback((id: WorkspaceId, name: string) => mutate(`/workspaces/${encodeURIComponent(id)}`, { name }, "PATCH"), [mutate]);
   const saveSettings = useCallback((id: WorkspaceId, settings: Partial<WorkspacePolicy>) => mutate(`/workspaces/${encodeURIComponent(id)}`, { settings }, "PATCH"), [mutate]);
+  const loginAccount = useCallback(async (id: WorkspaceId, agent: AgentId) => {
+    try {
+      const result = await workspaceApi<WorkspaceState & { command: string }>(`/workspaces/${encodeURIComponent(id)}/accounts/${agent}/login`, {}, "POST");
+      adopt(result);
+      return result.command;
+    } catch (error) { setWorkspaceError((error as Error).message); return undefined; }
+  }, [adopt]);
   const deleteWorkspace = useCallback((id: WorkspaceId, moveTo: WorkspaceId) =>
     mutate(`/workspaces/${encodeURIComponent(id)}?moveTo=${encodeURIComponent(moveTo)}`, undefined, "DELETE"), [mutate]);
   /** Defaults of a workspace that is not mounted (edited from settings). */
@@ -101,5 +108,5 @@ export function useWorkspaceState() {
     if (!state.current) void loadWorkspaces();
     else persist(state.current);
   }, [loadWorkspaces, persist]);
-  return { workspaces, workspaceError, updateDefaults, switchWorkspace, createWorkspace, renameWorkspace, deleteWorkspace, saveDefaults, saveSettings, retry };
+  return { workspaces, workspaceError, updateDefaults, switchWorkspace, createWorkspace, renameWorkspace, deleteWorkspace, saveDefaults, saveSettings, loginAccount, retry };
 }

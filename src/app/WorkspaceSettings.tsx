@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
-import { Check, FolderOpen, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, FolderOpen, Pencil, Plus, SquareTerminal, Trash2, X } from "lucide-react";
+import { openTerminal } from "../terminal-events";
 import { AgentMark } from "../AgentMark";
 import { accountLoginCommand, ACCOUNT_ENV, allowedAgentsForWorkspace, defaultWorkspacePolicy, toolNamePattern } from "../../server/workspace-policy";
 import { useWorkspaces } from "../workspace-context";
@@ -16,8 +17,8 @@ const AGENTS: AgentId[] = ["codex", "claude", "grok"];
  * MCP, blocked tools, ...). The open workspace's folder comes from the composer's folder picker and
  * its agents from the "allowed agents" section below.
  */
-export function WorkspaceSettings({ currentId, busy, cwd, onPickFolder }: { currentId: WorkspaceId; busy: boolean; cwd: string; onPickFolder: () => void }) {
-  const { workspaces, defaults, settings, running, switchTo, create, rename, remove, saveDefaults, saveSettings } = useWorkspaces();
+export function WorkspaceSettings({ currentId, busy, cwd, onPickFolder, onClose }: { onClose?: () => void; currentId: WorkspaceId; busy: boolean; cwd: string; onPickFolder: () => void }) {
+  const { workspaces, defaults, settings, running, switchTo, create, rename, remove, saveDefaults, saveSettings, loginAccount } = useWorkspaces();
   const [adding, setAdding] = useState("");
   const [renaming, setRenaming] = useState<{ id: WorkspaceId; value: string }>();
   const [deleting, setDeleting] = useState<{ id: WorkspaceId; moveTo: WorkspaceId }>();
@@ -108,6 +109,15 @@ export function WorkspaceSettings({ currentId, busy, cwd, onPickFolder }: { curr
             </div>
           </dl>
           <WorkspaceRules workspaceId={workspace.id} policy={settings[workspace.id] ?? defaultWorkspacePolicy()} open={current} locked={locked}
+            login={async (agent) => {
+              await run(async () => {
+                const command = await loginAccount(workspace.id, agent);
+                if (!command) return false;
+                openTerminal({ command });
+                onClose?.();
+                return true;
+              });
+            }}
             save={(patch) => run(() => saveSettings(workspace.id, patch))} />
         </li>;
       })}
@@ -177,7 +187,7 @@ function ToolList({ id, label, hint, values, scoped, disabled, onChange }: { id:
 }
 
 /** One workspace's rules; each change is saved on its own and applies from the next run. */
-function WorkspaceRules({ workspaceId, policy, open, locked, save }: { workspaceId: WorkspaceId; policy: WorkspacePolicy; open: boolean; locked: boolean; save: (patch: Partial<WorkspacePolicy>) => Promise<boolean> }) {
+function WorkspaceRules({ workspaceId, policy, open, locked, save, login }: { login: (agent: AgentId) => Promise<void>; workspaceId: WorkspaceId; policy: WorkspacePolicy; open: boolean; locked: boolean; save: (patch: Partial<WorkspacePolicy>) => Promise<boolean> }) {
   const [prompt, setPrompt] = useState<string>();
   const count = restrictionCount(policy);
   const key = workspaceId;
@@ -192,7 +202,7 @@ function WorkspaceRules({ workspaceId, policy, open, locked, save }: { workspace
     <RuleToggle id={`ws-${key}-grok-mcp`} label={t("wsset.grokMcp")} hint={t("wsset.grokMcpHint")} checked={policy.grokMcp} disabled={locked} onChange={(value) => void save({ grokMcp: value })} />
     <ToolList id={`ws-${key}-blocked`} label={t("wsset.blockedTools")} hint={t("wsset.blockedToolsHint")} values={policy.blockedTools} scoped disabled={locked} onChange={(next) => save({ blockedTools: next })} />
     <ToolList id={`ws-${key}-alerts`} label={t("wsset.alertTools")} hint={t("wsset.alertToolsHint")} values={policy.authAlertTools} scoped={false} disabled={locked} onChange={(next) => save({ authAlertTools: next })} />
-    <AccountFolders id={`ws-${key}-accounts`} settingId={open ? "ws-accounts" : undefined} accounts={policy.accounts ?? {}} disabled={locked} save={(agent, dir) => save({ accounts: { [agent]: dir } })} />
+    <AccountFolders login={login} id={`ws-${key}-accounts`} settingId={open ? "ws-accounts" : undefined} accounts={policy.accounts ?? {}} disabled={locked} save={(agent, dir) => save({ accounts: { [agent]: dir } })} />
     {policy.mediaGeneration && <div className="workspace-rule">
       <label className="workspace-rule-head" htmlFor={`ws-${key}-media-prompt`}>{t("wsset.mediaPrompt")}</label>
       <small id={`ws-${key}-media-prompt-hint`}>{t("wsset.mediaPromptHint")}</small>
@@ -210,11 +220,11 @@ function WorkspaceRules({ workspaceId, policy, open, locked, save }: { workspace
  * Per-agent CLI account folders (policy.accounts): every CLI run of that agent in this workspace
  * gets CLAUDE_CONFIG_DIR / CODEX_HOME / GROK_HOME set to it. Empty is the default login.
  */
-function AccountFolders({ id, settingId, accounts, disabled, save }: { id: string; settingId?: string; accounts: Partial<Record<AgentId, string>>; disabled: boolean; save: (agent: AgentId, dir: string) => Promise<boolean> }) {
+function AccountFolders({ id, settingId, accounts, disabled, save, login }: { login: (agent: AgentId) => Promise<void>; id: string; settingId?: string; accounts: Partial<Record<AgentId, string>>; disabled: boolean; save: (agent: AgentId, dir: string) => Promise<boolean> }) {
   const [drafts, setDrafts] = useState<Partial<Record<AgentId, string>>>({});
   return <div className="workspace-rule" role="group" aria-labelledby={`${id}-label`} data-setting-id={settingId}>
     <span className="workspace-rule-head" id={`${id}-label`}>{t("wsset.accounts")}</span>
-    <small id={`${id}-hint`}>{t("wsset.accountsHint")}</small>
+    <small id={`${id}-hint`}>{t("wsset.accountLoginHint")} {t("wsset.accountsHint")}</small>
     {(["claude", "codex", "grok"] as AgentId[]).map((agent) => {
       const saved = accounts[agent] ?? "";
       const draft = drafts[agent] ?? saved;
@@ -224,6 +234,7 @@ function AccountFolders({ id, settingId, accounts, disabled, save }: { id: strin
         <label className="workspace-inline-form">
           <AgentMark agent={agent} size="small" /><span>{names[agent]}</span>
           <input aria-label={t("wsset.accountFolder", { agent: names[agent] })} aria-describedby={`${id}-hint`} aria-invalid={!valid} placeholder={t("wsset.accountPlaceholder")} maxLength={1024} value={draft} disabled={disabled} onChange={(event) => setDrafts((old) => ({ ...old, [agent]: event.target.value }))} />
+          <button type="button" className="button light" data-account-login={agent} aria-label={t("wsset.accountLoginNamed", { agent: names[agent] })} disabled={disabled || draft !== saved} onClick={() => void login(agent)}><SquareTerminal size={14} aria-hidden="true" />{t("wsset.login")}</button>
           {draft !== saved && <><button type="button" className="button light" onClick={reset}>{t("side.cancel")}</button><button type="submit" className="button light" disabled={disabled || !valid}>{t("wsset.save")}</button></>}
         </label>
         {!valid && <small className="workspace-warning" role="alert">{t("wsset.accountInvalid")}</small>}

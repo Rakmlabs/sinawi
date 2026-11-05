@@ -19,7 +19,7 @@ import { WorkspaceSettings } from "./WorkspaceSettings";
 import { autoRunEnabled, readPreference, writePreference, savedBoolean } from "../preferences";
 import { TerminalPanel } from "../TerminalPanel";
 import { NotificationsCenter } from "../NotificationsCenter";
-import { toggleTerminal, terminalOwnsKeyboardEvent, TERMINAL_AUTH_REFRESH_EVENT, TERMINAL_NOTICE_EVENT, type TerminalNotice } from "../terminal-events";
+import { createAuthRefreshHandlers, toggleTerminal, terminalOwnsKeyboardEvent, TERMINAL_AUTH_REFRESH_EVENT, TERMINAL_NOTICE_EVENT, type TerminalNotice } from "../terminal-events";
 import type { DesktopRequest } from "../BrowserDesktop";
 import { setDesktopHost } from "../desktop-host";
 import { SIM_DEVICE_STORE, SIM_OPEN_EVENT } from "../sim-panel";
@@ -349,13 +349,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     void refreshModels("account");
   }, [workspaceAccountsKey, refreshModels]);
   useEffect(() => {
-    let lastFocus = 0;
-    const focus = () => {
-      if (Date.now() - lastFocus < 60_000) return;
-      lastFocus = Date.now();
-      void refreshModels("focus");
-    };
-    const login = () => { void refreshModels("login"); };
+    const { focus, login } = createAuthRefreshHandlers((reason) => { void refreshModels(reason); });
     const notice = (event: Event) => {
       const detail = (event as CustomEvent<TerminalNotice>).detail;
       if (!detail) return;
@@ -715,7 +709,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       case "shortcuts": return <ShortcutsPage />;
       case "environment": return <EnvironmentPage onClose={close} />;
       case "updates": return <UpdatesPage />;
-      case "workspaces": return <SettingsPage><div className="settings-hosted settings-workspaces"><WorkspaceSettings currentId={workspaceId} busy={busy} cwd={cwd} onPickFolder={() => setModal("directory")} /></div></SettingsPage>;
+      case "workspaces": return <SettingsPage><div className="settings-hosted settings-workspaces"><WorkspaceSettings onClose={close} currentId={workspaceId} busy={busy} cwd={cwd} onPickFolder={() => setModal("directory")} /></div></SettingsPage>;
       case "agents": return <AgentsPage agents={boot.agents} routingSettings={routingSettings} allowedAgents={allowedAgents} onAllowedChange={allowedChange}
         quotaFallback={quotaFallback} setQuotaFallback={setQuotaFallback} quotaThreshold={quotaThreshold} setQuotaThreshold={setQuotaThreshold}
         fallbackOrder={fallbackOrder} setFallbackOrder={setFallbackOrder} autoSwitch={autoSwitch} setAutoSwitch={setAutoSwitch} />;

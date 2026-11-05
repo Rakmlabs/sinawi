@@ -89,3 +89,27 @@ test("Ctrl+` toggles once per physical press (keyup/repeat ignored)", async () =
   consumeTerminalShortcut(ev("keydown"), actions);
   assert.equal(toggles, 2);
 });
+
+
+test("account-scoped official login commands trigger terminal auth refresh detection", async () => {
+  const { isLoginCommand } = await import("./terminal-events");
+  const { accountLoginCommand } = await import("../server/workspace-policy");
+  for (const agent of ["claude", "codex", "grok"] as const) {
+    assert.equal(isLoginCommand(accountLoginCommand(agent, "/tmp/work account's dir")), true, agent);
+    assert.equal(isLoginCommand(accountLoginCommand(agent)), true);
+  }
+  assert.equal(isLoginCommand("echo codex login"), false);
+  assert.equal(isLoginCommand("npm install -g @openai/codex"), false);
+});
+
+
+test("returning from login refreshes auth even after a recent focus, then restores focus throttling", async () => {
+  const { createAuthRefreshHandlers } = await import("./terminal-events");
+  const reasons: string[] = [];
+  const handlers = createAuthRefreshHandlers((reason) => { reasons.push(reason); }, () => 100_000);
+  handlers.focus();
+  handlers.login();
+  handlers.focus();
+  handlers.focus();
+  assert.deepEqual(reasons, ["focus", "login", "login"]);
+});

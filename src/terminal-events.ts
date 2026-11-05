@@ -91,3 +91,27 @@ export function consumeTerminalShortcut(
   else actions.toggle();
   return true;
 }
+
+export function isLoginCommand(command: string): boolean {
+  command = command.trim().replace(/^printf\s+'[^']*'\s+'(?:[^']|'\\'')*'\s*&&\s*/, "");
+  // accountLoginCommand shell-quotes both paths, including embedded apostrophes.
+  command = command.replace(/^mkdir -p '(?:[^']|'\\'')*' && (?:CLAUDE_CONFIG_DIR|CODEX_HOME|GROK_HOME)='(?:[^']|'\\'')*' /, "");
+  return /^(?:grok\b|claude\s*$|codex\s+(?:login|mcp\s+login)\b|claude\s+auth\s+login\b)/i.test(command.trim());
+}
+
+
+/** OAuth's return focus must bypass both client and server focus throttles once. */
+export function createAuthRefreshHandlers(refresh: (reason: string) => void, now = Date.now) {
+  let lastFocus = 0;
+  let awaitingLogin = false;
+  return {
+    focus: () => {
+      if (!awaitingLogin && now() - lastFocus < 60_000) return;
+      lastFocus = now();
+      const reason = awaitingLogin ? "login" : "focus";
+      awaitingLogin = false;
+      refresh(reason);
+    },
+    login: () => { awaitingLogin = true; refresh("login"); },
+  };
+}

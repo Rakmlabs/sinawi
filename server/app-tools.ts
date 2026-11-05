@@ -787,6 +787,7 @@ export function listedTool(tool: AppTool) {
  * the routes the real server registers, so a new route fails the test until it gets one or the other.
  */
 export const ROUTE_EXCLUSIONS: Record<string, string> = {
+  "POST /api/workspaces/:id/accounts/:agent/login": "사용자가 공식 CLI 브라우저 로그인을 시작하는 설정 버튼. 계정 폴더를 준비하며 AI가 로그인을 시작하지 않는다.",
   "POST /api/lead-mcp": "MCP 엔드포인트 자체(담당 실행의 sinawi_lead).",
   "POST /api/app-mcp": "MCP 엔드포인트 자체(외부 AI용 브리지 `sinawi mcp`).",
   "GET /api/app-mcp/connection": "외부 연결 토큰을 보여 주는 설정 화면용. AI에게 토큰을 주지 않는다.",

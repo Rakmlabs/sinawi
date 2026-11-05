@@ -23,7 +23,7 @@ import { dataDirFor, envVar } from "./runtime.js";
 import { createServer as createHttpServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import { NotificationStore } from "./notifications.js";
@@ -36,7 +36,7 @@ import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
 import { mediaRouteRequired, mediaUnavailableMessage } from "./media-routing.js";
-import { accountDirFor, allowedAgentsForWorkspace, assertMediaAllowed, blockedToolMessage, defaultWorkspacePolicy, isToolLocked, lockedToolsFor, normalizeWorkspacePolicy, policyDenyPatterns, WorkspacePolicyError, type WorkspacePolicyResolver } from "./workspace-policy.js";
+import { accountDirFor, accountLoginCommand, allowedAgentsForWorkspace, assertMediaAllowed, blockedToolMessage, defaultWorkspacePolicy, isToolLocked, lockedToolsFor, normalizeWorkspacePolicy, policyDenyPatterns, WorkspacePolicyError, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { loadUsage } from "./usage.js";
 import { loadProviderQuotas } from "./quota.js";
 import { exhaustionFromQuota } from "./quota-fallback.js";
@@ -950,6 +950,29 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       await refreshAllModels();
       res.status(201).json(workspacesPayload());
     } catch (error) { errorResponse(res, error); }
+  });
+  // User-triggered login: select the folder here, then let the existing terminal run the official CLI.
+  app.post("/api/workspaces/:id/accounts/:agent/login", async (req, res) => {
+    if (!req.headers.origin || !isAllowedOrigin(req.headers.origin)) {
+      res.status(403).json({ error: "앱 설정 화면에서 로그인을 시작해 주세요." });
+      return;
+    }
+    try {
+      const id = workspaceIdFormat(routeParam(req.params.id));
+      const cli = agent(routeParam(req.params.agent));
+      if (req.body != null && (typeof req.body !== "object" || Array.isArray(req.body) || Object.keys(req.body).length)) throw new Error("로그인 요청에는 경로를 지정할 수 없습니다.");
+      let accountDir = "";
+      workspaceState = await mutateWorkspaceState(async (state) => {
+        if (!state.workspaces.some((item) => item.id === id)) throw new Error("워크스페이스를 찾을 수 없습니다.");
+        const policy = state.settings?.[id] ?? defaultWorkspacePolicy();
+        accountDir = accountDirFor(policy, cli) ?? join(dataDirFor(options.dataDir), "accounts", id, cli);
+        await mkdir(accountDir, { recursive: true });
+        await installAccountSkills({ [cli]: accountDir });
+        (state.settings ??= {})[id] = normalizeWorkspacePolicy({ accounts: { [cli]: accountDir } }, true, policy);
+        return state;
+      }, options.dataDir);
+      res.json({ ...workspacesPayload(), command: accountLoginCommand(cli, accountDir) });
+    } catch (error) { errorResponse(res, error, workspaceNotFound(error) ? 404 : 400); }
   });
   app.patch("/api/workspaces/:id", async (req, res) => {
     try {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Duplex } from "node:stream";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,14 +10,14 @@ import { createServer, newWorkspaceId } from "./server.js";
 import { loadGroups, loadSessions, loadToolSettings, loadWorkspaceState, mutateGroups, mutateToolSettings, saveSessions, saveWorkspaceState } from "./store.js";
 import type { Session } from "./types.js";
 
-function request(app: Express, method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> {
+function request(app: Express, method: string, path: string, body?: unknown, origin: string | null = "tauri://localhost"): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     const socket = new Duplex({ read() {}, write(chunk, _encoding, done) { chunks.push(Buffer.from(chunk)); done(); } });
     const req = new IncomingMessage(socket as never);
     req.method = method; req.url = path; req.httpVersion = "1.1"; req.httpVersionMajor = 1; req.httpVersionMinor = 1;
     const json = body === undefined ? undefined : JSON.stringify(body);
-    req.headers = { host: "127.0.0.1", ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
+    req.headers = { host: "127.0.0.1", ...(origin ? { origin } : {}), ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
     const res = new ServerResponse(req);
     res.assignSocket(socket as never);
     res.on("error", reject);
@@ -235,4 +235,80 @@ test("computer requests need a run token even when the workspace allows computer
     // In-flight commands of a workspace that is turned off are failed by ComputerBridge.revokeWorkspace (computer-bridge.test.ts).
     assert.equal((await request(app, "PATCH", "/api/workspaces/default", { settings: { computerUse: false } })).status, 200);
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test("workspace login prepares isolated accounts, reuses saved folders and rejects invalid requests", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-login-"));
+  const { app, websocket } = server(directory);
+  t.after(async () => { websocket.close(); await rm(directory, { recursive: true, force: true }); });
+  assert.equal((await request(app, "POST", "/api/workspaces/default/accounts/codex/login", {}, null)).status, 403);
+  assert.equal((await request(app, "POST", "/api/workspaces/default/accounts/codex/login", {}, "https://example.com")).status, 403);
+  for (const [agent, env, login] of [
+    ["claude", "CLAUDE_CONFIG_DIR", "claude auth login"],
+    ["codex", "CODEX_HOME", "codex login"],
+    ["grok", "GROK_HOME", "grok login"],
+  ]) {
+    const response = await request(app, "POST", `/api/workspaces/default/accounts/${agent}/login`);
+    assert.equal(response.status, 200);
+    const folder = join(directory, "accounts", "default", agent);
+    assert.ok((await stat(folder)).isDirectory());
+    assert.equal(response.body.command, `mkdir -p '${folder}' && ${env}='${folder}' ${login}`);
+    assert.equal(response.body.settings.default.accounts[agent], folder);
+    assert.equal((await loadWorkspaceState(directory)).settings?.default.accounts?.[agent as "claude"], folder);
+    await writeFile(join(folder, "keep"), "credentials stay here");
+    assert.equal((await request(app, "POST", `/api/workspaces/default/accounts/${agent}/login`)).body.command, response.body.command);
+    assert.ok((await stat(join(folder, "keep"))).isFile());
+  }
+  // A path supplied to login cannot override the server-selected account.
+  assert.equal((await request(app, "POST", "/api/workspaces/default/accounts/codex/login", { accountDir: "/client-path" })).status, 400);
+  for (const [path, status] of [["missing/accounts/codex", 404], ["Bad/accounts/codex", 400], ["default/accounts/gemini", 400], ["default/accounts/toString", 400]]) {
+    assert.equal((await request(app, "POST", `/api/workspaces/${path}/login`)).status, status);
+  }
+  const custom = join(directory, "custom account's folder");
+  await request(app, "PATCH", "/api/workspaces/default", { settings: { accounts: { codex: custom } } });
+  await rm(custom, { recursive: true, force: true });
+  const reused = await request(app, "POST", "/api/workspaces/default/accounts/codex/login");
+  assert.equal(reused.status, 200);
+  assert.equal(reused.body.settings.default.accounts.codex, custom);
+  assert.ok((await stat(custom)).isDirectory());
+  assert.match(reused.body.command, /CODEX_HOME=.* codex login$/);
+  await request(app, "PATCH", "/api/workspaces/default", { settings: { accounts: { codex: "" } } });
+  assert.equal((await loadWorkspaceState(directory)).settings?.default.accounts?.codex, undefined);
+  const other = await request(app, "POST", "/api/workspaces", { name: "Other", settings: { accounts: null } });
+  assert.equal(other.status, 201);
+  const isolated = await request(app, "POST", "/api/workspaces/other/accounts/codex/login");
+  assert.equal(isolated.body.settings.other.accounts.codex, join(directory, "accounts", "other", "codex"));
+  assert.equal(isolated.body.settings.default.accounts.codex, undefined);
+});
+
+
+test("auth refresh after workspace login probes the new account and keeps default auth separate", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-login-auth-"));
+  let loggedIn = false;
+  const seen: Array<Record<string, string> | undefined> = [];
+  const { app, websocket } = createServer({
+    dataDir: directory, modelHomeDir: directory, availableAgents: [],
+    modelRunner: async (_command, _args, options) => {
+      seen.push(options?.env);
+      return { stdout: loggedIn ? "Logged in authenticated" : "Not logged in" };
+    },
+    authDiscovery: { sleep: async () => undefined },
+  });
+  t.after(async () => { websocket.close(); await rm(directory, { recursive: true, force: true }); });
+  await request(app, "POST", "/api/workspaces", { name: "Other" });
+  for (const agent of ["claude", "codex", "grok"]) {
+    assert.equal((await request(app, "POST", `/api/workspaces/default/accounts/${agent}/login`)).status, 200);
+  }
+  const before = await request(app, "POST", "/api/settings/models/refresh", { workspaceId: "default", reason: "login" });
+  assert.equal(before.body.modelOptions.codex.authStatus, "unauthenticated");
+  loggedIn = true;
+  seen.length = 0;
+  const after = await request(app, "POST", "/api/settings/models/refresh", { workspaceId: "default", reason: "login" });
+  assert.equal(after.status, 200);
+  for (const [agent, env] of [["claude", "CLAUDE_CONFIG_DIR"], ["codex", "CODEX_HOME"], ["grok", "GROK_HOME"]]) {
+    assert.equal(after.body.modelOptions[agent].authStatus, "authenticated");
+    assert.ok(seen.some((vars) => vars?.[env] === join(directory, "accounts", "default", agent)), agent);
+  }
+  assert.equal((await loadWorkspaceState(directory)).settings?.other.accounts, undefined);
 });

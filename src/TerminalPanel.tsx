@@ -8,6 +8,7 @@ import {
   notifyTerminal,
   openTerminal,
   requestAuthRefresh,
+  isLoginCommand,
   TERMINAL_OPEN_EVENT,
   TERMINAL_TOGGLE_EVENT,
   type OpenTerminalOptions,
@@ -133,10 +134,6 @@ function websocketUrl(tab: TerminalTab, cols: number, rows: number): string {
   return `${protocol}//${location.host}/api/terminal/ws?${query}`;
 }
 
-function isLoginCommand(command: string): boolean {
-  command = command.trim().replace(/^printf\s+'[^']*'\s+'(?:[^']|'\\'')*'\s*&&\s*/, "");
-  return /^(?:grok\b|claude\s*$|codex\s+(?:login|mcp\s+login)\b|claude\s+auth\s+login\b)/i.test(command.trim());
-}
 
 async function runInTerminal(id: string, command: string): Promise<void> {
   const response = await fetch(`/api/terminal/${encodeURIComponent(id)}/run`, {
