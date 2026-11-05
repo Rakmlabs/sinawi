@@ -1225,7 +1225,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.delete("/api/stewards/:id", async (req, res) => {
     try {
       await ready;
-      orchestra.deleteSteward(resolveStewardId(routeParam(req.params.id), toolsWorkspace(req.query.workspace)));
+      await orchestra.deleteSteward(resolveStewardId(routeParam(req.params.id), toolsWorkspace(req.query.workspace)));
       await saveStewards(orchestra.listStewards(), options.dataDir);
       await persistSessions(orchestra.list());
       res.status(204).end();
@@ -1476,7 +1476,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const target = orchestra.get(routeParam(req.params.id));
       if (target?.status === "running") throw new Error("실행 중인 세션은 삭제할 수 없습니다.");
       const cleanup = req.query.worktrees === "remove" && target?.worktrees?.length ? await cleanupSessionWorktrees(target.worktrees) : undefined;
-      orchestra.remove(routeParam(req.params.id));
+      await orchestra.remove(routeParam(req.params.id));
       await persistSessions(orchestra.list());
       if (cleanup) res.json(cleanup);
       else res.status(204).end();

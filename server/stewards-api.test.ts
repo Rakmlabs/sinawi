@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Duplex } from "node:stream";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,7 +10,7 @@ import { createServer, startInput } from "./server.js";
 import { loadSchedules } from "./schedules.js";
 import { issueComputerToken, revokeComputerToken } from "./computer-tokens.js";
 import { loadSessions, loadStewards, loadWorkspaceState, saveSessions, saveStewards, saveWorkspaceState } from "./store.js";
-import { notesPath, saveNotes, userPreferencesPath } from "./steward.js";
+import { notesPath, saveNotes, stewardDir, userPreferencesPath } from "./steward.js";
 import type { Session } from "./types.js";
 
 function request(app: Express, method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
@@ -92,6 +92,7 @@ test("leads can be created, listed, read, edited and deleted", async (t) => {
   assert.equal((await request(app, "PATCH", `/api/stewards/${id}`, { name: "x" })).status, 404);
   assert.equal((await request(app, "DELETE", `/api/stewards/${id}`)).status, 404);
   assert.deepEqual(await loadStewards(directory), []);
+  await assert.rejects(readFile(notesPath(directory, id)), { code: "ENOENT" });
 });
 
 test("a lead chat saved by an older version shows up as a lead entity with its notes", async (t) => {
@@ -110,6 +111,68 @@ test("a lead chat saved by an older version shows up as a lead entity with its n
   assert.equal(panel.body.pendingMerge, null);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal((await loadStewards(directory))[0]?.id, "lead-1", "the migration is saved");
+});
+
+test("deleting a lead session removes its entity, schedules and notes directory", async (t) => {
+  const { app, directory } = await fixture(t, [legacyLead("/work/api")]);
+  await request(app, "GET", "/api/stewards");
+  await saveNotes(directory, "lead-1", "- 지울 노트");
+  assert.equal((await request(app, "POST", "/api/stewards/lead-1/schedules", { prompt: "점검", cron: "0 9 * * *" })).status, 201);
+
+  assert.equal((await request(app, "DELETE", "/api/sessions/lead-1")).status, 204);
+  assert.equal((await request(app, "GET", "/api/stewards/lead-1")).status, 404);
+  assert.deepEqual(await loadStewards(directory), []);
+  assert.deepEqual(await loadSchedules(directory), []);
+  await assert.rejects(stat(stewardDir(directory, "lead-1")), { code: "ENOENT" });
+});
+
+test("deleting an ordinary session preserves unrelated leads and their notes", async (t) => {
+  const plain = { ...legacyLead("/work/api"), id: "plain", steward: undefined };
+  const { app, directory } = await fixture(t, [legacyLead("/work/api"), plain]);
+  await saveNotes(directory, "lead-1", "- 유지");
+  assert.equal((await request(app, "DELETE", "/api/sessions/plain")).status, 204);
+  assert.equal((await request(app, "GET", "/api/stewards/lead-1")).status, 200);
+  assert.equal(await readFile(notesPath(directory, "lead-1"), "utf8"), "- 유지\n");
+});
+
+test("a shared lead survives a non-last thread deletion and is removed with its last thread", async (t) => {
+  const thread = (id: string): Session => ({ ...legacyLead("/work/api"), id, steward: { ...legacyLead("/work/api").steward!, id: "shared" } });
+  const { app, directory } = await fixture(t, [thread("thread-a"), thread("thread-b")]);
+  await saveNotes(directory, "shared", "- 공유");
+  assert.equal((await request(app, "DELETE", "/api/sessions/thread-a")).status, 204);
+  assert.equal((await request(app, "GET", "/api/stewards/shared")).status, 200);
+  assert.equal(await readFile(notesPath(directory, "shared"), "utf8"), "- 공유\n");
+  assert.equal((await request(app, "DELETE", "/api/sessions/thread-b")).status, 204);
+  assert.equal((await request(app, "GET", "/api/stewards/shared")).status, 404);
+  await assert.rejects(stat(stewardDir(directory, "shared")), { code: "ENOENT" });
+});
+
+test("deleting the entity-id session or the lead itself detaches remaining threads and removes notes", async (t) => {
+  for (const route of ["sessions", "stewards"]) await t.test(route, async (t) => {
+    const other: Session = { ...legacyLead("/work/api"), id: "other", steward: { ...legacyLead("/work/api").steward!, id: "lead-1" } };
+    const { app, directory } = await fixture(t, [legacyLead("/work/api"), other]);
+    await saveNotes(directory, "lead-1", "- 공유");
+    assert.equal((await request(app, "DELETE", `/api/${route}/lead-1`)).status, 204);
+    assert.equal((await request(app, "GET", "/api/stewards/lead-1")).status, 404);
+    const remaining = (await request(app, "GET", "/api/sessions")).body.find((session: Session) => session.id === "other");
+    assert.ok(remaining);
+    assert.equal(remaining.steward, undefined);
+    await assert.rejects(stat(stewardDir(directory, "lead-1")), { code: "ENOENT" });
+  });
+});
+
+test("deleting a disabled thread removes its remembered lead when no active threads remain", async (t) => {
+  const { app, directory } = await fixture(t);
+  const created = await request(app, "POST", "/api/stewards", { name: "비활성", cwds: [directory] });
+  assert.equal(created.status, 201);
+  const id = created.body.id as string;
+  const thread = await request(app, "POST", "/api/sessions", { steward: { id } });
+  assert.equal(thread.status, 201);
+  await saveNotes(directory, id, "- 비활성");
+  assert.equal((await request(app, "PATCH", `/api/sessions/${thread.body.id}/steward`, { enabled: false })).status, 200);
+  assert.equal((await request(app, "DELETE", `/api/sessions/${thread.body.id}`)).status, 204);
+  assert.equal((await request(app, "GET", `/api/stewards/${id}`)).status, 404);
+  await assert.rejects(stat(stewardDir(directory, id)), { code: "ENOENT" });
 });
 
 test("a chat's summary is one GET", async (t) => {

@@ -6,6 +6,8 @@ import { stewardName, stripLeadBlocks } from "./steward.js";
 
 const mcpAuthFailure = /\bmcp\b[^\n]*(?:needs? authentication|requires? authentication|authentication required|unauthori[sz]ed|not logged in|401)|(?:needs? authentication|authentication required|not logged in)[^\n]*\bmcp\b/i;
 const mcpNameIn = (text: string) => /(?:mcp(?:\s+server)?|server)\s*[`'"“]([^`'"”\n]{1,120})[`'"”]/i.exec(text)?.[1]?.trim();
+const stagnationTitleFailure = /응답|정체|연속 실패|inactiv|stalled/i;
+const appStopFailure = /^(?:새 이벤트가 없어 작업을 중단했습니다 \(|CLI가 출력은 계속 내지만 [^\n]+ 동안 메시지·도구·결과 이벤트가 없어 작업을 중단했습니다 \(재시도 반복이나 응답 정지로 보입니다\)\.|성공 없이 \d+번 연속 실패했습니다\(|같은 증거 검증을 \d+회 반복해 재위임을 멈췄습니다|총괄 검증 반복을 멈췄습니다)/u;
 
 export function authNotification(workspaceId: WorkspaceId, agent: AgentId, status?: string, detail?: string, accountDir?: string): NotificationInput | undefined {
   if (status !== "unauthenticated") return;
@@ -51,14 +53,18 @@ export function sessionNotifications(session: Session, accounts?: WorkspacePolic
   if (session.status === "error") {
     const failure = [...session.events].reverse().find((event) => event.type === "error");
     if (failure && !mcpAuthFailure.test(failure.text)
-      && !/권한 거부|permission denied|quota|한도.*소진|rate.limit/i.test(failure.text)) notes.push({
-      workspaceId: session.workspaceId,
-      key: `failed:${session.id}:${session.endedAt ?? session.turnCount ?? 0}`,
-      type: "error",
-      title: /응답|정체|inactiv|stalled/i.test(failure.text) ? "작업 응답이 멈췄습니다" : "작업 오류",
-      body: failure.text.slice(0, 2000),
-      action,
-    });
+      && !/권한 거부|permission denied|quota|한도.*소진|rate.limit/i.test(failure.text)) {
+      const stoppedByApp = appStopFailure.test(failure.text);
+      const stalled = stoppedByApp || stagnationTitleFailure.test(failure.text);
+      notes.push({
+        workspaceId: session.workspaceId,
+        key: `failed:${session.id}:${stoppedByApp ? "stalled" : session.endedAt ?? session.turnCount ?? 0}`,
+        type: "error",
+        title: stalled ? "작업 응답이 멈췄습니다" : "작업 오류",
+        body: failure.text.slice(0, 2000),
+        action,
+      });
+    }
   }
   // A project lead reads like a message from it: its name and what it said last.
   if (session.status === "done" && session.steward) {

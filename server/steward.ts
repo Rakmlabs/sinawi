@@ -16,7 +16,7 @@
  * - a daily report at the time the user picked, opened by the app.
  */
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { basename, join } from "node:path";
 import type { AgentId, GoalItem, MergePolicy, PendingMerge, Session, SessionEvent, Steward } from "./types.js";
@@ -227,6 +227,11 @@ export async function readNotes(dataDir: string, sessionId: string): Promise<str
 export async function saveNotes(dataDir: string, sessionId: string, notes: string): Promise<void> {
   await mkdir(stewardDir(dataDir, sessionId), { recursive: true });
   await writeFile(notesPath(dataDir, sessionId), `${notes.trim()}\n`, { mode: 0o600 });
+}
+
+/** Removes the lead's notes and transcript together, validating the stored ID first. */
+export async function removeStewardDir(dataDir: string, id: string): Promise<void> {
+  await rm(stewardDir(dataDir, id), { recursive: true, force: true });
 }
 
 const speaker = (event: SessionEvent) => event.agent === "user" ? "사용자" : event.role === "worker" ? `워커 ${event.workerLabel ?? event.workerId ?? event.agent}` : event.role === "orchestrator" ? "담당" : event.agent;

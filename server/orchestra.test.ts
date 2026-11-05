@@ -400,7 +400,7 @@ test("session rename and removal publish and persist their changes", async () =>
 
   assert.equal(orchestra.rename(session.id, "Renamed").title, "Renamed");
   assert.equal(published.at(-1), "Renamed");
-  orchestra.remove(session.id);
+  await orchestra.remove(session.id);
 
   assert.equal(orchestra.get(session.id), undefined);
   assert.deepEqual(removed, [session.id]);
@@ -431,7 +431,7 @@ test("late runner events cannot republish a stopped and removed session", async 
   );
   const session = await orchestra.create({ prompt: "Long task", agent: "codex", workers: ["claude"], cwd });
   orchestra.stop(session.id);
-  orchestra.remove(session.id);
+  await orchestra.remove(session.id);
   const publishedBeforeLateLine = published.length;
 
   emitLateLine?.();

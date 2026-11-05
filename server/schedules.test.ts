@@ -162,7 +162,7 @@ test("a schedule fires into the lead's latest chat, shows cards, persists and su
   assert.ok(restoredChat.events.some((event) => event.metadata?.schedule?.action === "deleted"));
   // Deleting a lead removes its schedules.
   restored.createLeadSchedule(steward.id, { prompt: "x", cron: "0 9 * * *" }, "user");
-  restored.deleteSteward(steward.id);
+  await restored.deleteSteward(steward.id);
   assert.deepEqual(restored.listSchedules(), []);
 });
 

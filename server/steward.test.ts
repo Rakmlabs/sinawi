@@ -593,7 +593,7 @@ test("a new thread of a lead runs with the lead's team and shares its notes", as
 
   orchestra.patchSteward(steward.id, { name: "서버" });
   assert.equal(thread.steward!.name, "서버", "a new name shows in every thread");
-  orchestra.deleteSteward(steward.id);
+  await orchestra.deleteSteward(steward.id);
   assert.equal(thread.steward, undefined, "its chats stay, as ordinary chats");
   assert.equal(orchestra.getSteward(steward.id), undefined);
   assert.equal(stewardFromSession({ ...thread, steward: { turns: 0, since: "" } } as Session).name.length > 0, true);

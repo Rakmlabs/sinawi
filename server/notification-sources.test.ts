@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sessionNotifications, authNotification } from "./notification-sources.js";
+import { NotificationStore } from "./notifications.js";
 import type { Session } from "./types.js";
 test("unknown auth produces no notification; login commands stay agent-specific", () => {
   assert.equal(authNotification("personal", "grok", "unknown"), undefined);
@@ -31,6 +35,47 @@ test("a terminal task failure produces one error notification from the final fai
   assert.equal(errors[0].key, "failed:s:2026-11-04T00:00:00.000Z");
   assert.equal(errors[0].title, "작업 오류");
   assert.equal(errors[0].body, "모든 재시도가 실패했습니다");
+});
+
+test("repeated stagnation stops dedupe in storage without merging other failures", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-notification-sources-"));
+  const store = new NotificationStore(directory);
+  const session = { id: "s", title: "작업", workspaceId: "personal", cwd: "/tmp", status: "error", endedAt: "2026-11-04T00:00:00.000Z", events: [
+    { id: "fatal-1", type: "error", text: "성공 없이 5번 연속 실패했습니다(오류 종류는 다를 수 있음)." },
+  ] } as Session;
+  try {
+    const first = await store.add(sessionNotifications(session).find((note) => note.type === "error")!);
+    session.endedAt = "2026-11-04T00:05:00.000Z";
+    session.events.push({ id: "fatal-2", type: "error", text: "성공 없이 5번 연속 실패했습니다(오류 종류는 다를 수 있음)." } as Session["events"][number]);
+    const repeated = await store.add(sessionNotifications(session).find((note) => note.type === "error")!);
+
+    assert.equal(first.key, "failed:s:stalled");
+    assert.equal(repeated.id, first.id);
+    assert.equal(repeated.title, "작업 응답이 멈췄습니다");
+    assert.equal((await store.list("personal")).length, 1);
+
+    session.endedAt = "2026-11-04T00:10:00.000Z";
+    session.events = [{ id: "verify-evidence", type: "error", text: "같은 증거 검증을 2회 반복해 재위임을 멈췄습니다. 확인된 결과를 수용하세요." } as Session["events"][number]];
+    const evidenceStop = await store.add(sessionNotifications(session).find((note) => note.type === "error")!);
+    session.endedAt = "2026-11-04T00:15:00.000Z";
+    session.events = [{ id: "verify-stall", type: "error", text: "총괄 검증 반복을 멈췄습니다: 같은 명령을 반복했습니다." } as Session["events"][number]];
+    const stallStop = await store.add(sessionNotifications(session).find((note) => note.type === "error")!);
+    assert.equal(evidenceStop.id, first.id);
+    assert.equal(stallStop.id, first.id);
+    assert.equal((await store.list("personal")).length, 1, "verify-stop paths share the session's stagnation alert");
+
+    const other = { ...session, id: "other" } as Session;
+    await store.add(sessionNotifications(other).find((note) => note.type === "error")!);
+    assert.equal((await store.list("personal")).length, 2, "another session keeps its own stagnation alert");
+
+    const ordinary = { ...session, id: "ordinary", endedAt: "t1", events: [{ id: "error-1", type: "error", text: "API 응답 JSON 파싱 실패" }] } as Session;
+    await store.add(sessionNotifications(ordinary).find((note) => note.type === "error")!);
+    ordinary.endedAt = "t2";
+    await store.add(sessionNotifications(ordinary).find((note) => note.type === "error")!);
+    assert.equal((await store.list("personal")).filter((note) => note.key?.startsWith("failed:ordinary:")).length, 2, "ordinary failures from separate runs stay separate");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("quoted failures and transient CLI errors do not notify while work continues", () => {

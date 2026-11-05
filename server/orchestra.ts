@@ -21,7 +21,7 @@ import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeStatus, worktreeWorkerNote } from "./worktrees.js";
-import { applyStewardPatch, askPrompt, DEFAULT_MERGE_POLICY, mergeThreadReports, isReportPrompt, LEGACY_MERGE_POLICY, MAX_ASK_DEPTH, mergeRule, parseAsks, parseNotes, projectState, readNotes, readUserPreferences, replyPrompt, reportDue, reportPrompt, rolloverContext, saveNotes, saveTranscript, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardName, stewardNotesId, stewardRules, stewardStartText, stripLeadBlocks, transcriptPath, type SessionSummary, type StewardAsk, type StewardPatch } from "./steward.js";
+import { applyStewardPatch, askPrompt, DEFAULT_MERGE_POLICY, mergeThreadReports, isReportPrompt, LEGACY_MERGE_POLICY, MAX_ASK_DEPTH, mergeRule, parseAsks, parseNotes, projectState, readNotes, readUserPreferences, replyPrompt, reportDue, reportPrompt, rolloverContext, removeStewardDir, saveNotes, saveTranscript, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardName, stewardNotesId, stewardRules, stewardStartText, stripLeadBlocks, transcriptPath, type SessionSummary, type StewardAsk, type StewardPatch } from "./steward.js";
 import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 import { withJosa } from "./korean.js";
@@ -1548,11 +1548,15 @@ export class Orchestra {
     return session;
   }
 
-  remove(id: string): void {
+  remove(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.status === "running") throw new Error("실행 중인 세션은 삭제할 수 없습니다.");
+    const stewardId = session.steward?.id ?? session.disabledStewardId ?? session.id;
     this.sessions.delete(id);
+    // Removing the original lead chat deletes its lead; shared threads keep it until the last one.
+    const deletedSteward = this.stewardEntities.has(stewardId) && (id === stewardId || !this.stewardThreads(stewardId).length)
+      ? this.deleteSteward(stewardId) : Promise.resolve();
     this.controllers.delete(id);
     this.clearInactivityTimer(id);
     this.lastEventAt.delete(id);
@@ -1562,7 +1566,7 @@ export class Orchestra {
     this.rewrittenEvents.delete(id);
     this.configs.delete(id);
     this.publishRemoval(id);
-    void Promise.resolve(this.persist(this.list(), [])).catch(() => undefined);
+    return Promise.all([deletedSteward, this.persist(this.list(), [])]).then(() => undefined);
   }
 
   /**
@@ -2339,14 +2343,17 @@ export class Orchestra {
     return { agent: lead ?? (allowed.includes("claude") ? "claude" : allowed[0]), workers: [...allowed], workerConfigs: undefined };
   }
 
-  deleteSteward(id: string): void {
+  deleteSteward(id: string): Promise<void> {
     if (!this.stewardEntities.has(id)) throw new Error("담당을 찾을 수 없습니다.");
     for (const session of this.stewardThreads(id)) this.updateSteward(session.id, { enabled: false });
     this.stewardEntities.delete(id);
-    void Promise.resolve(this.persistStewards?.(this.listStewards())).catch(() => undefined);
     const owned = this.listSchedules(id);
     for (const schedule of owned) this.schedules.delete(schedule.id);
-    if (owned.length) this.saveSchedules();
+    return Promise.all([
+      this.persistStewards?.(this.listStewards()),
+      owned.length ? this.persistSchedules?.(this.listSchedules()) : undefined,
+      this.stewardDataDir ? removeStewardDir(this.stewardDataDir, id) : undefined,
+    ]).then(() => undefined);
   }
 
   /** The instructions and skills a turn starts with: a lead's are its entity's, as they are now. */
