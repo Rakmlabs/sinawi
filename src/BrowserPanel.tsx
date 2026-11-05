@@ -398,7 +398,8 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const pagePicture = useCallback(async (id: string) => {
     const ready = await waitReady(id);
     if (!ready.ok) return ready;
-    const idle = await callFrame(id, "networkidle", {}, 6000);
+    // Admin UIs that poll or hold a websocket never go idle: wait briefly, report it as a note, never block.
+    const idle = await callFrame(id, "networkidle", { timeout: 1200 }, 2000);
     const snap = await callFrame(id, "snapshot", {}, 8000);
     const idleResult = idle.ok ? idle.result as { idle?: boolean; pending?: number } : undefined;
     const shot = snap.ok ? snap.result as { snapshot?: string; title?: string } : undefined;
