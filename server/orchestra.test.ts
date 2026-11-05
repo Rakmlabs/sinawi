@@ -20,6 +20,28 @@ test("parseDelegations accepts supported agents and ignores empty tasks", () => 
   ]);
 });
 
+test("parseDelegations reads optional model and design attributes regardless of order", () => {
+  assert.deepEqual(parseDelegations('<<DELEGATE model="sonnet" to="claude" kind="design">>Build the screen<</DELEGATE>>'), [
+    { target: "claude", task: "Build the screen", model: "sonnet", kind: "design" },
+  ]);
+});
+
+test("tag delegation applies its model and design instructions inferred from the brief or skills", async () => {
+  for (const brief of ["스킬: frontend-design\n대시보드 화면 만들기", "대시보드 UI 디자인을 구현하기"]) {
+    const calls: RunCliOptions[] = [];
+    const orchestra = new Orchestra(undefined, async (options) => {
+      calls.push(options);
+      if (options.usageContext?.role === "worker") return { exitCode: 0, finalText: "상태: 완료\n화면을 확인했습니다." };
+      return { exitCode: 0, finalText: `<<DELEGATE to="claude" model="sonnet">>${brief}<</DELEGATE>>` };
+    });
+    const session = await orchestra.create({ prompt: "대시보드", agent: "grok", workers: ["claude"], cwd: process.cwd() });
+    await waitUntilSettled(session);
+    const worker = calls.find((call) => call.usageContext?.role === "worker");
+    assert.equal(worker?.model, "sonnet");
+    assert.match(worker?.prompt ?? "", /## 디자인 작업/u);
+  }
+});
+
 test("orchestrator runs selected worker and sends its result back", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-test-"));
   const calls: Array<{ agent: string; prompt: string; resumeSessionId?: string }> = [];
@@ -92,20 +114,62 @@ test("same-agent workers keep distinct labels, logs, and resume sessions", async
   assert.deepEqual(Object.fromEntries(workers.slice(-2).map((call) => [call.model, call.resumeSessionId])), { "model-a": "model-a-session", "model-b": "model-b-session" });
 });
 
-test("orchestrator does not run unselected delegated workers", async () => {
+test("a lead that delegates to an allowed CLI outside its team gets that worker", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-test-"));
-  let calls = 0;
+  const agents: string[] = [];
   const runner = async (options: RunCliOptions) => {
-    calls += 1;
-    const text = '<<DELEGATE to="grok">>Do something<</DELEGATE>>';
-    options.onLine({ type: "message", text, finalText: text });
-    return { exitCode: 0, finalText: text };
+    agents.push(options.agent);
+    if (agents.length === 1) {
+      const text = '<<DELEGATE to="grok">>Do something<</DELEGATE>>';
+      options.onLine({ type: "message", text, finalText: text });
+      return { exitCode: 0, finalText: text };
+    }
+    return { exitCode: 0, finalText: options.agent === "grok" ? "Worker done" : "Synthesized" };
   };
   const orchestra = new Orchestra(() => undefined, runner);
   const session = await orchestra.create({ prompt: "Do work", agent: "codex", workers: ["claude"], cwd });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  for (let i = 0; i < 100 && session.status === "running"; i++) await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(session.status, "done");
-  assert.equal(calls, 1);
+  assert.deepEqual(agents.slice(0, 2), ["codex", "grok"]);
+  assert.ok(session.workers.includes("grok"));
+});
+
+test("a tag delegation readiness failure is returned to the lead without adding or running the worker", async () => {
+  const calls: RunCliOptions[] = [];
+  const detail = "Grok Build 로그인이 필요합니다.";
+  const orchestra = new Orchestra(undefined, async (options) => {
+    calls.push(options);
+    if (calls.length === 1) return { exitCode: 0, finalText: '<<DELEGATE to="grok">>조사하기<</DELEGATE>>' };
+    return { exitCode: 0, finalText: "사용자에게 로그인 필요를 알립니다." };
+  });
+  orchestra.workerReadiness = async () => ({ installed: true, authenticated: false, detail });
+  const session = await orchestra.create({ prompt: "조사해", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitUntilSettled(session);
+  assert.equal(session.status, "done");
+  assert.equal(calls.some((call) => call.usageContext?.role === "worker"), false);
+  assert.equal(session.workers.includes("grok"), false);
+  assert.match(calls[1]?.prompt ?? "", new RegExp(detail, "u"));
+  assert.ok(session.events.some((event) => event.type === "warning" && event.text.includes(detail)));
+});
+
+test("a replan tag readiness failure is fed back through the next bounded review", async () => {
+  const calls: RunCliOptions[] = [];
+  const detail = "Grok Build CLI가 설치되어 있지 않습니다.";
+  const orchestra = new Orchestra(undefined, async (options) => {
+    calls.push(options);
+    if (calls.length === 1) return { exitCode: 0, finalText: '<<DELEGATE to="claude">>먼저 조사하기<</DELEGATE>>' };
+    if (options.usageContext?.role === "worker") return { exitCode: 0, finalText: "막힘: 다른 접근이 필요합니다." };
+    if (calls.length === 3) return { exitCode: 0, finalText: '<<DELEGATE to="grok">>다른 접근으로 조사하기<</DELEGATE>>' };
+    return { exitCode: 0, finalText: "설치되지 않은 CLI라 진행할 수 없다고 알립니다." };
+  });
+  orchestra.workerReadiness = async (_session, agent) => agent === "grok"
+    ? { installed: false, authenticated: false, detail }
+    : { installed: true, authenticated: true, detail: "ready" };
+  const session = await orchestra.create({ prompt: "조사해", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitUntilSettled(session);
+  assert.equal(session.status, "done");
+  assert.equal(calls.filter((call) => call.usageContext?.role === "worker").length, 1);
+  assert.match(calls[3]?.prompt ?? "", new RegExp(detail, "u"));
 });
 
 test("follow-up preserves system prompt, workers, and CLI resume id", async () => {

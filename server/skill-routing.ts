@@ -27,12 +27,13 @@ export function skillCatalog(skills: readonly Skill[]): string {
     const key = skill.name.toLocaleLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    lines.push(`- ${skill.name}${skill.description ? `: ${oneLine(skill.description, DESCRIPTION_CHARS)}` : ""}`);
+    const owners = [...new Set(skills.filter((other) => other.name.toLocaleLowerCase() === key).flatMap((other) => other.agents))];
+    lines.push(`- ${skill.name}${owners.length ? ` [${owners.join(",")}]` : ""}${skill.description ? `: ${oneLine(skill.description, DESCRIPTION_CHARS)}` : ""}`);
     if (lines.length >= CATALOG_LIMIT) break;
   }
   if (!lines.length) return "";
   return `\n\n## 설치된 스킬
-사용자가 스킬 이름을 말하지 않아도, 위임할 작업에 맞는 스킬이 아래에 있으면 고른다. 각 <<DELEGATE>> 브리프 첫 줄에 \`스킬: 이름1, 이름2\`처럼 정확한 이름으로 적는다(최대 4개). 앱이 그 스킬을 워커에게 넘긴다. 맞는 스킬이 없으면 이 줄을 쓰지 않는다.
+사용자가 스킬 이름을 말하지 않아도, 위임할 작업에 맞는 스킬이 아래에 있으면 고른다. 각 <<DELEGATE>> 브리프 첫 줄에 \`스킬: 이름1, 이름2\`처럼 정확한 이름으로 적는다(최대 4개). 앱이 그 스킬을 워커에게 넘긴다. [claude] 같은 표시는 그 스킬을 기본으로 가진 CLI다. 다른 CLI 워커에게는 지침을 붙여 넘기므로, 어느 워커에게 맡길지는 작업 전체를 보고 판단한다. 맞는 스킬이 없으면 이 줄을 쓰지 않는다.
 ${lines.join("\n")}`;
 }
 

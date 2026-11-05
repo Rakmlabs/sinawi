@@ -188,7 +188,7 @@ test("a corrupt saved settings file surfaces an error instead of replacing user 
   await assert.rejects(() => loadRoutingSettings(data), /저장된 라우팅 설정을 읽을 수 없습니다/);
 });
 
-test("planner JSON is constrained by routing rules and automatic and explicit skills are retained", async () => {
+test("planner JSON is kept when no user rule matches and automatic and explicit skills are retained", async () => {
   let plannerAgent = "";
   let plannerEffort = "";
   let plannerReadOnly = false;
@@ -215,9 +215,9 @@ test("planner JSON is constrained by routing rules and automatic and explicit sk
   assert.equal(recommendation.source, "planner");
   assert.equal(recommendation.planner.agent, "codex");
   assert.equal(recommendation.planner.model, undefined);
-  assert.equal(recommendation.orchestrator.agent, "claude");
-  assert.equal(recommendation.orchestrator.model, "opus");
-  assert.deepEqual(recommendation.workers.map((worker) => worker.agent), ["codex"]);
+  // No shipped keyword rule overrides the planner: its own choice stands.
+  assert.equal(recommendation.orchestrator.agent, "codex");
+  assert.deepEqual(recommendation.workers.map((worker) => worker.agent), ["claude"]);
   assert.deepEqual(recommendation.skills, ["react-skill"]);
 });
 
@@ -227,10 +227,8 @@ test("planner failures surface a warning and fall back to editable routing rules
   const service = new RoutingService({ runner, homeDir: home, skillLoader: async () => fixtureSkills });
   const recommendation = await service.recommend("React UI 디자인을 개선해줘", process.cwd());
   assert.equal(recommendation.source, "fallback");
-  assert.equal(recommendation.orchestrator.agent, "claude");
-  assert.deepEqual(recommendation.workers.map((worker) => worker.agent), ["codex"]);
   assert.deepEqual(recommendation.skills, ["react-skill"]);
-  assert.match(recommendation.reason, /프론트엔드 UI 규칙/);
+  assert.match(recommendation.reason, /일치하는 규칙이 없어/);
   assert.match(recommendation.warning ?? "", /planner unavailable/);
 });
 
@@ -267,18 +265,18 @@ test("routing loads project skills for the requested cwd and normalizes stale pl
   const recommendation = await service.recommend("문서를 작성해줘", directory);
   assert.equal(loadedCwd, directory);
   assert.equal(invokedModel, "opus");
-  assert.equal(recommendation.orchestrator.agent, "claude");
-  assert.match(recommendation.reason, /문서·디자인·리뷰 규칙/);
-  const review = await service.recommend("코드를 검토해줘", directory);
-  assert.equal(review.orchestrator.agent, "claude");
-  assert.match(review.reason, /문서·디자인·리뷰 규칙/);
+  assert.match(recommendation.reason, /일치하는 규칙이 없어/);
 });
 
 test("latin routing keywords use word boundaries and skill matching ignores common words", async () => {
   const home = await mkdtemp(join(tmpdir(), "orchestra-empty-home-"));
   const runner: PlannerRunner = async () => { throw new Error("fallback"); };
   const skills = [{ id: "generic", name: "Helper", source: "Test", description: "For the user with an agent skill" }];
-  const service = new RoutingService({ runner, homeDir: home, skillLoader: async () => skills });
+  const dataDir = await mkdtemp(join(tmpdir(), "orchestra-latin-rules-"));
+  const settings = structuredClone(defaultRoutingSettings);
+  settings.rules.push({ id: "frontend", label: "프론트엔드 UI", keywords: ["프론트", "ui", "ux", "react", "css"], orchestrator: "claude", workers: ["codex"], reason: "사용자 규칙" });
+  await saveRoutingSettings(settings, dataDir);
+  const service = new RoutingService({ runner, homeDir: home, dataDir, skillLoader: async () => skills });
   const ordinary = await service.recommend("build backend suite with data", process.cwd());
   assert.equal(ordinary.reason, "일치하는 규칙이 없어 기본 구성을 추천했습니다.");
   assert.deepEqual(ordinary.skills, []);
@@ -421,13 +419,13 @@ test("routing excludes workspace-disabled skills from automatic and explicit att
   assert.equal(explicit.skills.includes(skill.id), false);
 });
 
-test("successful unmatched planner recommendations also use the default Claude orchestrator", async () => {
+test("successful unmatched planner recommendations keep the planner's own orchestrator", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-next21-planner-"));
   await saveRoutingSettings(structuredClone(defaultRoutingSettings), directory);
   const service = new RoutingService({ dataDir: directory, skillLoader: async () => [], runner: async () => ({ exitCode: 0, finalText: JSON.stringify({ orchestrator: { agent: "grok", model: "grok-4.7" }, workers: [{ agent: "codex" }], reason: "추천" }) }) });
   const result = await service.recommend("평범한 요청", directory);
-  assert.equal(result.orchestrator.agent, "claude");
-  assert.equal(result.orchestrator.model, "opus");
+  assert.equal(result.orchestrator.agent, "grok");
+  assert.equal(result.orchestrator.model, "grok-4.7");
 });
 
 test("known logged-out providers are skipped by the Grok-first default", async () => {
@@ -443,4 +441,17 @@ test("known logged-out providers are skipped by the Grok-first default", async (
   await service.refreshModels();
   const result = await service.recommend("평범한 요청", directory, [], ["grok", "claude", "codex"], undefined, ["grok", "claude", "codex"]);
   assert.equal(result.orchestrator.agent, "claude");
+});
+
+test("unedited keyword rules from older versions are dropped on load, edited ones stay", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orchestra-legacy-rules-"));
+  const settings = structuredClone(defaultRoutingSettings);
+  settings.rules.push(
+    { id: "frontend", label: "프론트엔드 UI", keywords: ["프론트", "ui", "ux", "디자인", "react", "css"], orchestrator: "claude", workers: ["codex"], reason: "화면 설계와 사용성 판단이 중심인 작업" },
+    { id: "research", label: "빠른 조사", keywords: ["조사"], orchestrator: "grok", workers: ["claude"], reason: "내가 고친 규칙" },
+  );
+  await writeFile(join(directory, "routing-settings.json"), JSON.stringify(settings));
+  const loaded = await loadRoutingSettings(directory);
+  assert.equal(loaded.rules.some((rule) => rule.id === "frontend"), false);
+  assert.equal(loaded.rules.find((rule) => rule.id === "research")?.reason, "내가 고친 규칙");
 });

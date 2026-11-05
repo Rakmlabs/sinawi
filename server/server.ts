@@ -1,6 +1,6 @@
 import { installAccountSkills } from "./account-tooling.js";
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
-import { registerSetupRoutes } from "./setup.js";
+import { registerSetupRoutes, SETUP_TOOLS } from "./setup.js";
 import { BrowserBridge, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
 import { ComputerBridge, registerComputerRoutes, SHOT_DIR, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
 import { findTool, handleToolMcp, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
@@ -499,6 +499,27 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const ids = ["codex", "claude", "grok"] as AgentId[];
     const availability = await Promise.all(ids.map(commandAvailable));
     return ids.filter((_id, index) => availability[index]);
+  };
+  orchestra.workerReadiness = async (session, agent) => {
+    const setup = SETUP_TOOLS.find((tool) => tool.id === agent)!;
+    const installed = (await getAvailableAgents()).includes(agent);
+    if (!installed) {
+      return {
+        installed: false,
+        authenticated: false,
+        detail: `${setup.name} CLI가 설치되어 있지 않아 워커를 추가하지 않았습니다. 설정에서 설치하거나 터미널에서 ${setup.install} 명령을 실행한 뒤 다시 시도하세요.`,
+      };
+    }
+    await modelsReady;
+    const option = (await routing.refreshModels(policyFor(session.workspaceId).accounts)).modelOptions[agent];
+    if (option.authStatus !== "authenticated") {
+      return {
+        installed: true,
+        authenticated: false,
+        detail: `${option.authDetail ?? `${setup.name} 로그인 상태를 확인할 수 없습니다.`} 워커를 추가하지 않았습니다. 터미널에서 ${setup.login} 명령을 실행한 뒤 다시 시도하세요.`,
+      };
+    }
+    return { installed: true, authenticated: true, detail: `${setup.name} CLI 준비됨` };
   };
   orchestra.persistStewards = (stewards) => saveStewards(stewards, options.dataDir);
   const schedulesDir = dataDirFor(options.dataDir);

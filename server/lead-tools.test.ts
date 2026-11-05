@@ -145,8 +145,10 @@ test("delegate_task runs briefs in parallel, two of the same CLI at once, and co
       return { exitCode: 0, finalText: `상태: 완료\n${options.prompt.includes("화면 만들기") ? "화면" : "API"} 끝` };
     }
     if (options.readOnly) return { exitCode: 0, finalText: "검토 끝" };
-    const first = await orchestra.leadToolCall(chatId, "delegate_task", { agent: "codex", brief: "API 만들기", group: "g" }) as any;
-    const second = await orchestra.leadToolCall(chatId, "delegate_task", { agent: "codex", brief: "화면 만들기", group: "g", kind: "design" }) as any;
+    const [first, second] = await Promise.all([
+      orchestra.leadToolCall(chatId, "delegate_task", { agent: "codex", brief: "API 만들기", group: "g" }),
+      orchestra.leadToolCall(chatId, "delegate_task", { agent: "codex", brief: "화면 만들기", group: "g", kind: "design" }),
+    ]) as any[];
     assert.notEqual(first.worker, second.worker, "the second Codex brief gets its own worker");
     await waitFor(() => running === 2);
     const status = await orchestra.leadToolCall(chatId, "check_task", {}) as any;
@@ -170,6 +172,60 @@ test("delegate_task runs briefs in parallel, two of the same CLI at once, and co
   assert.match(design.prompt, /## 디자인 작업/u, "a design brief asks for screenshots in the report");
   assert.ok(chat.events.filter((event) => event.type === "delegation").length >= 2, "each brief shows as a delegation card");
   assert.ok(!chat.events.some((event) => event.text.includes("검토 끝")), "everything was collected: no extra review run");
+});
+
+test("delegate_task applies a requested model to an existing worker selected by ID", async (t) => {
+  const { repo, dataDir } = await setup(t);
+  let chatId = "";
+  const workerModels: Array<string | undefined> = [];
+  const orchestra: Orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      workerModels.push(options.model);
+      return { exitCode: 0, finalText: "상태: 완료\n끝" };
+    }
+    if (options.readOnly) return { exitCode: 0, finalText: "검토" };
+    await orchestra.leadToolCall(chatId, "delegate_task", { worker: "claude", brief: "기본 모델 검토" });
+    await orchestra.leadToolCall(chatId, "delegate_task", { worker: "claude", model: "sonnet", brief: "첫 지정 모델 검토" });
+    await orchestra.leadToolCall(chatId, "delegate_task", { worker: "claude", model: "haiku", brief: "둘째 지정 모델 검토" });
+    await orchestra.leadToolCall(chatId, "collect_results", {});
+    return { exitCode: 0, finalText: "끝" };
+  });
+  orchestra.stewardDataDir = dataDir;
+  const chat = await orchestra.create({
+    prompt: "검토", agent: "codex", workers: ["claude"], cwd: repo, steward: { name: "model" },
+    workerConfigs: [{ agent: "claude", model: "opus" }],
+  });
+  chatId = chat.id;
+  await waitFor(() => chat.status === "done");
+  assert.deepEqual(workerModels, ["opus", "sonnet", "haiku"], "each queued brief keeps its model at dispatch time");
+  assert.equal(chat.workerConfigs?.[0].model, "haiku", "the latest selected model remains on the lead's team");
+});
+
+test("delegate_task refuses to auto-add a CLI that is not installed or logged in", async (t) => {
+  for (const readiness of [
+    { installed: false, authenticated: false, detail: "Claude CLI가 설치되어 있지 않습니다." },
+    { installed: true, authenticated: false, detail: "Claude 로그인 필요: 터미널에서 claude auth login" },
+  ]) {
+    const { repo, dataDir } = await setup(t);
+    let chatId = "";
+    let failure = "";
+    const orchestra: Orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
+      if (options.usageContext?.role === "orchestrator" && chatId) {
+        await orchestra.leadToolCall(chatId, "delegate_task", { agent: "claude", brief: "검토" }).catch((error: Error) => { failure = error.message; });
+      }
+      return { exitCode: 0, finalText: "끝" };
+    });
+    orchestra.workerReadiness = async () => readiness;
+    orchestra.stewardDataDir = dataDir;
+    const chat = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["codex"], cwd: repo, steward: { name: "ready" } });
+    await waitFor(() => chat.status === "done");
+    chatId = chat.id;
+    await orchestra.followup(chat.id, "Claude에게 맡겨");
+    await waitFor(() => chat.status === "done" && Boolean(failure));
+    assert.match(failure, new RegExp(readiness.detail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u"));
+    assert.deepEqual(chat.workers, ["codex"]);
+    assert.ok(chat.events.some((event) => event.type === "warning" && event.text.includes(readiness.detail)));
+  }
 });
 
 test("briefs the lead did not collect go to the review; a brief for one worker waits for that worker", async (t) => {
