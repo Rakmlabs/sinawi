@@ -53,6 +53,9 @@ test("file sizes, long text, upload limits and media urls", () => {
   assert.equal(formatBytes(undefined), "");
   assert.equal(isLongText("짧음"), false);
   assert.equal(isLongText("x".repeat(3501)), true);
+  assert.equal(isLongText(`# 결정\n\n${"x".repeat(3501)}`), false, "headings keep a structured answer expanded");
+  assert.equal(isLongText(`| 선택 | 결과 |\n| --- | --- |\n| A | ${"x".repeat(3501)} |`), false, "tables keep a structured answer expanded");
+  assert.equal(isLongText(`${"x".repeat(3501)}\n\n1. 첫 번째\n2. 두 번째`), false, "numbered alternatives keep a structured answer expanded");
   assert.match(uploadRejection({ name: "big.mov", size: 81 * 1024 * 1024 }) ?? "", /80MB/);
   assert.equal(uploadRejection({ name: "ok.png", size: 100 }), undefined);
   assert.equal(uploadFraction(50, 0), 0);

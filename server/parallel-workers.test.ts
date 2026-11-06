@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Orchestra } from "./orchestra.js";
 import type { RunCliOptions } from "./cli.js";
-import { briefSkillNames, skillCatalog, workerSkillSection } from "./skill-routing.js";
+import { briefSkillNames, skillCatalog, workerSkillInstructions, workerSkillSection } from "./skill-routing.js";
 
 async function waitFor(predicate: () => boolean) {
   const start = Date.now();
@@ -86,6 +86,12 @@ test("the lead sees installed skills and a brief's skills reach the worker", () 
   assert.match(catalog, /## 설치된 스킬/);
   assert.match(catalog, /- impeccable \[claude,codex\]: Design and polish frontend UI\. Long text/);
   assert.equal(catalog.match(/- impeccable/g)?.length, 1, "each name once");
+  assert.match(catalog, /2–3개/);
+  assert.match(catalog, /사용자가 고른 뒤에만/);
+  assert.match(catalog, /스킬 없이 진행/);
+  assert.match(catalog, /물음표/);
+  assert.match(catalog, /기본 선호.*추천.*참고/);
+  assert.match(catalog, /후속.*브리프.*선택한.*스킬/);
   assert.equal(skillCatalog([]), "");
 
   assert.deepEqual(briefSkillNames("스킬: `impeccable`, /frontend-design\n## 목표\nx"), ["impeccable", "frontend-design"]);
@@ -100,6 +106,29 @@ test("the lead sees installed skills and a brief's skills reach the worker", () 
   assert.match(codex, /스킬로 열어[^\n]*`impeccable`/, "Codex has its own impeccable");
   assert.match(codex, /FRONTEND BODY/, "a skill the CLI lacks is attached");
   assert.equal(workerSkillSection("## 목표\nx", skills, "claude"), "");
+});
+
+test("a qualified skill choice is never replaced by an unrelated native basename", () => {
+  const skills = [
+    { id: "qualified", name: "vendor:review", description: "Vendor review", agents: ["claude" as const], source: "Claude", content: "QUALIFIED BODY" },
+    { id: "native", name: "review", description: "Unrelated review", agents: ["codex" as const], source: "Codex", content: "NATIVE BODY" },
+  ];
+
+  const codex = workerSkillSection("스킬: vendor:review\n## 목표\n검토", skills, "codex");
+
+  assert.match(codex, /QUALIFIED BODY/);
+  assert.doesNotMatch(codex, /NATIVE BODY/);
+});
+
+test("a missing qualified skill does not fall back to an installed basename", () => {
+  const skills = [
+    { id: "native", name: "review", description: "Unrelated review", agents: ["codex" as const], source: "Codex", content: "NATIVE BODY" },
+  ];
+
+  const codex = workerSkillSection("스킬: vendor:review\n## 목표\n검토", skills, "codex");
+
+  assert.match(codex, /설치되지 않은 스킬[^\n]*vendor:review/);
+  assert.doesNotMatch(codex, /NATIVE BODY|`review`/);
 });
 
 test("Claude Design is not advertised or opened headlessly while local design skills remain runnable", () => {
@@ -118,4 +147,16 @@ test("Claude Design is not advertised or opened headlessly while local design sk
   assert.match(claude, /frontend-design/);
   assert.match(claude, /\/design.*호출하지 않는다/);
   assert.match(claude, /사용자.*터미널.*선택.*수동/);
+  const designOnly = workerSkillSection("스킬: /design\n## 목표\n목업", designSkills, "claude");
+  assert.match(designOnly, /선택한 로컬 스킬이 없으면.*프로젝트.*패턴/);
+});
+
+test("worker attachment metadata includes only bodies within the prompt budget", () => {
+  const skills = [
+    { id: "a", name: "large", description: "", agents: ["claude" as const], source: "Claude", content: "x".repeat(40_000) },
+    { id: "b", name: "omitted", description: "", agents: ["claude" as const], source: "Claude", content: "OMITTED_BODY" },
+  ];
+  const result = workerSkillInstructions("스킬: large, omitted", skills, "codex");
+  assert.deepEqual(result.attachedSkills, ["large"]);
+  assert.doesNotMatch(result.text, /OMITTED_BODY/);
 });

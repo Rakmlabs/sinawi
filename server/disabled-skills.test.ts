@@ -82,3 +82,56 @@ test("disabled legacy media attachments do not block company creates, restored f
   const conversation = await orchestra.conversation({ botA: "a", botB: "b", prompt: "Discuss code", turns: 2, cwd, workspaceId: "company" }, [{ ...bot, id: "a" }, { ...bot, id: "b" }]);
   await settled(conversation);
 });
+
+test("MCP skill listing and delegation respect workspace disabled skills", async () => {
+  const { cwd, skill } = await fixture();
+  await mutateToolSettings((settings) => { workspaceToolSettings(settings, "personal").disabledSkills = [skill.name]; }, cwd);
+  let chatId = "";
+  let listed: any;
+  let delegated: any;
+  const workerPrompts: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") {
+      workerPrompts.push(options.prompt);
+      return { exitCode: 0, finalText: "상태: 완료" };
+    }
+    if (options.readOnly) return { exitCode: 0, finalText: "검증 완료" };
+    listed = await orchestra.leadToolCall(chatId, "list_skills", {});
+    delegated = await orchestra.leadToolCall(chatId, "delegate_task", { worker: "claude", brief: "Check code", skills: [skill.name] });
+    await orchestra.leadToolCall(chatId, "collect_results", {});
+    return { exitCode: 0, finalText: "완료" };
+  }, undefined, undefined, undefined, undefined, cwd);
+  orchestra.stewardDataDir = join(cwd, "steward-data");
+  const session = await orchestra.create({ prompt: "Check code", agent: "codex", workers: ["claude"], cwd, steward: { name: "Test" } });
+  chatId = session.id;
+  await settled(session);
+  assert.ok(workerPrompts.length);
+  assert.ok(workerPrompts.every((prompt) => !prompt.includes("SECRET_SKILL_INSTRUCTIONS")));
+  assert.ok(![...listed.lead, ...listed.others].some((item) => item.name === skill.name));
+  assert.deepEqual(delegated.missing_skills, [skill.name]);
+});
+
+test("steward default preferences inform recommendations without injecting unchosen instructions", async () => {
+  const { cwd, skill } = await fixture();
+  const prompts: RunCliOptions[] = [];
+  const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
+    prompts.push(options);
+    return { exitCode: 0, finalText: options.usageContext?.role === "worker" ? "상태: 완료" : '<<DELEGATE to="claude">>Check code without skills<</DELEGATE>>' };
+  }, undefined, undefined, undefined, undefined, cwd);
+  orchestra.stewardDataDir = join(cwd, "steward-data");
+  const steward = orchestra.createSteward({ name: "Test", agent: "codex", skills: [skill.id], workers: [{ agent: "claude" }] });
+  const session = await orchestra.create({ prompt: "스킬 없이 진행", agent: "codex", cwd, steward: { id: steward.id } });
+  await settled(session);
+  assert.ok(prompts.every(({ prompt }) => !prompt.includes("SECRET_SKILL_INSTRUCTIONS")));
+  assert.match(prompts.find((options) => options.usageContext?.role === "orchestrator")!.prompt, /기본 선호 스킬.*private-fixture/);
+  prompts.length = 0;
+  // Restored threads may still contain the defaults injected by older versions.
+  orchestra.restore([{ ...session, skills: [skill.id] }], [steward]);
+  await orchestra.followup(session.id, "스킬 없이 계속");
+  await settled(orchestra.get(session.id)!);
+  assert.ok(prompts.every(({ prompt }) => !prompt.includes("SECRET_SKILL_INSTRUCTIONS")));
+  prompts.length = 0;
+  await orchestra.followup(session.id, "이 스킬을 사용", [skill.id]);
+  await settled(orchestra.get(session.id)!);
+  assert.ok(prompts.some(({ prompt }) => prompt.includes("SECRET_SKILL_INSTRUCTIONS")), "explicit per-message attachments still work");
+});

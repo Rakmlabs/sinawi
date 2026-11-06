@@ -10,12 +10,17 @@ function elapsedLabel(totalSeconds: number): string {
 }
 
 /** Leaf clock: what the team is running right now ("waiting for the deploy… 3m"), else "thinking… 42s". */
-export function QuietIndicator({ session }: { session: Pick<Session, "status" | "events" | "lastActivityAt"> }) {
+export function QuietIndicator({ session, activityElapsedOnly = false }: {
+  session: Pick<Session, "status" | "events" | "lastActivityAt">;
+  /** The parent already rendered the current tool line; show only its clock. */
+  activityElapsedOnly?: boolean;
+}) {
   const now = useNow(1_000, session.status === "running");
   const activity = currentActivity(session);
   if (activity) {
-    const who = activity.who === "lead" ? t("run.lead") : activity.who;
     const elapsed = elapsedLabel(Math.max(0, Math.floor((now - Date.parse(activity.since)) / 1_000)));
+    if (activityElapsedOnly) return <span className="quiet-indicator">{elapsed}</span>;
+    const who = activity.who === "lead" ? t("run.lead") : activity.who;
     return <span className="quiet-indicator" title={activity.text}>
       {activity.kind === "deploy" ? t("run.waitingDeploy", { who, elapsed }) : t("run.runningTool", { who, tool: activity.text, elapsed })}
     </span>;

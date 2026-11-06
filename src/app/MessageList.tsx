@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { runPhase } from "../run-activity";
+import { currentActivity, runPhase } from "../run-activity";
 import { ArrowRight, CalendarClock, UserCheck, WandSparkles } from "lucide-react";
 import { isReportPrompt, leadMessage, schedulePrompt, scheduleWhen } from "../lead";
 import { Beat } from "../Beat";
@@ -64,16 +64,6 @@ function continuesPrevious(events: SessionEvent[], index: number): boolean {
 
 const delegationBrief = (text: string) => text.replace(/^.*?에게 위임:\s*/, "");
 
-/** The brief is often a long Markdown document: a clean one-line title, the whole brief on request. */
-function DelegationBrief({ text }: { text: string }) {
-  const title = cleanBriefTitle(text);
-  if (title === text.trim()) return <h3>{title}</h3>;
-  return <details className="delegation-brief">
-    <summary><h3>{title}</h3><span className="delegation-brief-toggle">{t("worker.showBrief")}</span></summary>
-    <div className="delegation-brief-body"><Markdown text={text} /></div>
-  </details>;
-}
-
 function DelegationCard({ e, task, active, onOpenWorker }: { e: SessionEvent; task: DelegationTask; active: Session; onOpenWorker: (workerId: string) => void }) {
   const config = task.event.role ? task.event : active.workerConfigs?.find((item) => item.agent === task.event.agent);
   if (e.metadata?.deletedWorker) return <article className="delegation-card deleted-worker" aria-label={t("deleg.deletedLabel")}>
@@ -82,10 +72,23 @@ function DelegationCard({ e, task, active, onOpenWorker }: { e: SessionEvent; ta
     <div className="delegation-bottom"><p>{t("deleg.logDeleted")}</p></div>
   </article>;
   const workerId = task.event.workerId ?? task.event.agent;
+  const brief = delegationBrief(e.text);
+  const title = cleanBriefTitle(brief);
   return <article className="delegation-card" aria-label={t("deleg.label")}>
-    <div className="delegation-heading"><AgentMark agent={task.event.agent} /><div><span>{t("deleg.label")}</span><strong>{task.event.workerLabel ?? names[task.event.agent]} · {config?.model || t("usage.cliDefaultModel")} · {config?.reasoningEffort || t("team.defaultReasoning")}</strong></div><span className={`status-label ${task.status}`}>{task.status === "running" && <Beat />}{statusLabels[task.status]}</span><Elapsed start={task.startedAt} end={task.endedAt} /></div>
-    <DelegationBrief text={delegationBrief(e.text)} />
-    <div className="delegation-bottom"><p title={task.activity}>{task.activity}</p><button className="button light" aria-controls={`sidebar-worker-${active.id}-${workerId}`} onClick={() => onOpenWorker(workerId)}>{t("deleg.view")}<ArrowRight size={13} /></button></div>
+    <div className="delegation-summary">
+      <details className="delegation-details">
+        <summary>
+          <AgentMark agent={task.event.agent} />
+          <strong title={title}>{title}</strong>
+          <span className={`status-label ${task.status}`}>{task.status === "running" && <Beat />}{statusLabels[task.status]}</span>
+          <Elapsed start={task.startedAt} end={task.endedAt} />
+        </summary>
+        <p>{task.event.workerLabel ?? names[task.event.agent]} · {config?.model || t("usage.cliDefaultModel")} · {config?.reasoningEffort || t("team.defaultReasoning")}</p>
+        {task.activity && <p>{task.activity}</p>}
+        {title !== brief.trim() && <div className="delegation-brief-body"><Markdown text={brief} /></div>}
+      </details>
+      <button className="button light" aria-controls={`sidebar-worker-${active.id}-${workerId}`} onClick={() => onOpenWorker(workerId)}>{t("deleg.view")}<ArrowRight size={13} /></button>
+    </div>
   </article>;
 }
 
@@ -108,6 +111,7 @@ function ScheduleCardView({ e }: { e: SessionEvent }) {
 /** The main conversation of the active session: messages, handoffs and delegation cards. */
 export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan, draft, lookupSession, onOpenSession, onStop }: MessageListProps) {
   const last = events.at(-1);
+  const activity = currentActivity(active);
   const draftContinues = Boolean(draft && last && last.agent === draft.agent && last.type !== "delegation" && last.type !== "handoff" && !last.metadata?.live);
   return <div className="messages">
     <GoalPanel session={active} lookup={lookupSession} onOpenSession={onOpenSession} onStop={onStop} />
@@ -164,7 +168,7 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
     <WorktreePanel session={active} />
     {active.status === "running" && (
       <div className="thinking" role="status">
-        <Beat /> {t(runPhase(active) === "verify" ? "msg.leadVerifying" : "msg.teamWorking")} <QuietIndicator session={active} />
+        <Beat /> {activity ? `${activity.who === "lead" ? t("run.lead") : activity.who} · ${activity.text}` : t(runPhase(active) === "verify" ? "msg.leadVerifying" : "msg.teamWorking")} <QuietIndicator session={active} activityElapsedOnly={Boolean(activity)} />
       </div>
     )}
     <div ref={bottomRef} />

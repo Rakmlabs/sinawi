@@ -33,6 +33,12 @@ test("design artifacts do not waive unrelated explicitly requested skills", () =
   assert.match(warnings[0], /확인할 수 없/);
 });
 
+test("an HTML artifact does not waive injected non-design skill instructions", () => {
+  const warnings = workerInvocationWarnings({ agent: "codex", brief: "Create a report", skills: "selected security-review instructions", tools: "Write: report.html", output: "Created report.html" });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /확인할 수 없/);
+});
+
 test("blocked design reports one optional local fallback note without requiring consent", () => {
   for (const output of [
     'Skill design cannot be used with Skill tool due to disable-model-invocation',
@@ -43,11 +49,17 @@ test("blocked design reports one optional local fallback note without requiring 
     const warnings = workerInvocationWarnings({ agent: "claude", brief: "스킬: /design\nCreate a mockup", skills: "", tools: 'Skill: {"skill":"design"}', output });
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /선택 사항/);
-    assert.match(warnings[0], /로컬.*HTML/);
+    assert.match(warnings[0], /선택한 로컬 스킬.*없으면.*프로젝트.*패턴/);
     assert.doesNotMatch(warnings[0], /consent를 실행|확인해야 합니다/);
   }
 });
 
 test("ordinary unbriefed work does not warn", () => {
   assert.deepEqual(workerInvocationWarnings({ agent: "claude", brief: "Fix tests", skills: "", tools: "Read: app.tsx", output: "Done" }), []);
+});
+
+test("attached skills do not waive invocation evidence for another native skill", () => {
+  const warnings = workerInvocationWarnings({ agent: "codex", brief: "스킬: vendor-review, native-review", skills: "", attachedSkills: ["vendor-review"], tools: "", output: "Done" });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /확인할 수 없/);
 });

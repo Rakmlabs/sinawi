@@ -18,6 +18,7 @@ interface SkillRoot {
 
 const cache = new Map<string, { expires: number; records: SkillRecord[] }>();
 const allAgents: AgentId[] = ["claude", "codex", "grok"];
+const canonicalFiles = new WeakMap<SkillRecord, string>();
 
 /** `accounts`: a workspace's CLI account folders; their skills replace the default login's. */
 function userRoots(accounts: WorkspaceAccounts = {}): SkillRoot[] {
@@ -42,9 +43,25 @@ function projectRoots(cwd: string): SkillRoot[] {
   ];
 }
 
+function yamlDescription(content: string): string | undefined {
+  const lines = content.split(/\r?\n/u);
+  const index = lines.findIndex((line) => /^description:\s*/u.test(line));
+  if (index < 0) return;
+  const value = lines[index].replace(/^description:\s*/u, "").trim();
+  if (!/^[|>][+-]?$/u.test(value)) return value || undefined;
+  const body: string[] = [];
+  for (const line of lines.slice(index + 1)) {
+    if (line.trim() === "---" || (line.trim() && !/^\s/u.test(line))) break;
+    body.push(line);
+  }
+  const indentation = Math.min(...body.filter((line) => line.trim()).map((line) => line.match(/^\s*/u)![0].length));
+  const block = body.map((line) => line.slice(Math.min(indentation, line.length))).join("\n").trim();
+  return value.startsWith(">") ? block.replace(/([^\n])\n(?=[^\n])/gu, "$1 ") : block;
+}
+
 function metadata(content: string, fallback: string) {
   const name = content.match(/^name:\s*(.+)$/m)?.[1]?.trim() || fallback;
-  const description = content.match(/^description:\s*(.+)$/m)?.[1]?.trim() || "사용자 정의 에이전트 스킬";
+  const description = yamlDescription(content) || "사용자 정의 에이전트 스킬";
   return { name, description };
 }
 
@@ -55,7 +72,9 @@ async function readSkill(file: string, source: string, fallback: string, agents:
     const content = await readFile(file, "utf8");
     const meta = metadata(content, fallback);
     const id = createHash("sha256").update(`${source}:${meta.name}`).digest("hex").slice(0, 16);
-    return { id, source, ...meta, agents: [...agents], content };
+    const record = { id, source, ...meta, agents: [...agents], content };
+    try { canonicalFiles.set(record, await realpath(file)); } catch { /* name and source remain the fallback identity */ }
+    return record;
   } catch {
     return undefined;
   }
@@ -136,24 +155,35 @@ export async function scanClaudePlugins(registryPath = join(homedir(), ".claude"
   return (await Promise.all(scans)).flat().map((record) => {
     const name = record.name.replace(/^omc-/, "");
     if (name === record.name) return record;
-    return {
-      ...record,
-      id: createHash("sha256").update(`${record.source}:${name}`).digest("hex").slice(0, 16),
-      name,
-    };
+    record.id = createHash("sha256").update(`${record.source}:${name}`).digest("hex").slice(0, 16);
+    record.name = name;
+    return record;
   });
 }
 
 function dedupe(records: SkillRecord[]): SkillRecord[] {
   const unique = new Map<string, SkillRecord>();
   for (const record of records) {
-    const key = `${record.name.toLocaleLowerCase()}\0${record.source.toLocaleLowerCase()}`;
+    const key = canonicalFiles.get(record) ?? `${record.name.toLocaleLowerCase()}\0${record.source.toLocaleLowerCase()}`;
     const existing = unique.get(key);
-    if (!existing) {
-      unique.set(key, record);
+    if (existing) {
+      existing.agents = [...new Set([...existing.agents, ...record.agents])];
       continue;
     }
-    existing.agents = [...new Set([...existing.agents, ...record.agents])];
+    unique.set(key, record);
+  }
+  const collisions = new Map<string, Array<[string, SkillRecord]>>();
+  for (const entry of unique) collisions.set(entry[1].id, [...(collisions.get(entry[1].id) ?? []), entry]);
+  const usedIds = new Set(collisions.keys());
+  for (const [id, entries] of collisions) {
+    for (const [key, record] of entries.sort(([left], [right]) => left.localeCompare(right)).slice(1)) {
+      let suffix = 0;
+      do {
+        record.id = createHash("sha256").update(`${id}\0${key}\0${suffix}`).digest("hex").slice(0, 16);
+        suffix += 1;
+      } while (usedIds.has(record.id));
+      usedIds.add(record.id);
+    }
   }
   return [...unique.values()];
 }
@@ -210,18 +240,24 @@ export async function resolveSkillPrompt(ids: string[], cwd?: string, disabledNa
 }
 
 export function formatSkillPrompt(records: SkillRecord[], ids: string[], disabledNames: readonly string[] = []): string {
+  return formatSkillInstructions(records, ids, disabledNames).text;
+}
+
+export function formatSkillInstructions(records: SkillRecord[], ids: string[], disabledNames: readonly string[] = []): { text: string; attachedSkills: string[] } {
   const allowed = new Set(ids.slice(0, 20));
   const selected = filterEnabledSkills(records, disabledNames).filter((record) => allowed.has(record.id));
-  if (!selected.length) return "";
+  if (!selected.length) return { text: "", attachedSkills: [] };
   const sections: string[] = [];
+  const attachedSkills: string[] = [];
   let remaining = 60_000;
   for (const skill of selected) {
     const heading = `\n--- ${skill.name} (${skill.source}) ---\n`;
     if (heading.length >= remaining) break;
     const content = skill.content.slice(0, Math.max(0, remaining - heading.length));
     sections.push(`${heading}${content}`);
+    if (content) attachedSkills.push(skill.name);
     remaining -= heading.length + content.length;
     if (remaining <= 0) break;
   }
-  return `\n\n선택된 스킬 지침:\n${sections.join("\n")}`;
+  return { text: `\n\n선택된 스킬 지침:\n${sections.join("\n")}`, attachedSkills };
 }

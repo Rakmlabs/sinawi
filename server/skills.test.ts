@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { clearSkillsCache, filterEnabledSkills, formatSkillPrompt, loadSkills, scanClaudePlugins, scanProjectSkills, scanSkillRoot } from "./skills.js";
+import { clearSkillsCache, filterEnabledSkills, formatSkillInstructions, formatSkillPrompt, loadSkills, scanClaudePlugins, scanProjectSkills, scanSkillRoot } from "./skills.js";
 
 test("disabled skill names are excluded from discovery and prompt injection", () => {
   const records = [{ id: "one", name: "Review", source: "Test", description: "", agents: ["codex" as const], content: "SECRET" }];
@@ -71,7 +71,7 @@ test("Claude plugin discovery loads skills and commands using the plugin name as
   assert.ok(skills.every(({ agents }) => agents.length === 1 && agents[0] === "claude"));
 });
 
-test("project discovery scans all supported roots and deduplicates by name and source", async () => {
+test("project discovery scans all supported roots without merging distinct files", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-project-skills-"));
   for (const directory of [".claude", ".agents", ".codex"]) {
     const skill = join(cwd, directory, "skills", directory.slice(1));
@@ -83,8 +83,47 @@ test("project discovery scans all supported roots and deduplicates by name and s
   await writeFile(join(duplicate, "SKILL.md"), "---\nname: shared\ndescription: Duplicate fixture\n---\n");
 
   const skills = await scanProjectSkills(cwd);
-  assert.deepEqual(skills.map(({ name }) => name).sort(), ["agents", "claude", "shared"]);
-  assert.deepEqual(skills.find(({ name }) => name === "shared")?.agents.sort(), ["claude", "codex"]);
+  assert.deepEqual(skills.map(({ name }) => name).sort(), ["agents", "claude", "shared", "shared"]);
+  const shared = skills.filter(({ name }) => name === "shared");
+  assert.equal(new Set(shared.map(({ id }) => id)).size, shared.length);
+});
+
+test("project discovery deduplicates the same skill file by realpath and merges agent badges", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "orchestra-project-symlinked-skills-"));
+  const target = await mkdtemp(join(tmpdir(), "orchestra-shared-skill-"));
+  const accounts = Object.fromEntries(await Promise.all(["claude", "codex", "grok"].map(async (agent) => {
+    const root = await mkdtemp(join(tmpdir(), `orchestra-${agent}-account-`));
+    await mkdir(join(root, "skills"), { recursive: true });
+    await symlink(target, join(root, "skills", "shared-realpath"));
+    return [agent, root];
+  }))) as { claude: string; codex: string; grok: string };
+  await writeFile(join(target, "SKILL.md"), "---\nname: shared-realpath\ndescription: One physical skill\n---\n");
+
+  const skills = (await loadSkills(cwd, true, accounts)).filter(({ name }) => name === "shared-realpath");
+
+  assert.equal(skills.length, 1);
+  assert.equal(skills[0].name, "shared-realpath");
+  assert.deepEqual(skills[0].agents.sort(), ["claude", "codex", "grok"]);
+});
+
+test("skill metadata parses literal, folded, and plain YAML descriptions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-skill-metadata-"));
+  const fixtures = {
+    literal: "description: |\n  Good reason\n  with detail",
+    folded: "description: >\n  Folded reason\n  with detail",
+    plain: "description: Plain reason",
+  };
+  for (const [name, description] of Object.entries(fixtures)) {
+    const directory = join(root, name);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "SKILL.md"), `---\nname: ${name}\n${description}\n---\n`);
+  }
+
+  const skills = await scanSkillRoot(root, "Test");
+
+  assert.equal(skills.find(({ name }) => name === "literal")?.description, "Good reason\nwith detail");
+  assert.equal(skills.find(({ name }) => name === "folded")?.description, "Folded reason with detail");
+  assert.equal(skills.find(({ name }) => name === "plain")?.description, "Plain reason");
 });
 
 test("skill prompt injection stays within a bounded argv budget", () => {
@@ -94,4 +133,14 @@ test("skill prompt injection stays within a bounded argv budget", () => {
   const prompt = formatSkillPrompt(records, records.map((record) => record.id));
   assert.ok(prompt.length <= 60_100, `prompt was ${prompt.length} characters`);
   assert.match(prompt, /Skill 0/);
+});
+
+test("explicit attachment metadata excludes skills omitted by the prompt budget", () => {
+  const records = [
+    { id: "a", name: "large", description: "", agents: ["claude" as const], source: "Claude", content: "x".repeat(60_000) },
+    { id: "b", name: "omitted", description: "", agents: ["claude" as const], source: "Claude", content: "OMITTED_BODY" },
+  ];
+  const result = formatSkillInstructions(records, ["a", "b"]);
+  assert.deepEqual(result.attachedSkills, ["large"]);
+  assert.doesNotMatch(result.text, /OMITTED_BODY/);
 });

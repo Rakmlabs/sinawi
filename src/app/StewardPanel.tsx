@@ -164,13 +164,13 @@ export function StewardPanel({ session, onChange }: { session: Session; onChange
             <label className="steward-accept" title={t("steward.acceptWorkHint")}><input type="checkbox" checked={acceptWork} onChange={(event) => { setAcceptWork(event.target.checked); setStatus(""); }} /><span>{t("steward.acceptWork")}</span></label>
           </div>
           {entity && draft && (pickingSkills
-            ? <SkillPicker skills={skills ?? []} selected={draft.skills} onChange={(next) => edit({ skills: next })} onBack={() => setPickingSkills(false)} />
+            ? <SkillPicker defaults skills={skills ?? []} selected={draft.skills} onChange={(next) => edit({ skills: next })} onBack={() => setPickingSkills(false)} />
             : <div className="steward-settings-sections">
               <label className="steward-wide" title={t("steward.instructionsHint")}><span>{t("steward.instructions")}</span>
                 <textarea rows={4} value={draft.systemPrompt} placeholder={t("steward.instructionsHint")} onChange={(event) => edit({ systemPrompt: event.target.value })} />
               </label>
               <div className="steward-settings-row">
-                <button type="button" className="button light" onClick={openSkills}><WandSparkles size={12} aria-hidden="true" />{t("steward.skillsChoose", { n: draft.skills.length })}</button>
+                <button type="button" className="settings-link" title={t("steward.skillsHint")} onClick={openSkills}><WandSparkles size={12} aria-hidden="true" />{t("steward.skillsChoose", { n: draft.skills.length })}</button>
                 <label title={t("steward.mergePolicyHint")}><span>{t("steward.mergePolicy")}</span>
                   <GlassSelect className="settings-select" label={t("steward.mergePolicy")} value={draft.mergePolicy} onChange={(value) => edit({ mergePolicy: value as MergePolicy })}
                     options={POLICIES.map((policy) => ({ value: policy, label: t(`steward.merge.${policy}` as MessageKey) }))} />

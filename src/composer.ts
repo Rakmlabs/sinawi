@@ -35,6 +35,11 @@ export function matchingCommands(query: string): SlashCommand[] {
   return SLASH_COMMANDS.filter((command) => command.startsWith(normalized));
 }
 
+/** The slash popup offers app commands; skill choices belong in the conversation. */
+export function commandItems(query: string) {
+  return matchingCommands(query).map((command) => ({ kind: "command" as const, command }));
+}
+
 /** The command a whole message names (`/clear`), if any. */
 export function slashCommandOf(text: string): SlashCommand | undefined {
   const name = text.trim().match(/^\/([a-z]+)$/u)?.[1];

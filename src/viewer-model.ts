@@ -54,6 +54,10 @@ export function kindLabel(kind: MediaKind): string {
 }
 
 export function isLongText(text: string): boolean {
+  const structured = /^#{1,6}\s+\S/mu.test(text)
+    || /^\s*\|.+\|\s*$/mu.test(text)
+    || (text.match(/^\s*\d+[.)]\s+\S/gmu)?.length ?? 0) >= 2;
+  if (structured) return false;
   return text.length > 3_500 || text.split("\n").length > 70;
 }
 

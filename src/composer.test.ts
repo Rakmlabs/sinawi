@@ -109,3 +109,20 @@ test("a click right after send turned into stop does not stop the run", () => {
   assert.equal(stopClickAllowed(1_000, 1_000 + STOP_CLICK_GRACE_MS), true);
   assert.equal(stopClickAllowed(0, 99_999), false);
 });
+
+test("slash completion offers built-in commands only, never installed skills", async () => {
+  const composer = await import("./composer");
+  assert.equal(typeof composer.commandItems, "function");
+  assert.deepEqual(composer.commandItems(""), [
+    { kind: "command", command: "clear" },
+    { kind: "command", command: "compact" },
+    { kind: "command", command: "usage" },
+  ]);
+  assert.deepEqual(composer.commandItems("frontend-design"), []);
+});
+
+test("skill recommendations become reply buttons with exact names and reasons", () => {
+  assert.deepEqual(numberedOptions("이 작업에 어떤 스킬을 쓸까요?\n1. open-design — 랜딩·브랜드 시안 HTML\n2. frontend-design — UI 컴포넌트 구현\n3. 스킬 없이 진행"), [
+    "open-design — 랜딩·브랜드 시안 HTML", "frontend-design — UI 컴포넌트 구현", "스킬 없이 진행",
+  ]);
+});

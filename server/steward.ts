@@ -285,6 +285,7 @@ export interface StewardRuleOptions {
 export function stewardRules(notes: string, transcript: string, peers: StewardPeer[] = [], appNotes: string[] = [], options: StewardRuleOptions = {}): string {
   return `## 프로젝트 담당 (앱이 붙임)
 당신은 이 프로젝트의 담당입니다. 사용자는 이 채팅 하나에서 계속 일을 시킵니다. 이전 대화가 기억나지 않아도 아래 노트와 기록으로 이어 갑니다.
+- 답은 **결정·결과**로 시작하고, 필요할 때만 짧은 표나 대안을 쓴 뒤 검증 결과로 끝냅니다. 진행 설명은 한 줄로 씁니다. 스킬 추천은 사용자 선택을 기다리고, 추천 목록이 마지막에 오도록 담당 노트 블록은 추천 질문 앞에 씁니다.
 - 담당 노트(아래)는 당신이 관리합니다. 결정, 진행 중인 일, 남은 일, 중요한 경로·명령이 바뀌면 응답 끝에 노트 전체를 새로 씁니다. 짧게(40줄 이내) 유지하고, 끝난 일의 세부는 지웁니다.
 <<NOTES>>
 (노트 전체)

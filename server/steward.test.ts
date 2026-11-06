@@ -674,7 +674,7 @@ test("a chat started from the lead picker takes the lead's folder, team, instruc
   assert.equal(chat.cwd, repo, "the lead's first folder");
   assert.equal(chat.agent, "grok");
   assert.deepEqual(chat.workers, ["claude"]);
-  assert.deepEqual(chat.skills, ["review"]);
+  assert.deepEqual(chat.skills, [], "default preferences are not selected attachments");
   assert.equal(chat.steward!.id, steward.id, "the chat says which lead it belongs to");
   assert.equal(orchestra.stewardOf(chat)!.mergePolicy, "never");
   assert.match(prompts[0].prompt, /^웹 담당입니다\./u);

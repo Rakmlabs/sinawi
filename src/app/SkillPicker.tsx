@@ -10,9 +10,9 @@ export const SKILL_LIMIT = 20;
  * "Skills for this session / bot": search + checklist (max 20). Distinct from Tools › Skills,
  * which turns skills on or off for the whole workspace.
  */
-export function SkillPicker({ skills, selected, onChange, onBack, onRefresh, refreshing = false, disabled = false }: {
+export function SkillPicker({ skills, selected, onChange, onBack, onRefresh, refreshing = false, disabled = false, defaults = false }: {
   skills: Skill[]; selected: string[]; onChange: (next: string[]) => void; onBack: () => void;
-  onRefresh?: () => void; refreshing?: boolean; disabled?: boolean;
+  onRefresh?: () => void; refreshing?: boolean; disabled?: boolean; defaults?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const term = query.trim().toLocaleLowerCase();
@@ -20,11 +20,12 @@ export function SkillPicker({ skills, selected, onChange, onBack, onRefresh, ref
   return <div className="skill-picker">
     <header className="skill-picker-head">
       <button type="button" className="settings-icon" aria-label={t("set.session.back")} onClick={onBack}><ArrowLeft size={15} /></button>
-      <strong>{t("set.session.skillsTitle")}</strong>
+      <strong>{t(defaults ? "steward.skills" : "set.session.skillsTitle")}</strong>
       <span className="settings-spacer" />
       <small aria-live="polite">{t("set.session.skillsCount", { n: selected.length, max: SKILL_LIMIT })}</small>
       {onRefresh && <button type="button" className="settings-icon" aria-label={t("modal.refreshSkills")} title={t("modal.refreshSkills")} disabled={refreshing} onClick={onRefresh}>{refreshing ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}</button>}
     </header>
+    {defaults && <p className="settings-hint">{t("steward.skillsHint")}</p>}
     <div className="settings-search-field inline">
       <Search size={14} aria-hidden="true" />
       <input type="search" autoFocus value={query} placeholder={t("modal.searchSkillsPlaceholder")} aria-label={t("modal.searchSkills")} onChange={(event) => setQuery(event.target.value)}

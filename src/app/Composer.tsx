@@ -61,7 +61,6 @@ export type ComposerProps = {
 
 
 function slashDetail(item: SlashItem): string {
-  if (item.kind === "skill") return item.skill.description || item.skill.source;
   return { clear: t("comp.cmd.clear"), compact: t("comp.cmd.compact"), usage: t("comp.usageHint") }[item.command];
 }
 
@@ -74,29 +73,15 @@ function permissionModes(fullAccessAllowed: boolean): { mode: PermissionMode; la
 }
 
 export function Composer(props: ComposerProps) {
-  const { completion, prompt, setPrompt, skills, messageSkills, setMessageSkills, active, sessionRunning, busy, routing, liveNote, chatError, unavailableWarning, onOpenWorkspaceSettings, mode, setMode, agent, cwd, shownCwd, canSend, choiceOptions, send, stopActive, openModal, openViewer } = props;
+  const { completion, prompt, setPrompt, messageSkills, setMessageSkills, active, sessionRunning, busy, routing, liveNote, chatError, unavailableWarning, onOpenWorkspaceSettings, mode, setMode, agent, cwd, shownCwd, canSend, choiceOptions, send, stopActive, openModal, openViewer } = props;
   const { slash, setSlash, setSkillIndex, fileCompletion, setFileCompletion, fileSuggestions, setFileSuggestions, fileIndex, setFileIndex, composerInput, historyIndex, historyDraft, lastEscape, slashItems, highlightedSkill } = completion;
   const { attachments, attachFiles, removeAttachment, pasteImage, fileInput, dragging } = props.attachments;
   const skillName = (id: string) => props.availableSkills.find((skill) => skill.id === id)?.name ?? id;
   const chooseSlashItem = (item: SlashItem) => {
-    if (item.kind === "skill") return attachSkill(item.skill);
     if (!slash) return;
     setPrompt(prompt.slice(0, slash.start) + prompt.slice(slash.end));
     setSlash(undefined);
     props.runCommand(item.command);
-  };
-  const attachSkill = (skill: Skill) => {
-    if (!slash || messageSkills.length >= 20 || new Set([...skills, ...messageSkills, skill.id]).size > 20) return;
-    const insertion = `/${skill.name} `;
-    const next = prompt.slice(0, slash.start) + insertion + prompt.slice(slash.end);
-    const cursor = slash.start + insertion.length;
-    setPrompt(next);
-    setMessageSkills((old) => [...new Set([...old, skill.id])]);
-    setSlash(undefined);
-    requestAnimationFrame(() => {
-      composerInput.current?.focus();
-      composerInput.current?.setSelectionRange(cursor, cursor);
-    });
   };
   const attachFile = (file: string) => {
     if (!fileCompletion) return;
@@ -129,17 +114,15 @@ export function Composer(props: ComposerProps) {
         <ComposerPopover anchor={composerInput}>
           <div className="slash-list">
             {slashItems.length ? slashItems.map((item, index) => {
-              const full = item.kind === "skill" && new Set([...skills, ...messageSkills, item.skill.id]).size > 20;
-              return <button type="button" role="option" id={`slash-skill-${index}`} aria-selected={highlightedSkill === index} disabled={full}
-                className={`slash-row${highlightedSkill === index ? " highlighted" : ""}`} key={item.kind === "command" ? `cmd-${item.command}` : item.skill.id}
+              return <button type="button" role="option" id={`slash-skill-${index}`} aria-selected={highlightedSkill === index}
+                className={`slash-row${highlightedSkill === index ? " highlighted" : ""}`} key={item.command}
                 onPointerDown={(e) => e.preventDefault()} onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => completion.setSkillIndex(index)} onClick={() => chooseSlashItem(item)}>
-                <strong>{item.kind === "command" ? `/${item.command}` : item.skill.name}</strong>
-                <span className="slash-kind">{item.kind === "command" ? t("comp.cmd.kind") : item.skill.source}</span>
+                <strong>{`/${item.command}`}</strong>
+                <span className="slash-kind">{t("comp.cmd.kind")}</span>
               </button>;
-            }) : <p role="status">{t("comp.noSkillMatch")}</p>}
+            }) : <p role="status">{t("comp.noCommandMatch")}</p>}
           </div>
           {slashItems[highlightedSkill] && <div className="slash-detail" aria-live="polite">{slashDetail(slashItems[highlightedSkill])}</div>}
-          {new Set([...skills, ...messageSkills]).size >= 20 && <p role="status">{t("comp.skillLimit")}</p>}
         </ComposerPopover>
       )}
       {fileCompletion && (

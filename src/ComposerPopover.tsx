@@ -17,5 +17,5 @@ export function ComposerPopover({ anchor, children }: { anchor: RefObject<HTMLTe
     window.addEventListener("scroll", place, true);
     return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
   }, [anchor]);
-  return position ? createPortal(<div className="slash-popup composer-popover" style={position} id="slash-skills" role="listbox" aria-label={t("composer.skillListLabel")}>{children}</div>, document.body) : null;
+  return position ? createPortal(<div className="slash-popup composer-popover" style={position} id="slash-skills" role="listbox" aria-label={t("composer.completionListLabel")}>{children}</div>, document.body) : null;
 }

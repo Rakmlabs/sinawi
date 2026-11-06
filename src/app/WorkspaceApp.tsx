@@ -282,7 +282,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   // An opened session shows the mode it last ran in.
   useEffect(() => { if (active?.permissionMode) setPermissionMode(active.permissionMode); }, [active?.id, active?.permissionMode]);
   const shownCwd = active?.cwd ?? cwd;
-  const completion = useComposerCompletion(api, boot.skills, messageSkills, shownCwd);
+  const completion = useComposerCompletion(api, shownCwd);
   const { setSlash, setFileCompletion, historyIndex, historyDraft, composerInput } = completion;
   const attachmentState = useAttachments(composerInput, setChatError);
   const { attachments, setAttachments, attachmentsReady, addAttachments, dragging, dropHandlers } = attachmentState;

@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { fileToken, matchingCommands, matchingSkills, slashToken, type SlashCommand } from "../composer";
+import { fileToken, commandItems, slashToken } from "../composer";
 import type { Api } from "./api";
-import type { SkillInfo as Skill } from "../../server/types";
 
-export type SlashItem = { kind: "command"; command: SlashCommand } | { kind: "skill"; skill: Skill };
+export type SlashItem = ReturnType<typeof commandItems>[number];
 
-/** `/skill` and `@file` completion plus prompt-history cursor for the composer textarea. */
-export function useComposerCompletion(api: Api, skills: Skill[], messageSkills: string[], cwd: string) {
+/** `/command` and `@file` completion plus prompt-history cursor for the composer textarea. */
+export function useComposerCompletion(api: Api, cwd: string) {
   const [slash, setSlash] = useState<ReturnType<typeof slashToken>>();
   const [skillIndex, setSkillIndex] = useState(0);
   const [fileCompletion, setFileCompletion] = useState<ReturnType<typeof fileToken>>();
@@ -16,9 +15,7 @@ export function useComposerCompletion(api: Api, skills: Skill[], messageSkills: 
   const historyIndex = useRef(-1);
   const historyDraft = useRef("");
   const lastEscape = useRef(0);
-  const filteredSkills = slash ? matchingSkills(skills, slash.query).filter((skill) => !messageSkills.includes(skill.id)) : [];
-  // One list for keyboard navigation: commands first, then skills.
-  const slashItems: SlashItem[] = slash ? [...matchingCommands(slash.query).map((command) => ({ kind: "command" as const, command })), ...filteredSkills.map((skill) => ({ kind: "skill" as const, skill }))] : [];
+  const slashItems = slash ? commandItems(slash.query) : [];
   const highlightedSkill = Math.min(skillIndex, Math.max(0, slashItems.length - 1));
   useEffect(() => {
     if (slash) document.getElementById(`slash-skill-${highlightedSkill}`)?.scrollIntoView({ block: "nearest" });
@@ -35,7 +32,7 @@ export function useComposerCompletion(api: Api, skills: Skill[], messageSkills: 
   }, [fileCompletion?.query, cwd]);
   return {
     slash, setSlash, skillIndex, setSkillIndex, fileCompletion, setFileCompletion, fileSuggestions, setFileSuggestions, fileIndex, setFileIndex,
-    composerInput, historyIndex, historyDraft, lastEscape, filteredSkills, slashItems, highlightedSkill,
+    composerInput, historyIndex, historyDraft, lastEscape, slashItems, highlightedSkill,
   };
 }
 

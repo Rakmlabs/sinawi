@@ -62,7 +62,7 @@
 @media (prefers-reduced-motion: reduce) { .team-editor { animation: none; } }
 .delegation-card {
   margin: 16px 0;
-  padding: 14px 16px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-active);
@@ -73,6 +73,21 @@
 .delegation-heading .status-label { white-space: nowrap; }
 .delegation-heading time { font-variant-numeric: tabular-nums; }
 .delegation-card h3 { margin: 12px 0 8px; font-weight: 550; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.delegation-summary { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.delegation-summary > .delegation-details { flex: 1; min-width: 0; }
+.delegation-summary > .button { flex-shrink: 0; }
+.delegation-summary > .button { min-height: 30px; padding: 5px 8px; }
+.delegation-details { color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
+.delegation-details > summary { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; list-style: none; }
+.delegation-details > summary::-webkit-details-marker { display: none; }
+.delegation-details > summary::after { content: "›"; flex-shrink: 0; color: var(--icon); transition: transform 120ms ease; }
+.delegation-details[open] > summary::after { transform: rotate(90deg); }
+.delegation-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.delegation-details > summary > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: calc(14px * var(--font-scale)); font-weight: 550; }
+.delegation-details > summary > time,
+.delegation-details > summary > .status-label { flex-shrink: 0; }
+.delegation-details > p { margin-top: 6px; overflow-wrap: anywhere; }
+.delegation-details .delegation-brief-body { margin-top: 8px; color: var(--text); }
 .delegation-bottom { display: flex; align-items: center; gap: 12px; }
 .delegation-bottom p { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .delegation-bottom .button { flex-shrink: 0; min-height: 34px; padding: 7px 10px; }

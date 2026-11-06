@@ -1,3 +1,4 @@
+import { numberedOptions } from "../src/composer.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -5,12 +6,12 @@ import { killSessionProcessGroups, runCli } from "./cli.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
 import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
-import { clearSkillsCache, enabledPublicSkills, filterEnabledSkills, formatSkillPrompt, loadSkills, resolveSkillPrompt, scanSkillRoot, type SkillRecord } from "./skills.js";
+import { clearSkillsCache, enabledPublicSkills, filterEnabledSkills, formatSkillInstructions, loadSkills, resolveSkillPrompt, scanSkillRoot, type SkillRecord } from "./skills.js";
 import { applySchedulePatch, createSchedule, describeSchedule, dueSchedules, SCHEDULE_LIMIT, type Schedule, type ScheduleInput } from "./schedules.js";
 import { LEAD_TOOLS_GUIDE, LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
 import { capabilityCatalog } from "./agent-capabilities.js";
 import { workerInvocationWarnings } from "./worker-invocation.js";
-import { briefSkillNames, isHeadlessClaudeDesign, skillCatalog, workerSkillSection } from "./skill-routing.js";
+import { briefSkillNames, isHeadlessClaudeDesign, skillCatalog, workerSkillInstructions } from "./skill-routing.js";
 import type { AgentId, AgentSelection, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
@@ -80,10 +81,10 @@ const skillSlug = (name: string) => name.trim().toLowerCase().replace(/[^a-z0-9-
 
 /** delegate_task kind "design": the worker shows its result, so the lead (and the chat) can see it. */
 export const DESIGN_BRIEF = `## 디자인 작업
-- 로컬 디자인 스킬(frontend-design, impeccable, canvas-design, web-artifacts-builder 등)을 사용해 HTML/목업 산출물을 완성하세요.
+- 브리프의 \`스킬:\` 줄에 사용자가 선택한 로컬 디자인 스킬이 있으면 그 지침을 사용하세요. 선택한 스킬이 없으면 프로젝트의 기존 패턴과 일반 HTML/목업 아티팩트로 완성하세요.
 - Claude Design /design은 disable-model-invocation 때문에 모델/Skill 도구로 호출할 수 없습니다. 동의로 해결되지 않으므로 먼저 실행하거나 재시도하지 마세요. 사용자 터미널의 대화형 /design은 선택 사항이며 필수가 아닙니다.
 - /design이 없거나 막혀도 작업을 실패 처리하거나 재위임하지 마세요. 필요하면 선택 사항이라는 참고를 한 번만 남기고 로컬 목업으로 마무리하세요.
-- 화면을 만들거나 고친 뒤 실제로 띄워 브라우저(orchestra-browser 스킬, ao-browser)로 열고 확인하세요.
+- 화면을 만들거나 고친 뒤 실제로 띄워 브라우저(ao-browser)로 열고 확인하세요.
 - 확인한 화면의 스크린샷을 저장하고, 보고 끝에 한 줄씩 \`![무엇을 찍었는지](스크린샷 절대 경로)\` 형식으로 붙이세요. 채팅에서 그 이미지가 보입니다.
 - 색·간격·글꼴은 프로젝트에 있는 디자인 토큰과 컴포넌트를 먼저 쓰고, 바꾼 이유를 한 줄로 적으세요.`;
 const agentNames: Record<AgentId, string> = {
@@ -193,6 +194,8 @@ export class Orchestra {
   private configs = new Map<string, { skills: string[]; systemPrompt: string }>();
   /** The checklist the lead wrote last in a goal session's running turn. */
   private turnChecklists = new Map<string, GoalItem[]>();
+  /** Choice pauses from the complete lead answer, scoped to the current turn. */
+  private turnChoices = new Set<string>();
   /** Goal sessions whose next followup is a turn the app opens itself. */
   private goalAutoNext = new Set<string>();
   /** Goal sessions whose running turn the app opened itself. */
@@ -483,7 +486,7 @@ export class Orchestra {
       // A lead's threads live in the lead's workspace, wherever they were asked for from.
       ...requested, ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}), agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort,
       ...(entity.workers.length ? { workers: entity.workers.map((worker) => worker.agent), workerConfigs: structuredClone(entity.workers) } : {}),
-      systemPrompt: entity.systemPrompt, skills: [...new Set([...entity.skills, ...(requested.skills ?? [])])],
+      systemPrompt: entity.systemPrompt, skills: requested.skills ?? [],
     } : requested;
     // A lead's chat started with just `steward: {id}` (API, scripts): the lead's team, else the workspace's agents.
     // No workers picked (any chat): the lead's team above, else every agent the workspace allows.
@@ -570,6 +573,7 @@ export class Orchestra {
     if (!this.isCurrentRun(session, controller.signal)) return;
     const runStartedAt = Date.now();
     this.turnChecklists.delete(session.id);
+    this.turnChoices.delete(session.id);
     if (commanderActive(session)) return this.executeCommander(session, userPrompt, systemPrompt, controller);
     this.assertSessionPolicy(session);
     if (requiresGrokMedia) assertMediaAllowed(this.workspacePolicyResolver?.(session.workspaceId));
@@ -578,8 +582,11 @@ export class Orchestra {
     }
     const disabledSkills = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills;
     const skills = await resolveSkillPrompt(skillIds, session.cwd, disabledSkills, this.accountsOf(session.workspaceId));
-    // Every installed skill, so the lead can pick skills for a brief the user never named.
+    // Installed names let the lead recommend skills before the user chooses them.
     const installedSkills = filterEnabledSkills(await loadSkills(session.cwd, false, this.accountsOf(session.workspaceId)).catch(() => []), disabledSkills);
+    const preferredIds = new Set(this.stewardOf(session)?.skills ?? []);
+    const preferredNames = installedSkills.filter((skill) => preferredIds.has(skill.id)).map((skill) => skill.name);
+    const skillPreferences = preferredNames.length ? `\n\n공간 기본 선호 스킬은 ${preferredNames.join(", ")}입니다. 추천에만 참고하고, 이번 요청에서 사용자가 선택하기 전에는 지침을 적용하거나 워커에게 첨부하지 마세요.` : "";
     const mediaPrompt = this.workspacePolicyResolver?.(session.workspaceId).mediaPrompt;
     if (!this.isCurrentRun(session, controller.signal)) return;
     let plan = "";
@@ -597,7 +604,7 @@ export class Orchestra {
     const workerContext = workers.map((worker) => `${worker.id}: ${worker.sessionMode !== "new" && workerSessionId(session, worker.id!) ? "이전 작업의 맥락을 가진 세션을 이어서 사용합니다. 기존 설명을 반복하지 않고 후속 작업을 지시할 수 있습니다." : "새 세션으로 시작합니다. 필요한 맥락을 전달하세요."}`).join("\n");
     const exampleWorker = workers[0]?.id ?? "claude";
     const worktreeNotice = await this.worktreeNotice(session);
-    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 특정 모델이 필요하면 여는 태그에 model="모델명"을, 디자인 작업이면 kind="design"을 추가하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 서로 다른 워커에게 준 위임은 동시에 실행되고, 같은 워커에게 준 위임은 그 워커 세션에서 차례로 실행됩니다. 독립적인 일을 병렬로 돌리려면 다른 워커에게 나누세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}${capabilityCatalog(this.allowedAgents(session), workers.map((worker) => worker.agent))}${skillCatalog(installedSkills)}`;
+    const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 특정 모델이 필요하면 여는 태그에 model="모델명"을, 디자인 작업이면 kind="design"을 추가하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 서로 다른 워커에게 준 위임은 동시에 실행되고, 같은 워커에게 준 위임은 그 워커 세션에서 차례로 실행됩니다. 독립적인 일을 병렬로 돌리려면 다른 워커에게 나누세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}${capabilityCatalog(this.allowedAgents(session), workers.map((worker) => worker.agent))}${skillCatalog(installedSkills)}${skillPreferences}`;
     const planningContext = plan ? `\n\n계획 전문 에이전트가 작성한 실행 계획:\n${plan}` : "";
     const handoffContext = session.handoffContext ? `\n\n이전 오케스트라의 대화 요약:\n${session.handoffContext}` : "";
     const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";
@@ -716,7 +723,7 @@ export class Orchestra {
       const stewardReview = await this.stewardContext(session);
       const evidence = await existingEvidence(workerResults.join("\n"), session.cwd, [...(session.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR]);
       const evidenceNote = evidence.length ? `\n\n앱이 존재를 확인한 증거 파일(내용의 정확성·완료 여부는 별도 판단):\n${evidence.map((file) => `- \`${file}\``).join("\n")}\n이 경로를 사용하세요. 메인 폴더에서 상대 경로가 없다는 이유로 다시 촬영하지 마세요.` : "";
-      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${evidenceNote}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
+      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${ORCHESTRATOR_RULES}${skillCatalog(installedSkills)}${skillPreferences}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${evidenceNote}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
       const reviewStart = session.events.length;
       let review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
       if (controller.signal.aborted) return this.finishStopped(session, controller);
@@ -731,6 +738,8 @@ export class Orchestra {
       const nextResolution = roundsLeft > 0 ? await resolveRequests(review.finalText) : { resolved: [], failures: [] };
       let next = nextResolution.resolved;
       pendingResults.push(...nextResolution.failures);
+      // User choices also pause recovery after an interrupted worker.
+      if (!next.length && !pendingResults.length && numberedOptions(stripLeadBlocks(review.finalText)).length) return this.finish(session);
       if (roundFailed && !next.length) {
         const selfWork = session.events.slice(reviewStart).filter((event) => event.role === "orchestrator" && (event.type === "edit" || event.type === "command" || event.type === "tool") && /^(명령|파일 (수정|쓰기|생성)|편집|쓰기)\s*:/u.test(event.text));
         this.event(session, session.agent, "warning", `검증 실패 후 총괄이 재위임하지 않고 ${selfWork.length ? `직접 작업했습니다 (${selfWork.length}건: ${selfWork.slice(0, 3).map((event) => event.text.slice(0, 60)).join(", ")})` : "마무리하려 합니다"}.`, { role: "orchestrator", metadata: { phase: "self-work", round } });
@@ -761,17 +770,17 @@ export class Orchestra {
    * worker wait for each other (one CLI session each); different workers run at once. Used by the
    * <<DELEGATE>> rounds and by the lead's delegate_task tool.
    */
-  private runBrief(session: Session, turn: LeadTurn, task: string, worker: AgentSelection, roundWorktrees: Map<string, NonNullable<Session["worktrees"]>[number]>, extra = ""): Promise<string | typeof STOPPED> {
+  private runBrief(session: Session, turn: LeadTurn, task: string, worker: AgentSelection, roundWorktrees: Map<string, NonNullable<Session["worktrees"]>[number]>, extra = "", extraAttachedSkills: string[] = []): Promise<string | typeof STOPPED> {
     const key = guardKey(session.id, worker.id!);
     const previous = this.workerChains.get(key) ?? Promise.resolve();
-    const run = previous.catch(() => undefined).then(() => this.runBriefNow(session, turn, task, worker, roundWorktrees, extra));
+    const run = previous.catch(() => undefined).then(() => this.runBriefNow(session, turn, task, worker, roundWorktrees, extra, extraAttachedSkills));
     const tail = run.catch(() => undefined);
     this.workerChains.set(key, tail);
     void tail.then(() => { if (this.workerChains.get(key) === tail) this.workerChains.delete(key); });
     return run;
   }
 
-  private async runBriefNow(session: Session, turn: LeadTurn, task: string, worker: AgentSelection, roundWorktrees: Map<string, NonNullable<Session["worktrees"]>[number]>, extra: string): Promise<string | typeof STOPPED> {
+  private async runBriefNow(session: Session, turn: LeadTurn, task: string, worker: AgentSelection, roundWorktrees: Map<string, NonNullable<Session["worktrees"]>[number]>, extra: string, extraAttachedSkills: string[]): Promise<string | typeof STOPPED> {
     const { controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt } = turn;
     if (controller.signal.aborted) return STOPPED;
     const brief = ensureBrief(task, userPrompt);
@@ -784,7 +793,9 @@ export class Orchestra {
     if (worktree.info) roundWorktrees.set(workerId, worktree.info);
     await turn.verification.check(task, session.cwd, [...(session.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR]);
     const designExtra = designBriefRequested(`${task}\n${extra}`) && !extra.includes(DESIGN_BRIEF) ? `\n\n${DESIGN_BRIEF}` : "";
-    const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${workerSkillSection(task, installedSkills, worker.agent)}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${extra}${designExtra}${workerResume}`;
+    const skillInstructions = workerSkillInstructions(task, installedSkills, worker.agent);
+    const attachedSkills = [...skillInstructions.attachedSkills, ...extraAttachedSkills];
+    const workerPrompt = `${requiresGrokMedia && mediaPrompt ? `${mediaPrompt}\n\n` : ""}${systemPrompt ? `${systemPrompt}\n\n` : ""}상위 에이전트가 다음 작업을 위임했습니다. 작업 결과를 간결하고 구체적으로 보고하세요.\n\n${WORKER_RULES}\n\n${cliNotes(worker.agent, "worker")}${skills}\n\n${brief.text}${skillInstructions.text}${worktree.info ? `\n\n${worktreeWorkerNote(worktree.info, session.cwd)}` : ""}${extra}${designExtra}${workerResume}`;
     const delegation = this.event(session, worker.agent, "delegation", task, { role: "worker", workerId, workerLabel: label, taskStatus: "running", model: worker.model, reasoningEffort: worker.reasoningEffort, ...(brief.missing.length ? { metadata: { briefAutofilled: brief.missing } } : {}) });
     const delegationId = delegation?.id;
     if (worktree.info) this.event(session, worker.agent, "status", `작업 브랜치 ${worktree.info.branch} — ${worktree.info.path}${worktree.info.mainDirty ? " (메인 폴더의 커밋되지 않은 변경은 포함되지 않음)" : ""}`, { role: "worker", workerId, workerLabel: label, delegationId });
@@ -827,7 +838,7 @@ export class Orchestra {
     }
     if (!result) throw new Error("작업자 세션을 시작할 수 없습니다.");
     if (result.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
-    const invocationWarnings = workerInvocationWarnings({ agent: result.agent, brief: `${task}\n${extra}`, skills: `${skills}\n${extra.includes("선택된 스킬 지침:") ? extra : ""}`, tools: result.toolText, output: result.outputText });
+    const invocationWarnings = workerInvocationWarnings({ agent: result.agent, attachedSkills, brief: `${task}\n${extra}`, skills: `${skills}\n${extra.includes("선택된 스킬 지침:") ? extra : ""}`, tools: result.toolText, output: result.outputText });
     for (const warning of invocationWarnings) this.event(session, result.agent, "warning", warning, { role: "worker", workerId, workerLabel: label, delegationId });
     const invocationNote = invocationWarnings.length ? `\n\n기능 실행 확인(최선 노력):\n${invocationWarnings.map((warning) => `- ${warning}`).join("\n")}` : "";
     if (result.exitCode !== 0) {
@@ -2153,13 +2164,13 @@ export class Orchestra {
     const worker = picked instanceof Promise ? await picked : picked;
     const requestedNames = Array.isArray(args.skills) ? args.skills.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 10) : [];
     const names = requestedNames.filter((name) => !isHeadlessClaudeDesign(name));
-    const skillText = names.length ? await this.leadSkillText(session, names) : { text: "", missing: [] as string[] };
+    const skillText = names.length ? await this.leadSkillText(session, names) : { text: "", attachedSkills: [] as string[], missing: [] as string[] };
     const kind = args.kind === "design" || args.kind === "research" ? args.kind : undefined;
     const group = typeof args.group === "string" && args.group.trim() ? args.group.trim().slice(0, 60) : undefined;
     const label = workerLabel(worker);
     const task: LeadTask = { id: `t${turn.tasks.length + 1}-${randomUUID().slice(0, 6)}`, workerId: worker.id!, label, agent: worker.agent, brief, ...(group ? { group } : {}), ...(kind ? { kind } : {}), status: "running", collected: false, startedAt: new Date().toISOString(), done: Promise.resolve() };
     const extra = `${names.length ? `\n\n스킬: ${names.join(", ")}` : ""}${skillText.text}${kind === "design" || requestedNames.some(isHeadlessClaudeDesign) ? `\n\n${DESIGN_BRIEF}` : ""}`;
-    task.done = this.runBrief(session, turn, brief, worker, turn.worktrees, extra).then((out) => {
+    task.done = this.runBrief(session, turn, brief, worker, turn.worktrees, extra, skillText.attachedSkills).then((out) => {
       if (out === STOPPED) { task.status = "stopped"; task.result = `[${label} 결과 — 멈춤]`; }
       else { task.status = "done"; task.result = out; }
     }, (error: unknown) => {
@@ -2219,10 +2230,11 @@ export class Orchestra {
   /** Skills the lead can attach: its own (lead scope) first, then the project's and installed ones. */
   private async leadSkillRecords(session: Session): Promise<SkillRecord[]> {
     const own = this.stewardDataDir && this.stewardOf(session) ? await scanSkillRoot(this.leadSkillRoot(session), "담당", ["claude", "codex", "grok"]) : [];
-    return [...own, ...await loadSkills(session.cwd, false, this.accountsOf(session.workspaceId)).catch(() => [] as SkillRecord[])];
+    const disabledSkills = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills;
+    return filterEnabledSkills([...own, ...await loadSkills(session.cwd, false, this.accountsOf(session.workspaceId)).catch(() => [] as SkillRecord[])], disabledSkills);
   }
 
-  private async leadSkillText(session: Session, names: string[]): Promise<{ text: string; missing: string[] }> {
+  private async leadSkillText(session: Session, names: string[]): Promise<{ text: string; attachedSkills: string[]; missing: string[] }> {
     const records = await this.leadSkillRecords(session);
     const ids: string[] = [];
     const missing: string[] = [];
@@ -2231,7 +2243,7 @@ export class Orchestra {
       const record = records.find((item) => item.id === name || item.name.toLowerCase() === wanted);
       if (record) ids.push(record.id); else missing.push(name);
     }
-    return { text: formatSkillPrompt(records, ids), missing };
+    return { ...formatSkillInstructions(records, ids), missing };
   }
 
   private async leadSkillList(session: Session) {
@@ -2356,10 +2368,11 @@ export class Orchestra {
     ]).then(() => undefined);
   }
 
-  /** The instructions and skills a turn starts with: a lead's are its entity's, as they are now. */
+  /** Current lead instructions and explicit chat attachments, excluding default preferences. */
   private turnConfig(session: Session): { skills: string[]; systemPrompt: string } {
     const entity = this.stewardOf(session);
-    if (entity) return { skills: [...entity.skills], systemPrompt: entity.systemPrompt };
+    // Older threads stored default preferences among their selected attachments.
+    if (entity) return { skills: (this.configs.get(session.id)?.skills ?? []).filter((id) => !entity.skills.includes(id)), systemPrompt: entity.systemPrompt };
     return this.configs.get(session.id) ?? { skills: [], systemPrompt: "" };
   }
 
@@ -2648,6 +2661,10 @@ export class Orchestra {
   private noteChecklist(session: Session, text: string): void {
     const items = session.goal ? parseChecklist(text) : undefined;
     if (items) this.turnChecklists.set(session.id, items);
+    if (session.goal) {
+      if (numberedOptions(stripLeadBlocks(text)).length) this.turnChoices.add(session.id);
+      else this.turnChoices.delete(session.id);
+    }
     if (session.steward) {
       if (text.trim()) this.stewardLastAnswer.set(session.id, text);
       const asks = parseAsks(text);
@@ -2673,6 +2690,7 @@ export class Orchestra {
   private afterTurn(session: Session, outcome: "done" | "error" | "stopped", userMessageWaiting: boolean): void {
     const items = this.turnChecklists.get(session.id);
     this.turnChecklists.delete(session.id);
+    const awaitingChoice = this.turnChoices.delete(session.id);
     if (session.commander) {
       this.commanderTick(session);
       if (commanderActive(session)) return;
@@ -2687,6 +2705,9 @@ export class Orchestra {
     if (outcome === "stopped") return this.endGoal(session, "사용자가 중지했습니다.", "stopped");
     // The user's waiting message runs next (finish starts it); the loop resumes after that turn.
     if (userMessageWaiting) return;
+    // A numbered question is a real conversational pause, including in child goal chats.
+    // Preserve the checklist; the user's next reply resumes this goal through followup().
+    if (outcome === "done" && awaitingChoice && (!goal.items.length || goal.items.some((item) => item.status === "open"))) return;
     const step = nextGoalStep(session);
     // No checklist: an ordinary answer. Only a goal chat must keep one, and gets one more turn to write it.
     if (!step.continue && step.reason === "no-checklist" && !session.parentId) return;
