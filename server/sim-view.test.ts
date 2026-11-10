@@ -68,3 +68,24 @@ test("panel input maps screen fractions to device points and uses held touches",
   assert.equal((await screen.input(UDID, { kind: "key", key: "f1" })).ok, false);
   screen.stopAll();
 });
+
+test("a frame request waits for the next frame instead of being polled", async () => {
+  const axe = fakeAxe();
+  const screen = new SimScreen({ spawnAxe: axe.spawnAxe });
+  // Nothing captured yet: the request waits and gets the first frame the moment it arrives.
+  const first = screen.nextFrame(UDID, undefined, 2_000);
+  setTimeout(() => axe.child.stdout!.emit("data", part("one")), 20);
+  const one = await first;
+  assert.ok(one && "seq" in one && String(one.jpeg) === "one");
+  // Asking for something newer than what was shown waits for the next capture.
+  const started = Date.now();
+  const next = screen.nextFrame(UDID, String(one.seq), 2_000);
+  setTimeout(() => axe.child.stdout!.emit("data", part("two")), 30);
+  const two = await next;
+  assert.ok(two && "seq" in two && String(two.jpeg) === "two");
+  assert.ok(Date.now() - started < 1_000, "answered by the frame, not by the timeout");
+  // No newer frame in time: nothing new, and the stream asks for all the frames AXe can give.
+  assert.equal(await screen.nextFrame(UDID, String(two.seq), 20), undefined);
+  assert.equal(axe.calls[0][axe.calls[0].indexOf("--fps") + 1], "30");
+  screen.stopAll();
+});

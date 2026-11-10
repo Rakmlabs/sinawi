@@ -17,8 +17,8 @@ async function post(path: string, body: Record<string, unknown>) {
 }
 
 /**
- * A booted iOS simulator inside Sinawi: the live screen (polled frames from the server's AXe
- * stream), clicks and drags forwarded as touches, and typing forwarded through a hidden input so
+ * A booted iOS simulator inside Sinawi: the live screen (each request waits on the server for
+ * the next frame of its AXe stream, so frames arrive as they are captured), clicks and drags forwarded as touches, and typing forwarded through a hidden input so
  * Korean IME composition finishes before it is sent.
  */
 export function SimulatorPanel({ open, onAttach }: Props) {
@@ -61,7 +61,8 @@ export function SimulatorPanel({ open, onAttach }: Props) {
     let stopped = false, seq = "", url: string | undefined;
     const loop = async () => {
       while (!stopped) {
-        let wait = 70;
+        // The server holds the request until a newer frame exists: no pause between frames.
+        let wait = 0;
         try {
           const res = await fetch(`/api/sim-view/frame?udid=${encodeURIComponent(device.udid)}&after=${seq}`, { cache: "no-store" });
           if (res.status === 200) {
@@ -78,7 +79,7 @@ export function SimulatorPanel({ open, onAttach }: Props) {
             wait = 2_000;
           }
         } catch { wait = 1_000; }
-        await new Promise((resolve) => setTimeout(resolve, wait));
+        if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
       }
     };
     void loop();

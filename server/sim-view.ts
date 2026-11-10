@@ -8,11 +8,17 @@ import { AXE_MISSING, axeBinary, bootedDevices, defaultExec, type Exec } from ".
 /**
  * The simulator panel: the app shows a booted simulator's screen and forwards the user's clicks
  * and typing to it. Frames come from AXe's MJPEG stream (one per device, started on demand and
- * stopped once nobody has asked for a frame for a while); input uses the same held touch and
+ * stopped once nobody has asked for a frame for a while). The panel long-polls: a request waits
+ * for the next frame, so every frame is shown as it is captured with no polling delay; input uses the same held touch and
  * drag that ao-sim uses, so what the user does and what an agent does land the same way.
  */
 type Frame = { seq: number; jpeg: Buffer };
-type Stream = { child: ChildProcess; buffer: Buffer; frame?: Frame; seq: number; lastAsked: number; error?: string };
+type Stream = { child: ChildProcess; buffer: Buffer; frame?: Frame; seq: number; lastAsked: number; error?: string; waiters: Set<() => void> };
+
+/** AXe captures by screenshot and tops out near 19 fps on an M-series Mac; asking for 30 gets all it can give. */
+const STREAM_FPS = "30";
+/** How long a frame request waits for a newer frame before answering "nothing new". */
+const FRAME_WAIT_MS = 1_000;
 
 const HEADER_END = Buffer.from("\r\n\r\n");
 const LENGTH = /Content-Length:\s*(\d+)/iu;
@@ -58,27 +64,52 @@ export class SimScreen {
     return stream.frame;
   }
 
+  /**
+   * The frame after `after` (a sequence number), waiting up to `waitMs` for one to be captured.
+   * Undefined when nothing newer came in time: the caller asks again.
+   */
+  async nextFrame(udid: string, after: string | undefined, waitMs = FRAME_WAIT_MS): Promise<Frame | { error: string } | undefined> {
+    const current = this.frame(udid);
+    if (current && ("error" in current || String(current.seq) !== after)) return current;
+    const stream = this.streams.get(udid);
+    if (!stream || waitMs <= 0) return undefined;
+    await new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); stream.waiters.delete(done); resolve(); };
+      const timer = setTimeout(done, waitMs);
+      stream.waiters.add(done);
+    });
+    stream.lastAsked = this.now();
+    if (stream.error && !stream.frame) return { error: stream.error };
+    return stream.frame && String(stream.frame.seq) !== after ? stream.frame : undefined;
+  }
+
   private start(udid: string): Stream {
-    const args = ["stream-video", "--udid", udid, "--format", "mjpeg", "--fps", "12", "--scale", "0.5", "--quality", "70"];
+    const args = ["stream-video", "--udid", udid, "--format", "mjpeg", "--fps", STREAM_FPS, "--scale", "0.5", "--quality", "70"];
     const child = this.opts.spawnAxe ? this.opts.spawnAxe(args) : spawn(axeBinary(), args, { stdio: ["ignore", "pipe", "pipe"] });
-    const stream: Stream = { child, buffer: Buffer.alloc(0), seq: 0, lastAsked: this.now() };
+    const stream: Stream = { child, buffer: Buffer.alloc(0), seq: 0, lastAsked: this.now(), waiters: new Set() };
+    const wake = () => { for (const waiter of [...stream.waiters]) waiter(); };
+    // The first tap needs the screen size; asking now keeps that wait out of the tap.
+    // Only for a real stream: a fake one in tests has no simulator to ask.
+    if (!this.opts.spawnAxe && !this.sizes.has(udid)) void this.pointSize(udid).catch(() => undefined);
     this.streams.set(udid, stream);
     child.stdout?.on("data", (chunk: Buffer) => {
       const { frames, rest } = takeFrames(Buffer.concat([stream.buffer, chunk]));
       stream.buffer = rest.length > 4_000_000 ? Buffer.alloc(0) : rest;
       const last = frames.at(-1);
-      if (last) stream.frame = { seq: ++stream.seq, jpeg: last };
+      if (last) { stream.frame = { seq: ++stream.seq, jpeg: last }; wake(); }
     });
-    child.on("error", (error: NodeJS.ErrnoException) => { stream.error = error.code === "ENOENT" ? AXE_MISSING : error.message; });
+    child.on("error", (error: NodeJS.ErrnoException) => { stream.error = error.code === "ENOENT" ? AXE_MISSING : error.message; wake(); });
     child.on("exit", () => {
       if (this.streams.get(udid) === stream) this.streams.delete(udid);
       if (!stream.frame && !stream.error) stream.error = "시뮬레이터 화면을 받지 못했습니다. 기기가 켜져 있는지 확인하세요.";
+      wake();
     });
     return stream;
   }
 
   private sweep() {
-    const idle = this.opts.idleMs ?? 8_000;
+    // Reopening the panel within half a minute shows the screen at once instead of restarting the capture.
+    const idle = this.opts.idleMs ?? 30_000;
     for (const [udid, stream] of this.streams) {
       if (this.now() - stream.lastAsked > idle) { stream.child.kill("SIGTERM"); this.streams.delete(udid); }
     }
@@ -158,13 +189,13 @@ export function registerSimViewRoutes(app: Express, screen: SimScreen, exec: Exe
     if (out.code !== 0 && !/current state: Booted/u.test(out.stderr)) { res.status(422).json({ error: out.stderr.trim().slice(0, 300) || "부팅하지 못했습니다." }); return; }
     res.json({ ok: true });
   });
-  app.get("/api/sim-view/frame", (req, res) => {
+  app.get("/api/sim-view/frame", async (req, res) => {
     const udid = udidOf(req.query.udid);
     if (!udid) { res.status(400).json({ error: "기기 UDID가 필요합니다." }); return; }
-    const frame = screen.frame(udid);
+    // Long poll: answers as soon as a frame newer than `after` exists (204 after a second without one).
+    const frame = await screen.nextFrame(udid, typeof req.query.after === "string" ? req.query.after : undefined);
     if (!frame) { res.status(204).end(); return; }
     if ("error" in frame) { res.status(422).json({ error: frame.error }); return; }
-    if (String(frame.seq) === req.query.after) { res.status(204).end(); return; }
     res.set({ "Content-Type": "image/jpeg", "Cache-Control": "no-store", "X-Frame-Seq": String(frame.seq) }).send(frame.jpeg);
   });
   // Full-resolution screenshot for a chat attachment (the agent opens the file).
