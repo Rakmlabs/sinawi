@@ -4,13 +4,16 @@ import { join } from "node:path";
 import type { Express } from "express";
 import { computerDir } from "./computer-tokens.js";
 import { AXE_MISSING, axeBinary, bootedDevices, defaultExec, type Exec } from "./sim-tool.js";
+import { SimTouch } from "./sim-hid.js";
 
 /**
  * The simulator panel: the app shows a booted simulator's screen and forwards the user's clicks
  * and typing to it. Frames come from AXe's MJPEG stream (one per device, started on demand and
  * stopped once nobody has asked for a frame for a while). The panel long-polls: a request waits
- * for the next frame, so every frame is shown as it is captured with no polling delay; input uses the same held touch and
- * drag that ao-sim uses, so what the user does and what an agent does land the same way.
+ * for the next frame, so every frame is shown as it is captured with no polling delay. Touches go
+ * through one long-lived helper per device (sim-hid.ts), so a drag follows the pointer while it is
+ * still down; without the helper they fall back to one `axe` process per gesture, the held touch
+ * and drag that ao-sim uses, replayed on release.
  */
 type Frame = { seq: number; jpeg: Buffer };
 type Stream = { child: ChildProcess; buffer: Buffer; frame?: Frame; seq: number; lastAsked: number; error?: string; waiters: Set<() => void> };
@@ -19,6 +22,11 @@ type Stream = { child: ChildProcess; buffer: Buffer; frame?: Frame; seq: number;
 const STREAM_FPS = "30";
 /** How long a frame request waits for a newer frame before answering "nothing new". */
 const FRAME_WAIT_MS = 1_000;
+
+/** How long a tap holds the finger down through the helper. */
+const TAP_HOLD_MS = 60;
+/** After the helper failed to start for a device, how long input stays on AXe before trying again. */
+const TOUCH_RETRY_MS = 30_000;
 
 const HEADER_END = Buffer.from("\r\n\r\n");
 const LENGTH = /Content-Length:\s*(\d+)/iu;
@@ -46,8 +54,13 @@ export class SimScreen {
   private streams = new Map<string, Stream>();
   private sizes = new Map<string, { width: number; height: number }>();
   private sweeper: ReturnType<typeof setInterval>;
+  private touches = new Map<string, Promise<SimTouch | undefined>>();
+  private touchFailed = new Map<string, number>();
+  /** The drag in progress per device: where it started, and whether the helper is holding the finger down. */
+  private drags = new Map<string, { x: number; y: number; t: number; live: boolean }>();
 
-  constructor(private opts: { spawnAxe?: (args: string[]) => ChildProcess; exec?: Exec; idleMs?: number; now?: () => number } = {}) {
+  /** `spawnHid` starts the touch helper for a device (sim-hid.ts); without it every touch goes through AXe. */
+  constructor(private opts: { spawnAxe?: (args: string[]) => ChildProcess; spawnHid?: (udid: string) => Promise<ChildProcess | undefined>; exec?: Exec; idleMs?: number; now?: () => number; tapHoldMs?: number } = {}) {
     this.sweeper = setInterval(() => this.sweep(), 2_000);
     this.sweeper.unref();
   }
@@ -91,6 +104,8 @@ export class SimScreen {
     // The first tap needs the screen size; asking now keeps that wait out of the tap.
     // Only for a real stream: a fake one in tests has no simulator to ask.
     if (!this.opts.spawnAxe && !this.sizes.has(udid)) void this.pointSize(udid).catch(() => undefined);
+    // The helper takes about a second to connect; do that while the first frames load, not on the first touch.
+    if (!this.opts.spawnAxe) void this.touch(udid);
     this.streams.set(udid, stream);
     child.stdout?.on("data", (chunk: Buffer) => {
       const { frames, rest } = takeFrames(Buffer.concat([stream.buffer, chunk]));
@@ -111,14 +126,42 @@ export class SimScreen {
     // Reopening the panel within half a minute shows the screen at once instead of restarting the capture.
     const idle = this.opts.idleMs ?? 30_000;
     for (const [udid, stream] of this.streams) {
-      if (this.now() - stream.lastAsked > idle) { stream.child.kill("SIGTERM"); this.streams.delete(udid); }
+      if (this.now() - stream.lastAsked > idle) { stream.child.kill("SIGTERM"); this.streams.delete(udid); this.dropTouch(udid); }
     }
+  }
+
+  /** The device's touch helper, started on first use; undefined when it is unavailable (input then uses AXe). */
+  private touch(udid: string): Promise<SimTouch | undefined> {
+    const spawnHid = this.opts.spawnHid;
+    if (!spawnHid) return Promise.resolve(undefined);
+    const known = this.touches.get(udid);
+    if (known) return known;
+    if (this.now() - (this.touchFailed.get(udid) ?? -Infinity) < TOUCH_RETRY_MS) return Promise.resolve(undefined);
+    const opening = (async () => {
+      const child = await spawnHid(udid).catch(() => undefined);
+      if (!child) return undefined;
+      const touch = new SimTouch(child, () => { if (this.touches.get(udid) === opening) this.touches.delete(udid); });
+      return (await touch.whenReady()) ? touch : undefined;
+    })().then((touch) => {
+      if (!touch) { this.touchFailed.set(udid, this.now()); if (this.touches.get(udid) === opening) this.touches.delete(udid); }
+      return touch;
+    });
+    this.touches.set(udid, opening);
+    return opening;
+  }
+
+  private dropTouch(udid: string) {
+    const opening = this.touches.get(udid);
+    this.touches.delete(udid);
+    this.drags.delete(udid);
+    void opening?.then((touch) => touch?.close());
   }
 
   stopAll() {
     clearInterval(this.sweeper);
     for (const stream of this.streams.values()) stream.child.kill("SIGTERM");
     this.streams.clear();
+    for (const udid of [...this.touches.keys()]) this.dropTouch(udid);
   }
 
   /** Screen size in points, from the accessibility tree's root frame (iPhone 16 Pro: 402×874). */
@@ -141,15 +184,49 @@ export class SimScreen {
       const out = await this.exec(axeBinary(), [...args, "--udid", udid], 30_000);
       return out.code === 0 ? { ok: true } : { ok: false, error: out.code === 127 ? AXE_MISSING : (out.stderr || out.stdout).trim().slice(0, 300) || "입력 실패" };
     };
-    const fraction = (value: unknown) => Math.min(1, Math.max(0, Number(value)));
+    const fraction = (value: unknown) => Math.min(1, Math.max(0, Number(value) || 0));
+    const ack = (result: { ok: boolean; error?: string }) => (result.ok ? { ok: true } : { ok: false, error: result.error });
     const point = async (fx: unknown, fy: unknown) => {
       const size = await this.pointSize(udid);
       return [String(Math.round(fraction(fx) * size.width)), String(Math.round(fraction(fy) * size.height))];
     };
     switch (body.kind) {
       case "tap": {
+        const touch = await this.touch(udid);
+        if (touch && (await touch.send("down", fraction(body.x), fraction(body.y))).ok) {
+          await new Promise((resolve) => setTimeout(resolve, this.opts.tapHoldMs ?? TAP_HOLD_MS));
+          return ack(await touch.send("up", fraction(body.x), fraction(body.y)));
+        }
         const [x, y] = await point(body.x, body.y);
         return run(["touch", "-x", x, "-y", y, "--down", "--up", "--delay", "0.1"]);
+      }
+      // A live drag: the finger goes down, follows each move and lifts on up. Without the helper
+      // the moves are skipped and the whole drag is replayed by AXe when the pointer is released.
+      case "down": {
+        const x = fraction(body.x), y = fraction(body.y);
+        const touch = await this.touch(udid);
+        const live = touch ? (await touch.send("down", x, y)).ok : false;
+        this.drags.set(udid, { x, y, t: this.now(), live });
+        return { ok: true };
+      }
+      case "move": {
+        const drag = this.drags.get(udid);
+        if (!drag) return { ok: false, error: "누르지 않은 상태에서는 끌 수 없습니다." };
+        if (!drag.live) return { ok: true };
+        const touch = await this.touch(udid);
+        return touch ? ack(await touch.send("move", fraction(body.x), fraction(body.y))) : { ok: false, error: "입력 실패" };
+      }
+      case "up": {
+        const drag = this.drags.get(udid);
+        this.drags.delete(udid);
+        if (!drag) return { ok: false, error: "누르지 않은 상태에서는 뗄 수 없습니다." };
+        if (drag.live) {
+          const touch = await this.touch(udid);
+          return touch ? ack(await touch.send("up", fraction(body.x), fraction(body.y))) : { ok: false, error: "입력 실패" };
+        }
+        const [x1, y1] = await point(drag.x, drag.y);
+        const [x2, y2] = await point(body.x, body.y);
+        return run(["drag", "--start-x", x1, "--start-y", y1, "--end-x", x2, "--end-y", y2, "--duration", String(Math.min(2, Math.max(0.1, (this.now() - drag.t) / 1000)))]);
       }
       case "drag": {
         const [x1, y1] = await point(body.x1, body.y1);

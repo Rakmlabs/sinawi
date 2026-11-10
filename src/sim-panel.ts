@@ -1,17 +1,74 @@
 /** Pure helpers for the simulator panel (SimulatorPanel.tsx). */
 
 export type SimDevice = { udid: string; name: string; runtime: string; booted: boolean };
-export type SimGesture = { kind: "tap"; x: number; y: number } | { kind: "drag"; x1: number; y1: number; x2: number; y2: number; duration: number };
+/** What the panel posts to /api/sim-view/input. A drag is a down, any number of moves and an up; points are 0–1 fractions of the screen. */
+export type SimInput =
+  | { kind: "tap" | "down" | "move" | "up"; x: number; y: number }
+  | { kind: "type"; text: string }
+  | { kind: "key"; key: string };
 
 export const SIM_DEVICE_STORE = "orchestra.sim.device";
 /** Window event the app fires to show the simulator window (header button or an agent's ao-sim launch). */
 export const SIM_OPEN_EVENT = "orchestra:sim-open";
 
-/** A press that barely moves is a tap; anything else is a drag (scroll, swipe back). Points are 0–1 fractions of the screen. */
-export function gesture(start: { x: number; y: number; t: number }, end: { x: number; y: number; t: number }, size: { width: number; height: number }): SimGesture {
-  const moved = Math.hypot((end.x - start.x) * size.width, (end.y - start.y) * size.height);
-  if (moved < 8) return { kind: "tap", x: start.x, y: start.y };
-  return { kind: "drag", x1: start.x, y1: start.y, x2: end.x, y2: end.y, duration: Math.min(2, Math.max(0.1, (end.t - start.t) / 1000)) };
+/** A press that has moved this far (CSS pixels) is a drag (scroll, swipe back); one that barely moves stays a tap. */
+export const TAP_SLOP = 8;
+export function pastTap(start: { x: number; y: number }, point: { x: number; y: number }, size: { width: number; height: number }): boolean {
+  return Math.hypot((point.x - start.x) * size.width, (point.y - start.y) * size.height) >= TAP_SLOP;
+}
+
+/**
+ * One press on the screen, from pointer down to release: nothing is sent until the pointer passes
+ * the tap threshold, then a `down` at the place it was pressed and a `move` for each position after;
+ * release sends `up`, or a `tap` when it never got that far.
+ */
+export function pressTracker(start: { x: number; y: number }, emit: (input: SimInput) => void) {
+  let dragging = false, last = start;
+  return {
+    move(point: { x: number; y: number }, size: { width: number; height: number }) {
+      if (!dragging) {
+        if (!pastTap(start, point, size)) return;
+        dragging = true;
+        emit({ kind: "down", ...start });
+      }
+      last = point;
+      emit({ kind: "move", ...point });
+    },
+    /** `point` is where the pointer was released; a cancelled press passes nothing and lifts where it last was. */
+    end(point?: { x: number; y: number }) {
+      if (dragging) emit({ kind: "up", ...(point ?? last) });
+      else if (point) emit({ kind: "tap", ...start });
+    },
+  };
+}
+
+/**
+ * Posts inputs one request at a time, in the order given, so a down can never overtake a move.
+ * This is also the throttle: while a request is in flight only the newest move waits behind it,
+ * so moves go out as fast as the simulator takes them and never queue up stale positions.
+ */
+export function inputSender(post: (input: SimInput) => Promise<unknown>, onError: (error: unknown) => void = () => undefined) {
+  const queue: SimInput[] = [];
+  let busy = false;
+  const pump = async () => {
+    if (busy) return;
+    busy = true;
+    for (let next = queue.shift(); next; next = queue.shift()) {
+      try { await post(next); } catch (error) { onError(error); }
+    }
+    busy = false;
+  };
+  return (input: SimInput) => {
+    if (input.kind === "move" && queue.at(-1)?.kind === "move") queue[queue.length - 1] = input;
+    else queue.push(input);
+    void pump();
+  };
+}
+
+/** A point clamped onto the shown frame, as fractions: a drag that leaves the screen ends at its edge. */
+export function clampedIn(rect: { left: number; top: number; width: number; height: number }, clientX: number, clientY: number): { x: number; y: number } {
+  const clamp = (value: number) => Math.min(1, Math.max(0, value));
+  return rect.width > 0 && rect.height > 0 ? { x: clamp((clientX - rect.left) / rect.width), y: clamp((clientY - rect.top) / rect.height) } : { x: 0, y: 0 };
 }
 
 /** Where a pointer lands on the shown frame, as fractions, or undefined outside it. */

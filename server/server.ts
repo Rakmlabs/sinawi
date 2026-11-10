@@ -17,6 +17,7 @@ import { registerPermissionRoutes, touchRunActivity } from "./permission-prompts
 import { registerServeRoutes, watchServeQueue } from "./serve-tool.js";
 import { registerSimRoutes, watchSimQueue } from "./sim-tool.js";
 import { registerSimViewRoutes, SimScreen } from "./sim-view.js";
+import { spawnSimHid } from "./sim-hid.js";
 import { cliChildEnv } from "./supervision.js";
 import { fullPath } from "./cli-path.js";
 import { dataDirFor, envVar } from "./runtime.js";
@@ -697,7 +698,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   if (options.browserQueue) { const stop = watchServeQueue(devServers); httpServer.once("close", stop); }
   const simOptions = { onLaunch: (udid: string) => { const message = JSON.stringify({ type: "sim-open", udid }); for (const client of openClients()) client.send(message); } };
   registerSimRoutes(app, simOptions);
-  const simScreen = new SimScreen();
+  const simScreen = new SimScreen({ spawnHid: spawnSimHid });
   httpServer.once("close", () => simScreen.stopAll());
   registerSimViewRoutes(app, simScreen);
   if (options.browserQueue) { const stop = watchSimQueue(simOptions); httpServer.once("close", stop); }

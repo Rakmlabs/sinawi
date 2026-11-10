@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Power, RefreshCw } from "lucide-react";
 import type { ComposerAttachment } from "./preview-attachments";
-import { fractionIn, gesture, pickDevice, SIM_DEVICE_STORE, SIM_OPEN_EVENT, specialKey, type SimDevice, type SimGesture } from "./sim-panel";
+import { clampedIn, fractionIn, inputSender, pickDevice, pressTracker, SIM_DEVICE_STORE, SIM_OPEN_EVENT, specialKey, type SimDevice, type SimInput } from "./sim-panel";
 import { t } from "./i18n";
 import "./simulator.css";
 
@@ -18,7 +18,8 @@ async function post(path: string, body: Record<string, unknown>) {
 
 /**
  * A booted iOS simulator inside Sinawi: the live screen (each request waits on the server for
- * the next frame of its AXe stream, so frames arrive as they are captured), clicks and drags forwarded as touches, and typing forwarded through a hidden input so
+ * the next frame of its AXe stream, so frames arrive as they are captured), clicks forwarded as taps,
+ * drags forwarded as they happen (down, moves, up) so the screen follows the pointer, and typing forwarded through a hidden input so
  * Korean IME composition finishes before it is sent.
  */
 export function SimulatorPanel({ open, onAttach }: Props) {
@@ -29,7 +30,7 @@ export function SimulatorPanel({ open, onAttach }: Props) {
   const [busy, setBusy] = useState(false);
   const screen = useRef<HTMLImageElement>(null);
   const keys = useRef<HTMLInputElement>(null);
-  const press = useRef<{ x: number; y: number; t: number } | undefined>(undefined);
+  const press = useRef<ReturnType<typeof pressTracker> | undefined>(undefined);
   const device = devices.find((item) => item.udid === udid);
 
   const refresh = useCallback(async () => {
@@ -86,10 +87,12 @@ export function SimulatorPanel({ open, onAttach }: Props) {
     return () => { stopped = true; if (url) URL.revokeObjectURL(url); setFrameUrl(undefined); };
   }, [open, device?.udid, device?.booted]);
 
-  const send = useCallback((body: Record<string, unknown>) => {
-    if (!device) return;
-    void post("input", { udid: device.udid, ...body }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [device]);
+  // One request at a time, in order: a drag's down, moves and up reach the device as they were made.
+  const send = useMemo(() => {
+    const target = device?.udid;
+    const queue = inputSender((input) => post("input", { udid: target, ...input }), (err) => setError(err instanceof Error ? err.message : String(err)));
+    return (input: SimInput) => { if (target) queue(input); };
+  }, [device?.udid]);
 
   const at = (event: React.PointerEvent) => (screen.current ? fractionIn(screen.current.getBoundingClientRect(), event.clientX, event.clientY) : undefined);
   const down = (event: React.PointerEvent) => {
@@ -98,18 +101,22 @@ export function SimulatorPanel({ open, onAttach }: Props) {
     if (!point) return;
     event.preventDefault();
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    press.current = { ...point, t: performance.now() };
+    press.current = pressTracker(point, send);
     keys.current?.focus({ preventScroll: true });
   };
-  const up = (event: React.PointerEvent) => {
-    const start = press.current;
-    press.current = undefined;
-    if (!start || !screen.current) return;
+  const move = (event: React.PointerEvent) => {
+    if (!press.current || !screen.current) return;
     const rect = screen.current.getBoundingClientRect();
-    const end = { x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)), t: performance.now() };
-    const move: SimGesture = gesture(start, end, rect);
-    send(move);
+    press.current.move(clampedIn(rect, event.clientX, event.clientY), rect);
   };
+  const up = (event: React.PointerEvent) => {
+    const current = press.current;
+    press.current = undefined;
+    if (!current) return;
+    // The frame can be gone by release (device switched mid-drag): lift where the pointer last was.
+    current.end(screen.current ? clampedIn(screen.current.getBoundingClientRect(), event.clientX, event.clientY) : undefined);
+  };
+  const cancel = () => { press.current?.end(); press.current = undefined; };
 
   const boot = async () => {
     if (!device) return;
@@ -135,7 +142,7 @@ export function SimulatorPanel({ open, onAttach }: Props) {
         <button type="button" className="browser-icon" onClick={() => void refresh()} aria-label={t("sim.refresh")} title={t("sim.refresh")}><RefreshCw size={15} /></button>
         <button type="button" className="browser-icon" onClick={() => void attach()} disabled={!device?.booted} aria-label={t("sim.attach")} title={t("sim.attach")}><Camera size={15} /></button>
       </div>
-      <div className="sim-stage" onPointerDown={down} onPointerUp={up} onPointerCancel={() => { press.current = undefined; }}>
+      <div className="sim-stage" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={cancel}>
         {device && !device.booted ? (
           <div className="sim-empty"><p>{t("sim.offHint", { name: device.name })}</p><button type="button" className="sim-boot" onClick={() => void boot()} disabled={busy}><Power size={15} />{busy ? t("sim.booting") : t("sim.boot")}</button></div>
         ) : !devices.length ? (

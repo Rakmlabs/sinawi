@@ -47,6 +47,16 @@ if (identity && process.platform === "darwin") {
     }
   }
 }
+// The simulator panel's touch helper (native/sim-hid/sim-hid.m, started by server/sim-hid.ts): a
+// universal binary next to server.cjs. It loads only Apple's own frameworks at run time, so the
+// hardened runtime needs no extra entitlement. Built on macOS only; without it the panel
+// falls back to one `axe` process per gesture.
+if (process.platform === "darwin") {
+  const simHid = fileURLToPath(new URL("sim-hid", resources));
+  execFileSync("xcrun", ["clang", "-fobjc-arc", "-O2", "-arch", "arm64", "-arch", "x86_64", "-mmacosx-version-min=11.0", "-framework", "Foundation", "-framework", "CoreGraphics",
+    fileURLToPath(new URL("../native/sim-hid/sim-hid.m", import.meta.url)), "-o", simHid], { stdio: "inherit" });
+  if (identity) execFileSync("codesign", ["--force", "--options", "runtime", "--timestamp", "--sign", identity, simHid], { stdio: "inherit" });
+}
 const erudaTarget = new URL("node_modules/eruda/", resources);
 await mkdir(erudaTarget, { recursive: true });
 await cp(new URL("../node_modules/eruda/package.json", import.meta.url), new URL("package.json", erudaTarget));
@@ -56,4 +66,4 @@ await rm(h2iTarget, { recursive: true, force: true });
 await mkdir(new URL("dist/", h2iTarget), { recursive: true });
 await cp(new URL("../node_modules/html-to-image/package.json", import.meta.url), new URL("package.json", h2iTarget));
 await cp(new URL("../node_modules/html-to-image/dist/html-to-image.js", import.meta.url), new URL("dist/html-to-image.js", h2iTarget));
-console.log("Desktop resources ready: server.cjs + dist/ + node-pty");
+console.log("Desktop resources ready: server.cjs + dist/ + node-pty + sim-hid");
