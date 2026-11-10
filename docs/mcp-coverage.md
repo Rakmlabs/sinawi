@@ -164,10 +164,7 @@
 | `POST /api/sessions/:id/quota/return` | 한도 전환 배너의 '원래 에이전트로' 버튼(그 배너의 이벤트 ID가 필요한 화면 동작). |
 | `POST /api/sessions/:id/worktrees/:workerId/open` | Finder로 worktree 폴더를 여는 화면 동작. |
 | `POST /api/setup/open-settings` | macOS 시스템 설정 창을 여는 화면 동작. |
-| `POST /api/sim-view/boot` | 시뮬레이터 창 화면 스트림(화면 동작). |
-| `GET /api/sim-view/frame` | 시뮬레이터 화면 프레임(바이너리 스트림). |
-| `POST /api/sim-view/capture` | 시뮬레이터 창 캡처(화면 동작). |
-| `POST /api/sim-view/input` | 시뮬레이터 창의 마우스 입력(화면 동작). 에이전트는 ao-sim으로 조작한다. |
+| `POST /api/sim-view/open` | 헤더의 시뮬레이터 버튼: Apple Simulator 앱을 앞으로 가져온다(화면 동작). |
 | `POST /api/terminal/external` | macOS Terminal.app을 여는 화면 동작. |
 | `GET /health` | /api/health와 같은 내용(app_status). |
 | `GET /{*path}` | 앱 화면(정적 파일). |
@@ -181,7 +178,7 @@
 | 알림 토스트 종류 고르기 (설정 → 알림) | localStorage 화면 설정 |
 | 끝까지 진행(autoRun) 기본값 (설정 → 일반) | localStorage 기본값. 채팅마다는 `create_session.auto_run`으로 정함 |
 | 단축키, 온보딩 다시 보기, 업데이트 확인 | 화면·앱(Tauri) 동작 |
-| 앱 브라우저 탭·시뮬레이터 창·터미널 창 UI | 화면. 에이전트는 orchestra-browser/ao-sim 스킬, 터미널 명령은 `run_in_terminal` |
+| 앱 브라우저 탭·터미널 창 UI | 화면. 에이전트는 orchestra-browser/ao-sim 스킬, 터미널 명령은 `run_in_terminal` |
 | 보관(archive) | 지금 시나위에 보관 기능이 없음(삭제만 있음 → `delete_session`, 승인 필요) |
 
 ## Claude Desktop·Cursor 연결

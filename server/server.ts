@@ -16,8 +16,7 @@ import { registerOpenExternalRoute } from "./open-external.js";
 import { registerPermissionRoutes, touchRunActivity } from "./permission-prompts.js";
 import { registerServeRoutes, watchServeQueue } from "./serve-tool.js";
 import { registerSimRoutes, watchSimQueue } from "./sim-tool.js";
-import { registerSimViewRoutes, SimScreen } from "./sim-view.js";
-import { spawnSimHid } from "./sim-hid.js";
+import { registerSimViewRoutes } from "./sim-view.js";
 import { cliChildEnv } from "./supervision.js";
 import { fullPath } from "./cli-path.js";
 import { dataDirFor, envVar } from "./runtime.js";
@@ -696,11 +695,10 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   process.once("exit", () => devServers.stopAll("SIGKILL"));
   registerServeRoutes(app, devServers);
   if (options.browserQueue) { const stop = watchServeQueue(devServers); httpServer.once("close", stop); }
-  const simOptions = { onLaunch: (udid: string) => { const message = JSON.stringify({ type: "sim-open", udid }); for (const client of openClients()) client.send(message); } };
+  // Sinawi does not mirror the simulator: `ao-sim launch` changes nothing in the app window.
+  const simOptions = {};
   registerSimRoutes(app, simOptions);
-  const simScreen = new SimScreen({ spawnHid: spawnSimHid });
-  httpServer.once("close", () => simScreen.stopAll());
-  registerSimViewRoutes(app, simScreen);
+  registerSimViewRoutes(app);
   if (options.browserQueue) { const stop = watchSimQueue(simOptions); httpServer.once("close", stop); }
   app.use("/api", async (_req, _res, next) => { await ready; next(); });
 

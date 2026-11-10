@@ -12,7 +12,6 @@ export type DesktopHost = {
   workspaceId: string;
   onAttach: (items: ComposerAttachment[]) => void;
   request: DesktopRequest;
-  simRequest: DesktopRequest;
   onModeChange: (mode: DesktopMode) => void;
 };
 

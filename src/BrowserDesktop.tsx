@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Globe, Maximize2, Minimize2, Minus, PanelLeft, PanelRight, Plus, Smartphone, X } from "lucide-react";
+import { Globe, Maximize2, Minimize2, Minus, PanelLeft, PanelRight, Plus, X } from "lucide-react";
 import { BrowserPanel } from "./BrowserPanel";
-import { SimulatorPanel } from "./SimulatorPanel";
 import { browserRegistry } from "./browser-registry";
 import { windowShortcut } from "./browser-shortcuts";
-import { applySnap, clampPosition, desktopMode, desktopStoreKey, frameOf, loadWorkspaceWindows, newWindow, resizeWindow, simulatorWindow, topZ, type DesktopMode, type DesktopWindow, type Edge, type Snap } from "./desktop-windows";
+import { applySnap, clampPosition, desktopMode, desktopStoreKey, frameOf, loadWorkspaceWindows, newWindow, resizeWindow, topZ, type DesktopMode, type DesktopWindow, type Edge, type Snap } from "./desktop-windows";
 import type { ComposerAttachment } from "./preview-attachments";
 import { t } from "./i18n";
 
@@ -13,13 +12,13 @@ const newId = () => Math.random().toString(36).slice(2, 10);
 
 export type DesktopRequest = { n: number; toggle?: boolean };
 type Props = {
-  workspaceId: string; firstWorkspace: boolean; onAttach: (items: ComposerAttachment[]) => void; request: DesktopRequest; simRequest: DesktopRequest; onModeChange: (mode: DesktopMode) => void;
+  workspaceId: string; firstWorkspace: boolean; onAttach: (items: ComposerAttachment[]) => void; request: DesktopRequest; onModeChange: (mode: DesktopMode) => void;
   /** The user is in another workspace: the windows stay alive, out of sight, for this workspace's agents. */
   background?: boolean;
 };
 
-/** Browser windows (and the one simulator window) floating over the workspace (the only browser layout). */
-export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request, simRequest, onModeChange, background = false }: Props) {
+/** Browser windows floating over the workspace (the only browser layout). */
+export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request, onModeChange, background = false }: Props) {
   const area = useRef<HTMLDivElement>(null);
   const [windows, setWindows] = useState<DesktopWindow[]>(() => loadWorkspaceWindows((key) => localStorage.getItem(key), workspaceId, firstWorkspace));
   const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -65,7 +64,7 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
     if (handled.current.has(request)) return;
     handled.current.add(request);
     setWindows((old) => {
-      const browsers = old.filter((w) => w.kind !== "simulator");
+      const browsers = old;
       if (!browsers.length) { const id = `w${newId()}`; browserRegistry.activate(id); return [...old, newWindow(old, size, id)]; }
       const target = browsers.find((w) => w.id === browserRegistry.active()) ?? browsers.reduce((a, b) => (a.z > b.z ? a : b));
       browserRegistry.activate(target.id);
@@ -74,19 +73,6 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
       return old.map((w) => w.id === target.id ? { ...w, minimized: false, z: topZ(old) + 1 } : w);
     });
   }, [request]);
-  // The header's simulator button, or an agent's `ao-sim launch`: one simulator window, shown on top.
-  useLayoutEffect(() => {
-    if (!simRequest.n) return;
-    if (handled.current.has(simRequest)) return;
-    handled.current.add(simRequest);
-    setWindows((old) => {
-      const sim = old.find((w) => w.kind === "simulator");
-      if (!sim) return [...old, simulatorWindow(old, size, `sim${newId()}`)];
-      const onTop = !sim.minimized && sim.z === topZ(old);
-      if (simRequest.toggle && onTop) return old.map((w) => w.id === sim.id ? { ...w, minimized: true } : w);
-      return old.map((w) => w.id === sim.id ? { ...w, minimized: false, z: topZ(old) + 1 } : w);
-    });
-  }, [simRequest]);
   // ⌃⌥←/→/↑ anywhere in the app snaps the focused browser window.
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -127,8 +113,8 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
   };
   const activeId = browserRegistry.active();
   const minimized = windows.filter((w) => w.minimized);
-  const browsers = windows.filter((w) => w.kind !== "simulator");
-  const label = (win: DesktopWindow) => win.kind === "simulator" ? t("sim.window") : t("desk.windowN", { n: browsers.indexOf(win) + 1 });
+  const browsers = windows;
+  const label = (win: DesktopWindow) => t("desk.windowN", { n: browsers.indexOf(win) + 1 });
 
   return (
     <div ref={area} className={`browser-desktop desk-${mode}${background ? " background" : ""}`} aria-label={t("desk.label")} aria-hidden={background || undefined}>
@@ -145,26 +131,24 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
                 <button type="button" className="light min" aria-label={t("desk.minimize")} title={t("desk.minimize")} onClick={() => update(win.id, (w) => ({ ...w, minimized: true }))}><Minus size={9} /></button>
                 <button type="button" className="light max" aria-label={win.maximized ? t("desk.restoreSize") : t("desk.maximize")} title={win.maximized ? t("desk.restoreSizeTitle") : t("desk.maximizeTitle")} onClick={() => snap(win.id, "max")}>{win.maximized ? <Minimize2 size={8} /> : <Maximize2 size={8} />}</button>
               </div>
-              <span className="desktop-title">{win.kind === "simulator" ? <Smartphone size={13} /> : <Globe size={13} />}{label(win)}{win.id === activeId && browsers.length > 1 && <em>{t("desk.aiTarget")}</em>}</span>
+              <span className="desktop-title"><Globe size={13} />{label(win)}{win.id === activeId && browsers.length > 1 && <em>{t("desk.aiTarget")}</em>}</span>
               <div className="desktop-snaps" role="group" aria-label={t("desk.layout")}>
-                {win.kind !== "simulator" && <button type="button" aria-label={t("desk.newWindow")} title={t("desk.newWindow")} onClick={open}><Plus size={14} /></button>}
+                <button type="button" aria-label={t("desk.newWindow")} title={t("desk.newWindow")} onClick={open}><Plus size={14} /></button>
                 <button type="button" className={win.snap === "left" ? "on" : ""} aria-label={t("desk.leftHalf")} title={t("desk.leftHalfTitle")} onClick={() => snap(win.id, "left")}><PanelLeft size={14} /></button>
                 <button type="button" className={win.snap === "right" ? "on" : ""} aria-label={t("desk.rightHalf")} title={t("desk.rightHalfTitle")} onClick={() => snap(win.id, "right")}><PanelRight size={14} /></button>
                 <button type="button" className={win.maximized ? "on" : ""} aria-label={win.maximized ? t("desk.restoreTo") : t("desk.fill")} title={win.maximized ? t("desk.restoreToTitle") : t("desk.fillTitle")} onClick={() => snap(win.id, "max")}>{win.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
               </div>
             </header>
             <div className="desktop-body">
-              {win.kind === "simulator" ? (background ? null : <SimulatorPanel open={!win.minimized} onAttach={onAttach} />) : (
-                <BrowserPanel instanceId={win.id} workspaceId={workspaceId} background={background} open={!win.minimized} onOpenChange={(next) => { update(win.id, (w) => ({ ...w, minimized: !next })); if (next) focus(win.id); }}
-                  onLastTabClosed={() => close(win.id)} onSnap={(to) => snap(win.id, to)} onAttach={onAttach} />
-              )}
+              <BrowserPanel instanceId={win.id} workspaceId={workspaceId} background={background} open={!win.minimized} onOpenChange={(next) => { update(win.id, (w) => ({ ...w, minimized: !next })); if (next) focus(win.id); }}
+                onLastTabClosed={() => close(win.id)} onSnap={(to) => snap(win.id, to)} onAttach={onAttach} />
             </div>
             {!fixed && EDGES.map((edge) => <div key={edge} className={`desktop-edge edge-${edge}`} onPointerDown={(e) => drag(e, win, edge)} />)}
           </section>
         );
       })}
       {minimized.length > 0 && <nav className="desktop-dock" aria-label={t("desk.dock")}>
-        {minimized.map((win) => <button type="button" key={win.id} onClick={() => { update(win.id, (w) => ({ ...w, minimized: false })); focus(win.id); }} title={t("desk.restoreWindow")}>{win.kind === "simulator" ? <Smartphone size={14} /> : <Globe size={14} />}{win.kind === "simulator" ? t("sim.window") : t("desk.dockItem", { n: browsers.indexOf(win) + 1 })}</button>)}
+        {minimized.map((win) => <button type="button" key={win.id} onClick={() => { update(win.id, (w) => ({ ...w, minimized: false })); focus(win.id); }} title={t("desk.restoreWindow")}><Globe size={14} />{t("desk.dockItem", { n: browsers.indexOf(win) + 1 })}</button>)}
       </nav>}
     </div>
   );

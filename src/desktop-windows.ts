@@ -1,4 +1,4 @@
-export type DesktopWindow = { id: string; x: number; y: number; w: number; h: number; z: number; minimized?: boolean; maximized?: boolean; snap?: "left" | "right"; kind?: "simulator" };
+export type DesktopWindow = { id: string; x: number; y: number; w: number; h: number; z: number; minimized?: boolean; maximized?: boolean; snap?: "left" | "right" };
 export const DESKTOP_STORE = "orchestra.browser.desktop";
 /** Browser windows belong to a workspace (F1/F2): each keeps its own list. The first workspace also reads the pre-workspace list. */
 export function desktopStoreKey(workspaceId: string) { return `${DESKTOP_STORE}.${workspaceId}`; }
@@ -12,7 +12,7 @@ export type Edge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 export function loadWindows(raw: string | null): DesktopWindow[] {
   try {
     const list = JSON.parse(raw ?? "[]");
-    return Array.isArray(list) ? list.filter((w) => w && typeof w.id === "string").map((w) => ({ ...w, x: Number(w.x) || 0, y: Number(w.y) || 0, w: Math.max(MIN_W, Number(w.w) || 800), h: Math.max(MIN_H, Number(w.h) || 560), z: Number(w.z) || 1 })) : [];
+    return Array.isArray(list) ? list.filter((w) => w && typeof w.id === "string" && w.kind !== "simulator").map((w) => ({ ...w, x: Number(w.x) || 0, y: Number(w.y) || 0, w: Math.max(MIN_W, Number(w.w) || 800), h: Math.max(MIN_H, Number(w.h) || 560), z: Number(w.z) || 1 })) : [];
   } catch { return []; }
 }
 
@@ -20,12 +20,6 @@ export function newWindow(list: DesktopWindow[], area: { width: number; height: 
   const offset = (list.length % 6) * 28;
   const w = Math.max(MIN_W, Math.min(960, area.width - 80)), h = Math.max(MIN_H, Math.min(680, area.height - 80));
   return { id, x: 40 + offset, y: 24 + offset, w, h, z: topZ(list) + 1 };
-}
-
-/** The single simulator window: phone-shaped, at the right edge of the workspace. */
-export function simulatorWindow(list: DesktopWindow[], area: { width: number; height: number }, id: string): DesktopWindow {
-  const h = Math.max(MIN_H, Math.min(900, area.height - 48)), w = MIN_W;
-  return { id, kind: "simulator", x: Math.max(0, area.width - w - 24), y: 24, w, h, z: topZ(list) + 1 };
 }
 
 export const topZ = (list: DesktopWindow[]) => list.reduce((max, w) => Math.max(max, w.z), 0);

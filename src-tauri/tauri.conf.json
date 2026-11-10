@@ -46,7 +46,6 @@
     "resources": {
       "resources/server.cjs": "server.cjs",
       "resources/sinawi-mcp.mjs": "sinawi-mcp.mjs",
-      "resources/sim-hid": "sim-hid",
       "resources/dist/": "dist/",
       "resources/node_modules/": "node_modules/"
     }

@@ -22,7 +22,6 @@ import { NotificationsCenter } from "../NotificationsCenter";
 import { createAuthRefreshHandlers, toggleTerminal, terminalOwnsKeyboardEvent, TERMINAL_AUTH_REFRESH_EVENT, TERMINAL_NOTICE_EVENT, type TerminalNotice } from "../terminal-events";
 import type { DesktopRequest } from "../BrowserDesktop";
 import { setDesktopHost } from "../desktop-host";
-import { SIM_DEVICE_STORE, SIM_OPEN_EVENT } from "../sim-panel";
 import type { DesktopMode } from "../desktop-windows";
 import { commandForThisWorkspace, holdCommand, setBrowserWorkspace } from "../browser-agent";
 import { browserRegistry } from "../browser-registry";
@@ -166,7 +165,6 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const viewerApi = useMemo(() => ({ open: openViewer }), [openViewer]);
   useEffect(() => { setViewer(null); }, [selected]);
   const [desktopRequest, setDesktopRequest] = useState<DesktopRequest>({ n: 0 });
-  const [simRequest, setSimRequest] = useState<DesktopRequest>({ n: 0 });
   const [desktopMode, setDesktopMode] = useState<DesktopMode>("none");
   const focusMode = desktopMode !== "none";
   // Sidebar: a docked column on wide windows (persisted), an overlay on narrow ones or over the browser.
@@ -288,8 +286,12 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const { attachments, setAttachments, attachmentsReady, addAttachments, dragging, dropHandlers } = attachmentState;
   // The browser windows live above this component (see WorkspaceDesktops); hand them this workspace's part.
   const attachRef = useRef(addAttachments); attachRef.current = addAttachments;
+  // The header's simulator button brings up Apple's Simulator app; Sinawi does not mirror the screen itself.
+  const openSimulator = useCallback(() => {
+    void fetch("/api/sim-view/open", { method: "POST" }).then((res) => { if (!res.ok) setChatError(t("ws.simulatorFailed")); }).catch(() => setChatError(t("ws.simulatorFailed")));
+  }, []);
   const attachToComposer = useCallback((items: Parameters<typeof addAttachments>[0]) => attachRef.current(items), []);
-  useLayoutEffect(() => { setDesktopHost({ workspaceId, onAttach: attachToComposer, request: desktopRequest, simRequest, onModeChange: setDesktopMode }); }, [workspaceId, attachToComposer, desktopRequest, simRequest]);
+  useLayoutEffect(() => { setDesktopHost({ workspaceId, onAttach: attachToComposer, request: desktopRequest, onModeChange: setDesktopMode }); }, [workspaceId, attachToComposer, desktopRequest]);
   useLayoutEffect(() => () => setDesktopHost(undefined), []);
   useEffect(() => {
     if (selected && allSessions.some((session) => session.id === selected && session.workspaceId !== workspaceId)) {
@@ -387,12 +389,6 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     if (message.type === "permissions") window.dispatchEvent(new CustomEvent(PERMISSIONS_EVENT, { detail: message.requests }));
     if (message.type === "app-approvals") window.dispatchEvent(new CustomEvent(APP_APPROVALS_EVENT, { detail: message.approvals }));
     if (message.type === "browser-command") window.dispatchEvent(new CustomEvent("orchestra:browser-command", { detail: message }));
-    // An agent launched an app on a simulator: show that device in the simulator window.
-    if (message.type === "sim-open" && typeof message.udid === "string") {
-      try { localStorage.setItem(SIM_DEVICE_STORE, message.udid); } catch { /* private mode */ }
-      window.dispatchEvent(new CustomEvent(SIM_OPEN_EVENT, { detail: { udid: message.udid } }));
-      setSimRequest((old) => ({ n: old.n + 1 }));
-    }
     if (message.type.startsWith("computer-")) handleComputerMessage(message);
     if (message.type === "sessions") setSessions(message.sessions);
     if (message.type === "groups") setBoot((old) => ({ ...old, groups: message.groups }));
@@ -748,7 +744,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
           workspace={<WorkspaceSwitcher onManage={openWorkspaceSettings} />}
           extra={desktopMode !== "none" && desktopMode !== "max" && tab === "workspace" ? <button type="button" className="header-icon-button" aria-label={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} title={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} aria-pressed={chatCollapsed} onClick={() => setChatCollapsed((value) => !value)}>{chatCollapsed ? <PanelRightOpen size={18} aria-hidden="true" /> : <PanelRightClose size={18} aria-hidden="true" />}</button> : undefined}
           onBrowser={() => showBrowser(false)}
-          onSimulator={() => setSimRequest((old) => ({ n: old.n + 1, toggle: true }))}
+          onSimulator={openSimulator}
           activity={tab === "workspace" ? { open: activityOpen, controls: "activity-panel", onToggle: () => setActivityOpen((value) => !value) } : undefined}
           onTerminal={() => toggleTerminal()} notifications={<NotificationsCenter workspaceId={workspaceId} cwd={shownCwd} connected={connected} onSession={selectConversation} onRefreshAuth={() => { void refreshModels(); }} />} />
         <TerminalPanel storageKey={workspaceId} cwd={shownCwd} homeCwd={boot.homeCwd} onHeightChange={setTerminalHeight} />

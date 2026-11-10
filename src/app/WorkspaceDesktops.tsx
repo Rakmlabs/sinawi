@@ -44,6 +44,6 @@ export function WorkspaceDesktops({ current, workspaceIds, firstId }: { current:
     const onScreen = id === current && host?.workspaceId === id ? host : undefined;
     return <BrowserDesktop key={id} workspaceId={id} firstWorkspace={id === firstId} background={id !== current}
       onAttach={onScreen?.onAttach ?? ignore} request={onScreen?.request ?? requests[id] ?? IDLE}
-      simRequest={onScreen?.simRequest ?? IDLE} onModeChange={onScreen?.onModeChange ?? ignore} />;
+      onModeChange={onScreen?.onModeChange ?? ignore} />;
   })}</>;
 }

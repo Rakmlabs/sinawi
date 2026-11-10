@@ -273,5 +273,5 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 - **승인은 MCP 표면만 지킵니다.** 로컬 HTTP API는 이 Mac의 비브라우저 클라이언트에 열려 있으므로, 셸을 가진 에이전트는 HTTP를 직접(예: curl) 불러 승인 카드를 건너뛸 수 있습니다. 전체 셸 권한은 믿을 수 있는 에이전트에게만 주세요.
 - 생성 도구도 위험한 값은 막습니다: `permission_mode`는 `plan`/`auto`만(전체 권한은 사용자가 앱에서 켬), `create_session`·`start_bot_conversation`은 비우면 `auto`, `create_lead`는 `auto` 병합을 정할 수 없음, `list_tools`는 MCP 서버의 실행 정보(명령, URL, env, 헤더)를 뺍니다.
 - 담당 전용 도구(`delegate_task`, `collect_results` 등)는 담당의 진행 중인 턴이 필요해 외부 표면에는 없습니다. 외부 클라이언트는 `lead_id`를 받는 `*_lead_schedule` 도구로 일정을 다룹니다.
-- 앱 창 동작(Finder 열기, 앱 브라우저, 시뮬레이터 창, 스크린샷)은 MCP 도구가 아닙니다. 에이전트는 실행 토큰과 함께 `orchestra-browser`/`orchestra-computer` 스킬(`ao-browser`, `ao-computer`)로 앱 브라우저와 컴퓨터 조작을 씁니다.
+- 앱 창 동작(Finder 열기, 앱 브라우저, 스크린샷)은 MCP 도구가 아닙니다. 에이전트는 실행 토큰과 함께 `orchestra-browser`/`orchestra-computer` 스킬(`ao-browser`, `ao-computer`)로 앱 브라우저와 컴퓨터 조작을 씁니다.
 - macOS 전용입니다.
