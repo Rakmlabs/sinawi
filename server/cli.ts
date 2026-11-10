@@ -494,8 +494,11 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
   return [];
 }
 
-/** Codex prints this informational notice on stderr whenever stdin is not a TTY; it is never the failure. */
-const STDERR_NOISE = [/^Reading additional input from stdin\.{0,3}$/];
+/**
+ * Codex prints the stdin notice whenever stdin is not a TTY, and logs "Custom tool call output is missing"
+ * each time it replays a tool call that was cut off; neither is the failure.
+ */
+const STDERR_NOISE = [/^Reading additional input from stdin\.{0,3}$/, /ERROR codex_core::util: Custom tool call output is missing for call id/u];
 
 export function meaningfulStderr(stderr: string): string {
   return stderr.split("\n").filter((line) => !STDERR_NOISE.some((pattern) => pattern.test(line.trim()))).join("\n").trim();
@@ -776,7 +779,9 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       const exitCode = code ?? 1;
       flushDelta();
       const stderrText = meaningfulStderr(stderr);
-      if (exitCode !== 0 && stderrText) {
+      if (aborted) {
+        // The app or the user stopped this run and already said why; "exit code 143" is not a second error.
+      } else if (exitCode !== 0 && stderrText) {
         options.onLine({ type: "error", text: stderrText.slice(-4_000) });
       } else if (exitCode !== 0 && lastErrorText) {
         // The CLI already explained the failure on stdout; a bare exit-code line adds nothing.

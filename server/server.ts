@@ -382,6 +382,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     return ((req.path === "/api/preview/assets" || req.path === "/api/browser/result") ? largeJson : smallJson)(req, res, next);
   });
   const httpServer = createHttpServer(app);
+  // Each subsystem below stops itself on close (bridges, queues, timers): more than Node's default of 10 listeners.
+  httpServer.setMaxListeners(40);
   const websocket = new WebSocketServer({ noServer: true, maxPayload: 16_384 });
   const deliveredEvents = new WeakMap<WebSocket, Map<string, string>>();
 
