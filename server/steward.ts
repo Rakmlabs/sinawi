@@ -27,6 +27,11 @@ const NOTES_LIMIT = 8_000;
 
 const NOTES = /<<NOTES>>([\s\S]*?)<<\/NOTES>>/gu;
 const ASK = /<<ASK\s+to="([^"\n]{1,80})">>([\s\S]*?)<<\/ASK>>/gu;
+const NEW_CHAT = /<<NEW_CHAT(?:\s+title="([^"\n]{0,100})")?\s*>>([\s\S]*?)<<\/NEW_CHAT>>/gu;
+const NEW_LEAD = /<<NEW_LEAD\s+name="([^"\n]{1,80})"\s+cwd="([^"\n]{1,500})"\s*>>([\s\S]*?)<<\/NEW_LEAD>>/gu;
+/** Chats and leads one lead turn may open. */
+export const MAX_NEW_CHATS = 3;
+export const MAX_NEW_LEADS = 2;
 /** Hops one user message may set off between leads (A asks B, B asks C, ...). */
 export const MAX_ASK_DEPTH = 3;
 const ASK_LIMIT = 4_000;
@@ -44,10 +49,32 @@ export function parseAsks(text: string): StewardAsk[] {
   return [...text.matchAll(ASK)].map((match) => ({ to: match[1].trim(), text: match[2].trim().slice(0, ASK_LIMIT) })).filter((ask) => ask.to && ask.text);
 }
 
+export interface NewChatRequest { title?: string; prompt: string }
+export interface NewLeadRequest { name: string; cwd: string; instructions: string }
+
+/** `<<NEW_CHAT>>` and `<<NEW_LEAD>>` blocks of a lead message: what it asks the app to open. */
+export function parseLeadCreates(text: string): { chats: NewChatRequest[]; leads: NewLeadRequest[] } {
+  const chats = [...text.matchAll(NEW_CHAT)].map((match) => ({ ...(match[1]?.trim() ? { title: match[1].trim() } : {}), prompt: match[2].trim().slice(0, ASK_LIMIT) })).filter((chat) => chat.prompt);
+  const leads = [...text.matchAll(NEW_LEAD)].map((match) => ({ name: match[1].trim(), cwd: match[2].trim(), instructions: match[3].trim().slice(0, ASK_LIMIT) })).filter((lead) => lead.name && lead.cwd);
+  return { chats, leads };
+}
+
 /** The app's blocks, left out wherever the chat is shown or quoted. */
 export function stripLeadBlocks(text: string): string {
-  return text.replace(/<<(CHECKLIST|NOTES)>>[\s\S]*?<<\/\1>>/gu, "").replace(ASK, "").trim();
+  return text.replace(/<<(CHECKLIST|NOTES)>>[\s\S]*?<<\/\1>>/gu, "").replace(ASK, "").replace(NEW_CHAT, "").replace(NEW_LEAD, "").trim();
 }
+
+/** How a lead without the app's tools (Grok) opens a chat or another lead. */
+export const LEAD_CREATE_TAGS = `### 채팅·담당 만들기
+사용자가 새 채팅이나 다른 프로젝트의 담당을 만들어 달라고 하면 응답에 아래 블록을 씁니다. 앱이 이번 턴이 끝난 뒤 만들고, 결과를 이 채팅에 한 줄로 남깁니다. 사용자가 시키지 않았는데 만들지 않습니다.
+- 이 프로젝트에 새 채팅(한 턴에 ${MAX_NEW_CHATS}개까지). 본문이 그 채팅의 첫 메시지입니다. 새 채팅은 이 대화를 모르므로 필요한 맥락을 적습니다.
+<<NEW_CHAT title="짧은 제목">>
+(첫 메시지)
+<</NEW_CHAT>>
+- 다른 폴더를 맡을 새 담당(한 턴에 ${MAX_NEW_LEADS}명까지). cwd는 실제로 있는 폴더의 절대 경로이고, 본문은 그 담당의 지침입니다(비워도 됩니다). 폴더나 이름이 분명하지 않으면 만들지 말고 사용자에게 묻습니다.
+<<NEW_LEAD name="담당 이름" cwd="/절대/경로">>
+(지침)
+<</NEW_LEAD>>`;
 
 export const askPrompt = (from: string, question: string, acceptWork = false) =>
   `[담당 「${from}」이 보낸 질문]\n${question}\n\n[앱] 다른 프로젝트의 담당이 보낸 메시지입니다. 이 프로젝트에서 확인해 답하세요. 이번 응답 전체가 그 담당에게 그대로 전달됩니다. ${acceptWork
@@ -280,6 +307,8 @@ export interface StewardRuleOptions {
   preferences?: string;
   /** Agents the workspace allows: the lead may hand work to one that is not on its team yet. */
   allowedAgents?: AgentId[];
+  /** The lead has no app tools (Grok): it opens chats and leads with `<<NEW_CHAT>>` / `<<NEW_LEAD>>`. */
+  createTags?: boolean;
 }
 
 export function stewardRules(notes: string, transcript: string, peers: StewardPeer[] = [], appNotes: string[] = [], options: StewardRuleOptions = {}): string {
@@ -291,7 +320,7 @@ export function stewardRules(notes: string, transcript: string, peers: StewardPe
 (노트 전체)
 <</NOTES>>
 - 이 채팅의 전체 기록: \`${transcript}\`. 사용자가 예전에 말한 것·정한 것을 가리키면 이 파일을 검색해서 찾습니다. 추측하지 않습니다.
-- ${mergeRule(options.mergePolicy)}${peerRules(peers)}
+- ${mergeRule(options.mergePolicy)}${peerRules(peers)}${options.createTags ? `\n\n${LEAD_CREATE_TAGS}` : ""}
 
 ${appNotes.length ? `\n### 지난 턴이 끝난 뒤 앱이 한 일\n${appNotes.map((note) => `- ${note}`).join("\n")}\n노트에 아직 반영되지 않았다면 이번 응답 끝에 고쳐 씁니다.\n` : ""}
 ### 지금 담당 노트

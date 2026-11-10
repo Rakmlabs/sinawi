@@ -11,6 +11,8 @@ export function conversationText(text: string): string {
     .replace(/<<\/(?:CHECKLIST|NOTES)>>/giu, "")
     // A question for another project's lead: the app sends it when the turn ends.
     .replace(/<<ASK\s+to="([^"\n]*)">>([\s\S]*?)<<\/ASK>>/gu, (_match, to: string, body: string) => `> **「${to.trim()}」에게:** ${body.trim().replace(/\n+/gu, " ")}`)
+    .replace(/<<NEW_CHAT(?:\s+title="([^"\n]*)")?\s*>>([\s\S]*?)<<\/NEW_CHAT>>/gu, (_match, title: string | undefined, body: string) => `> **새 채팅${title?.trim() ? ` 「${title.trim()}」` : ""}:** ${body.trim().replace(/\n+/gu, " ")}`)
+    .replace(/<<NEW_LEAD\s+name="([^"\n]*)"\s+cwd="([^"\n]*)"\s*>>[\s\S]*?<<\/NEW_LEAD>>/gu, (_match, name: string, cwd: string) => `> **새 담당 「${name.trim()}」:** \`${cwd.trim()}\``)
     .replace(/<<GOAL([^>]*)>>([\s\S]*?)<<\/GOAL>>/gu, (_match, attrs: string, body: string) => {
       const key = /id\s*=\s*"([^"]*)"/u.exec(attrs)?.[1];
       const title = /title\s*=\s*"([^"]*)"/u.exec(attrs)?.[1] || body.trim().split("\n")[0].replace(/^#+\s*/u, "");

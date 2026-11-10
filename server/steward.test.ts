@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { RunCliOptions } from "./cli.js";
 import { Orchestra } from "./orchestra.js";
-import { mergeRule, mergeThreadReports, notesPath, parseAsks, parseNotes, reportDue, reportTime, saveNotes, saveUserPreferences, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardRules, transcriptPath } from "./steward.js";
+import { mergeRule, mergeThreadReports, notesPath, parseAsks, parseLeadCreates, parseNotes, reportDue, reportTime, saveNotes, saveUserPreferences, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardRules, transcriptPath } from "./steward.js";
 import type { Session, Steward } from "./types.js";
 
 const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
@@ -748,4 +748,41 @@ test("a lead with several chats reports once a day, in the chat it used last, co
   assert.equal(prompts.length, before + 1, "once a day");
   orchestra.setStewardReport(steward.id, null);
   assert.equal(orchestra.getSteward(steward.id)!.report, undefined);
+});
+
+test("a Grok lead opens a chat in its project and a lead for another folder when the user asks", async (t) => {
+  const a = await setup(t, "app");
+  const b = await setup(t, "api");
+  const prompts: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    prompts.push(options.prompt);
+    if (options.prompt.includes("사용자 요청:\n결제 채팅 열고 api 담당도 만들어")) {
+      return { exitCode: 0, finalText: `만들겠습니다.\n<<NEW_CHAT title="결제 화면">>\n결제 화면을 점검해 주세요.\n<</NEW_CHAT>>\n<<NEW_LEAD name="api 담당" cwd="${b.repo}">>\n서버 저장소를 맡습니다.\n<</NEW_LEAD>>\n<<NEW_LEAD name="없는 폴더" cwd="/no/such/folder-sinawi">><</NEW_LEAD>>` };
+    }
+    // The opened thread tries to open more: the app refuses.
+    if (options.prompt.includes("사용자 요청:\n결제 화면을 점검해 주세요.")) return { exitCode: 0, finalText: "점검했습니다.\n<<NEW_CHAT>>또 열기<</NEW_CHAT>>" };
+    return { exitCode: 0, finalText: "준비했습니다." };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.worktreeDataDir = a.dataDir;
+  orchestra.stewardDataDir = a.dataDir;
+  const lead = await orchestra.create({ prompt: "준비", agent: "grok", workers: ["claude"], cwd: a.repo, steward: {} });
+  await waitFor(() => lead.status === "done");
+  assert.match(prompts[0], /<<NEW_CHAT title=/u, "a Grok lead is told the tags");
+  const before = orchestra.list().length;
+  await orchestra.followup(lead.id, "결제 채팅 열고 api 담당도 만들어");
+  await waitFor(() => orchestra.list().length === before + 1);
+  const opened = orchestra.list().find((session) => session.title === "결제 화면")!;
+  assert.equal(opened.steward?.id, lead.steward?.id ?? lead.id, "the new chat is a thread of the same lead");
+  assert.equal(opened.cwd, a.repo);
+  await waitFor(() => opened.status === "done" && lead.status === "done");
+  assert.ok(orchestra.listStewards().some((steward) => steward.name === "api 담당" && steward.cwds[0] === b.repo && steward.systemPrompt === "서버 저장소를 맡습니다."));
+  assert.ok(lead.events.some((event) => event.type === "status" && /새 채팅을 열었습니다/u.test(event.text)));
+  assert.ok(lead.events.some((event) => event.type === "warning" && /없는 폴더/u.test(event.text)));
+  // Blocks are not shown as chat text, and a thread a lead opened opens nothing more.
+  await waitFor(() => opened.events.some((event) => event.type === "warning" && /만들 수 없습니다/u.test(event.text)));
+  assert.equal(orchestra.list().length, before + 1);
+  assert.deepEqual(parseLeadCreates('<<NEW_CHAT>>\n할 일\n<</NEW_CHAT>> <<NEW_LEAD name="x" cwd="/a/b">><</NEW_LEAD>>'), { chats: [{ prompt: "할 일" }], leads: [{ name: "x", cwd: "/a/b", instructions: "" }] });
+  // A lead with the app's tools (Claude, Codex) gets the tool guide instead of the tags.
+  assert.doesNotMatch(stewardRules("", "/t"), /NEW_CHAT/u);
 });

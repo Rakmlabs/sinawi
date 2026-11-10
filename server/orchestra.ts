@@ -1,7 +1,7 @@
 import { numberedOptions } from "../src/composer.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { killSessionProcessGroups, runCli } from "./cli.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
@@ -22,7 +22,7 @@ import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeStatus, worktreeWorkerNote } from "./worktrees.js";
-import { applyStewardPatch, askPrompt, DEFAULT_MERGE_POLICY, mergeThreadReports, isReportPrompt, LEGACY_MERGE_POLICY, MAX_ASK_DEPTH, mergeRule, parseAsks, parseNotes, projectState, readNotes, readUserPreferences, replyPrompt, reportDue, reportPrompt, rolloverContext, removeStewardDir, saveNotes, saveTranscript, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardName, stewardNotesId, stewardRules, stewardStartText, stripLeadBlocks, transcriptPath, type SessionSummary, type StewardAsk, type StewardPatch } from "./steward.js";
+import { applyStewardPatch, askPrompt, DEFAULT_MERGE_POLICY, mergeThreadReports, isReportPrompt, LEGACY_MERGE_POLICY, MAX_ASK_DEPTH, mergeRule, parseAsks, parseLeadCreates, MAX_NEW_CHATS, MAX_NEW_LEADS, parseNotes, projectState, readNotes, readUserPreferences, replyPrompt, reportDue, reportPrompt, rolloverContext, removeStewardDir, saveNotes, saveTranscript, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardName, stewardNotesId, stewardRules, stewardStartText, stripLeadBlocks, transcriptPath, type SessionSummary, type NewChatRequest, type NewLeadRequest, type StewardAsk, type StewardPatch } from "./steward.js";
 import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 import { withJosa } from "./korean.js";
@@ -211,6 +211,8 @@ export class Orchestra {
   persistStewards?: (stewards: Steward[]) => void | Promise<void>;
   /** `<<ASK>>` blocks a lead wrote this turn, sent when the turn ends. */
   private stewardAsks = new Map<string, StewardAsk[]>();
+  /** `<<NEW_CHAT>>` / `<<NEW_LEAD>>` blocks of the running lead turn, opened when it ends. */
+  private stewardCreates = new Map<string, { chats: NewChatRequest[]; leads: NewLeadRequest[] }>();
   /** Leads whose next waiting message is being started (followup sets "running" only after an await). */
   private stewardStarting = new Set<string>();
   /** The lead's last final answer: what goes back to the lead that asked. */
@@ -622,7 +624,7 @@ export class Orchestra {
     const answerOnly = Boolean(session.steward?.answering && !session.steward.acceptWork);
     const turn: LeadTurn = { verification: new VerifyEvidenceGuard(), detector: new StallDetector(this.stallOptions), controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt, workers, answerOnly, tasks: [], worktrees: new Map() };
     // A lead's own run gets its tools (lead-tools.ts) where the CLI can load MCP; Grok keeps the tags.
-    const toolsGuide = session.steward && !planMode && this.stewardDataDir && session.agent !== "grok" ? `\n\n${LEAD_TOOLS_GUIDE}` : "";
+    const toolsGuide = session.steward && !planMode && this.stewardDataDir && session.agent !== "grok" ? `\n\n${LEAD_TOOLS_GUIDE}\n내 담당 ID: ${session.steward.id ?? session.id}` : "";
     // Tag-based leads need the same per-turn loop detection as stewards with MCP tools.
     if (!planMode) this.leadTurns.set(session.id, turn);
     const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${stewardContext}${toolsGuide}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
@@ -2568,6 +2570,49 @@ export class Orchestra {
     this.deliverToSteward(asker, { prompt: replyPrompt(stewardName(session), asked.question, answer), depth: asked.depth }, run);
   }
 
+  /**
+   * Opens what a finished lead turn asked for with `<<NEW_CHAT>>` and `<<NEW_LEAD>>`. Only on a turn the
+   * user is talking to: a lead answering another lead, or a thread a lead opened, opens nothing.
+   */
+  private async openLeadCreates(session: Session, creates: { chats: NewChatRequest[]; leads: NewLeadRequest[] }): Promise<void> {
+    const steward = session.steward;
+    if (!steward) return;
+    if (steward.openedByLead || (steward.answering && !steward.acceptWork)) {
+      this.event(session, session.agent, "warning", "이 채팅에서는 새 채팅이나 담당을 만들 수 없습니다. 사용자가 직접 말한 담당 채팅에서만 만듭니다.");
+      return;
+    }
+    const entity = this.stewardOf(session);
+    for (const lead of creates.leads.slice(0, MAX_NEW_LEADS)) {
+      try {
+        const cwd = resolve(lead.cwd);
+        if (!isAbsolute(lead.cwd) || !(await stat(cwd)).isDirectory()) throw new Error(`폴더가 없습니다: ${lead.cwd}`);
+        const made = this.createSteward({
+          name: lead.name, cwds: [cwd], systemPrompt: lead.instructions, agent: entity?.agent ?? session.agent,
+          workers: structuredClone(entity?.workers ?? session.workerConfigs ?? []), workspaceId: session.workspaceId,
+        });
+        this.event(session, session.agent, "status", `담당 「${made.name}」을 만들었습니다 — \`${cwd}\`. 사이드바의 담당 목록에서 열 수 있습니다.`);
+      } catch (error) {
+        this.event(session, session.agent, "warning", `담당 「${lead.name}」을 만들지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    for (const chat of creates.chats.slice(0, MAX_NEW_CHATS)) {
+      try {
+        if (!entity) throw new Error("담당 정보를 찾을 수 없습니다.");
+        const opened = await this.create({
+          prompt: chat.prompt, ...(chat.title ? { title: chat.title } : {}), agent: entity.agent, workers: [], cwd: session.cwd,
+          workspaceId: session.workspaceId, ...(session.groupId ? { groupId: session.groupId } : {}),
+          permissionMode: this.permissionModeOf(session) === "plan" ? "plan" : "auto", steward: { id: entity.id },
+        } as StartSessionInput);
+        if (opened.steward) opened.steward.openedByLead = true;
+        this.event(session, session.agent, "status", `새 채팅을 열었습니다: 「${opened.title}」`);
+      } catch (error) {
+        this.event(session, session.agent, "warning", `새 채팅을 열지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const skipped = Math.max(0, creates.chats.length - MAX_NEW_CHATS) + Math.max(0, creates.leads.length - MAX_NEW_LEADS);
+    if (skipped) this.event(session, session.agent, "warning", `한 턴에 채팅 ${MAX_NEW_CHATS}개, 담당 ${MAX_NEW_LEADS}명까지 만듭니다. ${skipped}개는 만들지 않았습니다.`);
+  }
+
   /** Sends the `<<ASK>>` blocks of a finished lead turn to the leads they name. */
   private sendStewardAsks(session: Session, asks: StewardAsk[], depth: number): void {
     const from = stewardName(session);
@@ -2597,7 +2642,7 @@ export class Orchestra {
     if (!session.steward || !this.stewardDataDir) return "";
     const [notes, preferences] = await Promise.all([readNotes(this.stewardDataDir, stewardNotesId(session)), readUserPreferences(this.stewardDataDir)]);
     const peers = this.stewards(session.id).map((peer) => ({ name: stewardName(peer), cwd: peer.cwd }));
-    return `\n\n${stewardRules(notes, transcriptPath(this.stewardDataDir, session.id), peers, session.steward.appNotes, { mergePolicy: this.stewardOf(session)?.mergePolicy, preferences, allowedAgents: this.allowedAgents(session) })}`;
+    return `\n\n${stewardRules(notes, transcriptPath(this.stewardDataDir, session.id), peers, session.steward.appNotes, { mergePolicy: this.stewardOf(session)?.mergePolicy, preferences, allowedAgents: this.allowedAgents(session), createTags: session.agent === "grok" && !session.steward.openedByLead })}`;
   }
 
   /**
@@ -2613,6 +2658,9 @@ export class Orchestra {
     const depth = this.stewardDepth.get(session.id) ?? 0;
     this.stewardDepth.delete(session.id);
     if (outcome === "done" && asks.length) this.sendStewardAsks(session, asks, depth);
+    const creates = this.stewardCreates.get(session.id);
+    this.stewardCreates.delete(session.id);
+    if (outcome === "done" && creates) await this.openLeadCreates(session, creates);
     // This turn saw what the app did after the last one; the merge below writes the next note.
     delete steward.appNotes;
     if (this.stewardDataDir) await saveTranscript(this.stewardDataDir, session).catch(() => undefined);
@@ -2680,6 +2728,14 @@ export class Orchestra {
       const known = this.stewardAsks.get(session.id) ?? [];
       const fresh = asks.filter((ask) => !known.some((item) => item.to === ask.to && item.text === ask.text));
       if (fresh.length) this.stewardAsks.set(session.id, [...known, ...fresh]);
+      const creates = parseLeadCreates(text);
+      if (creates.chats.length || creates.leads.length) {
+        // The review may repeat the first answer's blocks: each chat and lead is opened once.
+        const held = this.stewardCreates.get(session.id) ?? { chats: [], leads: [] };
+        held.chats.push(...creates.chats.filter((chat) => !held.chats.some((item) => item.prompt === chat.prompt)));
+        held.leads.push(...creates.leads.filter((lead) => !held.leads.some((item) => item.name === lead.name)));
+        this.stewardCreates.set(session.id, held);
+      }
     }
     const notes = session.steward && this.stewardDataDir ? parseNotes(text) : undefined;
     if (notes) void saveNotes(this.stewardDataDir!, stewardNotesId(session), notes).catch((error) => this.event(session, session.agent, "warning", `담당 노트를 저장하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`));

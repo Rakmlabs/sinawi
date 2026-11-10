@@ -214,6 +214,8 @@ export interface StewardState {
   acceptWork?: boolean;
   /** What the app did after the last turn (merges), told to the lead at the start of the next. */
   appNotes?: string[];
+  /** This thread was opened by a lead's `<<NEW_CHAT>>`: it does its job and opens no chats or leads itself. */
+  openedByLead?: boolean;
 }
 
 export interface StewardDelivery {
