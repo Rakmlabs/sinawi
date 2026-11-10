@@ -422,7 +422,9 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
     if (data.type === "tool_call") return [{ type: "tool", text: describeToolCall(data.toolName ?? data.title ?? data.kind, data.rawInput), sessionId: data.sessionId }];
     if (data.type === "tool_call_update") {
       const output = asText(data.content) || asText(data.rawOutput);
-      return output ? [{ type: "tool", text: `결과: ${clipToolResult(output)}`, sessionId: data.sessionId }] : [];
+      const status = String(data.status ?? "").toLowerCase();
+      const failed = /^(?:failed|error)$/u.test(status) ? true : status === "completed" ? false : undefined;
+      return output ? [{ type: "tool", text: `결과: ${clipToolResult(output)}`, sessionId: data.sessionId, ...(failed === undefined ? {} : { failed }) }] : [];
     }
     if (data.type === "end") {
       const stop = String(data.stopReason ?? "");
@@ -450,7 +452,7 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
         normalized.push({ type: "tool", text: describeToolCall(block.name, block.input), sessionId });
       } else if (block.type === "tool_result") {
         const raw = asText(block.content);
-        normalized.push({ type: "tool", text: `도구 결과: ${raw ? clipToolResult(raw) : clippedJson(block.content)}`, sessionId });
+        normalized.push({ type: "tool", text: `도구 결과: ${raw ? clipToolResult(raw) : clippedJson(block.content)}`, sessionId, failed: block.is_error === true });
       } else {
         const text = asText(block);
         if (!text) continue;

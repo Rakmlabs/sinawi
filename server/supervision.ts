@@ -103,7 +103,8 @@ export const COMPUTER_CORE = `## 컴퓨터 조작 (ao-computer)
 
 /** Rules prepended to every orchestrator prompt (R1, R4, R5). */
 export const ORCHESTRATOR_RULES = `## 위임 규칙 (Sinawi 운영 규칙)
-당신의 일은 계획, 위임, 검증, 보고입니다. 워커에게 맡긴 일은 워커가 하는 동안 직접 하지 않습니다. 읽기 전용 확인만 허용됩니다. 사용자가 물으면 답한 뒤 조정을 계속합니다.
+먼저 요청의 종류를 가립니다. 질문·설명·상태 확인·의견처럼 답만 하면 되는 요청은 워커 없이 직접 답합니다. 파일 몇 개를 읽거나 읽기 전용 명령 한두 번이면 알 수 있는 것도 직접 확인해 답합니다. 답한 뒤 사용자가 시키지 않은 일을 이어서 시작하지 않습니다.
+위임은 파일 수정, 빌드·테스트 실행, 여러 파일에 걸친 조사, 화면 조작처럼 실제 작업일 때만 합니다. 그때 당신의 일은 계획, 위임, 검증, 보고입니다. 워커에게 맡긴 일은 워커가 하는 동안 직접 하지 않습니다. 읽기 전용 확인만 허용됩니다. 작업 중에 사용자가 물으면 답한 뒤 조정을 계속합니다.
 - 위임 본문에는 반드시 다음 6개 제목을 쓴다: ## 목표 / ## 맥락 / ## 완료 기준 / ## 제약 / ## 검증 / ## 보고 형식. 빠진 칸은 앱이 기본값으로 채우지만, 구체적일수록 결과가 좋다.
 - 맥락에는 워커가 다시 찾지 않아도 되는 사실(경로, 이미 확인된 값, 이전 시도와 실패 이유)을 적는다. 워커는 이 대화를 보지 못한다. 다른 워커가 같은 저장소에서 만지는 파일이 있으면 적고, 그 변경을 되돌리지 말라고 적는다. 앱이 사용자 원문을 브리프 끝에 붙이므로 사용자 말을 바꿔 쓰지 말고, 원문의 요구(조사, 스킬, 기준)는 빠짐없이 완료 기준에 옮긴다.
 - 디자인 시스템, 브랜드 자산(로고), 기획서, 가격표 같은 정본은 결론을 요약해 지시하지 않고 경로를 적어 워커가 직접 읽게 한다. 같은 주제의 파일이 여럿이면 가장 최근 것(\`git log -1 -- <경로>\` 날짜, 미커밋 변경, 높은 버전)을 정본으로 적고 근거를 단다. 사용자가 정하지 않은 취향 결정(배경 이미지, 레이아웃, 색, 서체)은 지시로 박지 않고 워커가 정본과 레퍼런스를 보고 정하게 한다.
@@ -258,12 +259,29 @@ export function cliChildEnv(base: NodeJS.ProcessEnv, extra: Record<string, strin
 
 const failurePattern = /요소를 찾을 수 없|찾을 수 없습니다|not found|no such|cannot find|could not find|timed? ?out|시간 초과|error|failed|failure|exception|denied|거부|실패|오류|traceback|exit code [1-9]|종료 코드 [1-9]/iu;
 
-/** Collapses a failure line to a signature so variants (different selector/pid/path) count as the same error. */
-export function failureSignature(text: string): string | undefined {
+const failureHead = /^(?:\S{1,40}:\s*)?(?:exit code [1-9]|종료 코드 [1-9]|오류|error|fatal|traceback|exception|\w*(?:Error|Exception)\b|command failed|permission denied|권한 거부)/iu;
+const cleanResult = /(?:오류|에러|경고|errors?|warnings?)[^\n:：]{0,8}없음|\bno (?:errors?|failures?|issues?)\b|\b0 (?:errors?|failed|failures)\b|\bpass(?:ed|ing)\b|✓/iu;
+/** Line-numbered file dumps (`12\tconst error = …`) are content, never a failure message. */
+const numberedDump = /^\s*\d+(?:\t|→|\s{2,}|:\s)/u;
+
+/**
+ * Collapses a failure line to a signature so variants (different selector/pid/path) count as the same error.
+ * `known` is the CLI's own verdict (is_error, a non-zero exit, status "failed"). Without it only the first
+ * line of the result is judged: a tool result is usually file or log content, and words like "error" or
+ * "실패" inside that content say nothing about whether the call failed.
+ */
+export function failureSignature(text: string, known = false): string | undefined {
   const cleaned = stripToolNoise(text);
   const lines = cleaned.split("\n").map((part) => part.trim()).filter(Boolean);
-  const index = lines.findIndex((part) => failurePattern.test(part));
-  if (index < 0) return;
+  if (!lines.length) return known ? "failed" : undefined;
+  let index = lines.findIndex((part) => failurePattern.test(part));
+  if (known) {
+    if (index < 0) index = 0;
+  } else {
+    const first = lines[0].replace(/^(?:결과|도구 결과)\s*:\s*/u, "");
+    if (index !== 0 || numberedDump.test(first) || cleanResult.test(first)) return;
+    if (first.length > 300 && !failureHead.test(first)) return;
+  }
   let head = lines[index].replace(/^(?:결과|도구 결과|명령)\s*:\s*/u, "");
   // A bare "Exit code 1" says nothing about what failed; the next line does (a rejected push and
   // a gh watch both exit 1 but are different failures).
@@ -282,6 +300,32 @@ export function failureSignature(text: string): string | undefined {
     .toLowerCase()
     .slice(0, 160);
 }
+
+/** `/bin/zsh -lc "cat a; sed b"` → `cat a; sed b`: the wrapper says nothing about what ran. */
+export function unwrapShell(command: string): string {
+  const match = /^(?:\S*\/)?(?:zsh|bash|sh)\s+-l?c\s+(["'])([\s\S]*)\1\s*$/u.exec(command.trim());
+  return match ? match[2] : command;
+}
+
+/**
+ * Codex reports a shell command as JSON twice: started (`status: "in_progress"`) and finished
+ * (`completed` / `failed`, with `exit_code`). The first is the command, the second its result.
+ */
+function structuredCommand(text: string): { command?: string; failed?: boolean; output?: string } | undefined {
+  if (!text.startsWith("{")) return;
+  let data: Record<string, unknown>;
+  try { data = JSON.parse(text); } catch { return; }
+  if (typeof data.command !== "string") return;
+  const status = String(data.status ?? "");
+  if (status === "in_progress") return { command: unwrapShell(data.command).replace(/\s+/gu, " ").trim() };
+  const exit = data.exit_code ?? data.exitCode;
+  const output = typeof data.aggregated_output === "string" ? data.aggregated_output : "";
+  if (status === "failed" || (typeof exit === "number" && exit !== 0)) return { failed: true, output: `exit code ${typeof exit === "number" ? exit : 1}\n${output}` };
+  return status === "completed" || exit === 0 ? { failed: false, output } : undefined;
+}
+
+/** Reading and searching in a row is how a reviewer verifies; it is not a loop however many files it takes. */
+const READ_ONLY_FAMILIES = new Set(["read", "cat", "sed", "nl", "head", "tail", "ls", "rg", "grep", "find", "wc", "stat", "file", "git diff", "git log", "git show", "git status", "git ls-files", "git rev-parse", "git branch"]);
 
 export interface StallSignal { kind: "repeated-error" | "repeated-command" | "no-progress" | "tool-family-loop" | "no-success"; reason: string; evidence: string[] }
 export interface StallOptions { repeatLimit?: number; familyLimit?: number; failLimit?: number; window?: number; idleMs?: number; now?: () => number }
@@ -332,7 +376,7 @@ export class StallDetector {
 
   get signal(): StallSignal | undefined { return this.fired; }
 
-  observe(line: { type: string; text: string }): StallSignal | undefined {
+  observe(line: { type: string; text: string; failed?: boolean }): StallSignal | undefined {
     if (this.fired) return this.fired;
     if (isPureNoise(line.text)) return;
     this.lastProgress = this.now();
@@ -340,21 +384,26 @@ export class StallDetector {
     if (line.text === this.lastText) return;
     this.lastText = line.text;
     if (!["tool", "command", "error", "warning"].includes(line.type)) return;
-    const commandMatch = /^명령:\s*(.+)$/su.exec(line.text.trim());
-    const command = commandMatch ? commandMatch[1].replace(/\s+/gu, " ").trim() : undefined;
+    const structured = structuredCommand(line.text.trim());
+    const commandMatch = structured ? undefined : /^명령:\s*(.+)$/su.exec(line.text.trim());
+    const command = structured ? structured.command : commandMatch ? unwrapShell(commandMatch[1]).replace(/\s+/gu, " ").trim() : undefined;
+    // The CLI's own verdict wins; the wording of a result is only a fallback when there is none.
+    const verdict = structured ? structured.failed : line.failed;
+    const resultText = structured?.output ?? line.text;
     // Failures count as "the same" only within one tool family: a rejected git push and a failing
     // gh run watch are different problems even when their output looks alike.
-    const failure = command ? undefined : failureSignature(line.text);
+    const failure = command || verdict === false ? undefined : failureSignature(resultText, verdict === true || line.type === "error");
     const signature = failure && this.lastFamily ? `${this.lastFamily}: ${failure}` : failure;
-    this.recent.push({ signature, command, text: clip(stripToolNoise(line.text).replace(/\s+/gu, " "), 200) });
+    this.recent.push({ signature, command, text: clip(stripToolNoise(command ? `명령: ${command}` : resultText).replace(/\s+/gu, " "), 200) });
     if (this.recent.length > this.window) this.recent.shift();
     if (command) {
       const family = commandFamily(command);
       this.lastFamily = family;
-      this.familyRun = family === this.familyRun.family ? { family, count: this.familyRun.count + 1 } : { family, count: 1 };
+      this.familyRun = READ_ONLY_FAMILIES.has(family) ? { family: "", count: 0 }
+        : family === this.familyRun.family ? { family, count: this.familyRun.count + 1 } : { family, count: 1 };
     } else if (signature) {
       this.failuresSinceSuccess++;
-    } else if (line.type === "tool") {
+    } else if (line.type === "tool" || line.type === "command") {
       // A tool result without a failure marker counts as progress.
       this.failuresSinceSuccess = 0;
       this.familyRun = { family: "", count: 0 };

@@ -415,6 +415,8 @@ export interface NormalizedLine {
   /** A fragment of a message still being written: shown live in the app, never stored (the whole message follows). */
   draft?: boolean;
   sessionId?: string;
+  /** A tool result's own verdict (is_error, status): true failed, false succeeded, absent when the CLI does not say. */
+  failed?: boolean;
 }
 
 /** A schedule change or run shown as a small card in the lead's chat (SessionEvent.metadata.schedule). */

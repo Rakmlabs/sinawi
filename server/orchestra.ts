@@ -28,7 +28,8 @@ import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruct
 import { withJosa } from "./korean.js";
 import { existingEvidence, VerifyEvidenceGuard } from "./verify-evidence.js";
 
-const delegationPattern = /<<DELEGATE\b([^<>]{0,500})>>(.*?)<<\/DELEGATE>>/gis;
+// A lead sometimes drops one bracket of the tag (`<<DELEGATE to="claude">`); the brief is still meant for the worker.
+const delegationPattern = /<<DELEGATE\b([^<>]{0,500})>{1,2}(.*?)<<?\/DELEGATE>{1,2}/gis;
 const delegationAttributePattern = /\b([a-z][\w-]*)\s*=\s*(["'])(.*?)\2/giu;
 const maxEvents = 2_000;
 const maxDelegations = 6;
@@ -198,6 +199,8 @@ export class Orchestra {
   private turnChoices = new Set<string>();
   /** Goal sessions whose next followup is a turn the app opens itself. */
   private goalAutoNext = new Set<string>();
+  /** Goals that had stopped before the user's current message: restored when the turn was only an answer. */
+  private goalPaused = new Map<string, { stopped: string; outcome?: NonNullable<Session["goal"]>["outcome"]; checklist: string }>();
   /** Goal sessions whose running turn the app opened itself. */
   private goalAutoTurn = new Set<string>();
   /** Where project leads keep their notes and transcripts (server/steward.ts); unset: no files. */
@@ -617,7 +620,7 @@ export class Orchestra {
     const stewardContext = await this.stewardContext(session);
     // Answering another lead without the user's leave to work for it: look and answer only.
     const answerOnly = Boolean(session.steward?.answering && !session.steward.acceptWork);
-    const turn: LeadTurn = { verification: new VerifyEvidenceGuard(), detector: new StallDetector({ ...this.stallOptions, repeatLimit: 2 }), controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt, workers, answerOnly, tasks: [], worktrees: new Map() };
+    const turn: LeadTurn = { verification: new VerifyEvidenceGuard(), detector: new StallDetector(this.stallOptions), controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt, workers, answerOnly, tasks: [], worktrees: new Map() };
     // A lead's own run gets its tools (lead-tools.ts) where the CLI can load MCP; Grok keeps the tags.
     const toolsGuide = session.steward && !planMode && this.stewardDataDir && session.agent !== "grok" ? `\n\n${LEAD_TOOLS_GUIDE}` : "";
     // Tag-based leads need the same per-turn loop detection as stewards with MCP tools.
@@ -1317,7 +1320,12 @@ export class Orchestra {
       if (settings.autoRun) session.goal ??= freshGoal();
       else delete session.goal;
     }
-    if (session.goal && !auto) Object.assign(session.goal, { idleTurns: 0, autoTurns: 0, startedAt: new Date().toISOString(), stopped: undefined, outcome: undefined });
+    if (session.goal && !auto) {
+      // A goal that had already stopped stays stopped when this message turns out to be a plain question (afterTurn).
+      if (session.goal.stopped) this.goalPaused.set(id, { stopped: session.goal.stopped, outcome: session.goal.outcome, checklist: renderChecklist(session.goal.items) });
+      else this.goalPaused.delete(id);
+      Object.assign(session.goal, { idleTurns: 0, autoTurns: 0, startedAt: new Date().toISOString(), stopped: undefined, outcome: undefined });
+    }
     if (session.commander && !alreadyLogged) this.retryGoals(session);
     const controller = new AbortController();
     this.controllers.set(id, controller);
@@ -2679,7 +2687,9 @@ export class Orchestra {
 
   /** The lead keeps a checklist for this request (this turn or before), so the app runs it to the end. */
   private trackingChecklist(session: Session): boolean {
-    return Boolean(session.goal && (this.turnChecklists.get(session.id)?.length || session.goal.items.length));
+    // Only open items need the review's check-and-tick; a finished checklist leaves nothing to update.
+    const open = (items?: readonly { status: string }[]) => Boolean(items?.some((item) => item.status === "open"));
+    return Boolean(session.goal && (open(this.turnChecklists.get(session.id)) || open(session.goal.items)));
   }
 
   /**
@@ -2696,8 +2706,17 @@ export class Orchestra {
       if (commanderActive(session)) return;
     }
     const goal = session.goal;
+    const paused = this.goalPaused.get(session.id);
+    this.goalPaused.delete(session.id);
     if (!goal || goal.stopped) return;
     const auto = this.goalAutoTurn.delete(session.id);
+    // The user asked something of a goal that had stopped, and the lead only answered: no worker ran and
+    // the checklist is as it was. The answer is the whole turn; leftover items wait until the user says to go on.
+    if (paused && !auto && outcome === "done" && !userMessageWaiting && !this.delegatedSinceUserMessage(session) && (!items || renderChecklist(items) === paused.checklist)) {
+      goal.stopped = paused.stopped;
+      if (paused.outcome) goal.outcome = paused.outcome;
+      return;
+    }
     const before = settledCount(goal.items);
     if (items) goal.items = items;
     const progressed = settledCount(goal.items) > before || !before && Boolean(items) && !auto;
@@ -2725,6 +2744,15 @@ export class Orchestra {
       this.goalAutoNext.delete(session.id);
       this.endGoal(session, `다음 턴을 시작하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, "unfinished");
     });
+  }
+
+  private delegatedSinceUserMessage(session: Session): boolean {
+    for (let index = session.events.length - 1; index >= 0; index--) {
+      const event = session.events[index];
+      if (event.type === "delegation") return true;
+      if (event.agent === "user" && event.type === "message") return false;
+    }
+    return false;
   }
 
   private endGoal(session: Session, text: string, outcome: NonNullable<NonNullable<Session["goal"]>["outcome"]>): void {

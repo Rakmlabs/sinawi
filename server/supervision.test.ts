@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cliChildEnv, cliNotes, compactHandoff, DEVELOPMENT_SHELL_PROGRAMS, ensureBrief, failureSignature, isPureNoise, missingBriefSections, ORCHESTRATOR_RULES, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, WORKER_RULES, commandFamily } from "./supervision.js";
+import { cliChildEnv, cliNotes, compactHandoff, DEVELOPMENT_SHELL_PROGRAMS, ensureBrief, failureSignature, isPureNoise, missingBriefSections, ORCHESTRATOR_RULES, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, WORKER_RULES, commandFamily, unwrapShell } from "./supervision.js";
 import { BrowserBridge } from "./browser-bridge.js";
 import { Orchestra } from "./orchestra.js";
 import type { RunCliOptions } from "./cli.js";
@@ -319,4 +319,48 @@ test("different commands that each exit 1 are not one repeated error (rejected p
     fired = loop.observe({ type: "tool", text: "도구 결과: Exit code 1\nTypeError: x is not a function" });
   }
   assert.equal(fired?.kind, "repeated-error");
+});
+
+test("content that mentions errors is not a failure; the CLI's verdict decides", () => {
+  // Reading source and docs that contain "error", "실패", "not found" is ordinary verification.
+  const reads = new StallDetector();
+  for (let i = 0; i < 12; i++) {
+    reads.observe({ type: "tool", text: `파일 읽기: /repo/src/file${i}.ts` });
+    assert.equal(reads.observe({ type: "tool", text: `도구 결과: ${i}\timport x\n2\tthrow new Error("failed: not found ${i}")\n3\t// 오류 실패`, failed: false }), undefined);
+  }
+  assert.equal(failureSignature("도구 결과: 콘솔 오류/경고 없음"), undefined);
+  assert.equal(failureSignature("결과: # 검증 기록\n\n- 오류 없이 실패 케이스를 확인"), undefined);
+  assert.equal(failureSignature("도구 결과: 1\tconst error = new Error('x')"), undefined);
+  assert.equal(failureSignature("결과: ✓ src/a.test.ts (3 tests) 0 failed"), undefined);
+  // A real failure still counts, with or without the verdict.
+  assert.ok(failureSignature("도구 결과: Exit code 1\n오류: 요소를 찾을 수 없습니다: e3"));
+  assert.ok(failureSignature("도구 결과: 파일 내용처럼 보이는 줄", true));
+  const failing = new StallDetector();
+  let fired;
+  for (let i = 0; i < 5; i++) fired = failing.observe({ type: "tool", text: `도구 결과: 출력 ${i}`, failed: true });
+  assert.ok(fired, "repeated real failures still stop the run");
+});
+
+test("Codex command JSON: started is the command, finished is its result", () => {
+  const event = (id: number, status: string, command: string, output = "", exit: number | null = null) =>
+    ({ type: "command", text: JSON.stringify({ id: `item_${id}`, type: "command_execution", command, aggregated_output: output, exit_code: exit, status }) });
+  const reviewer = new StallDetector({ repeatLimit: 2 });
+  for (let i = 0; i < 10; i++) {
+    const command = `/bin/zsh -lc "cat docs/verify/file${i}.md; sed -n '1,40p' src/error-${i}.ts"`;
+    assert.equal(reviewer.observe(event(i, "in_progress", command)), undefined);
+    assert.equal(reviewer.observe(event(i, "completed", command, "# 검증 기록\nerror handling failed cases: none\n오류 실패", 0)), undefined);
+  }
+  const broken = new StallDetector();
+  let fired;
+  for (let i = 0; i < 5; i++) {
+    broken.observe(event(i, "in_progress", `/bin/zsh -lc 'npm run step${i}'`));
+    fired = broken.observe(event(i, "failed", `/bin/zsh -lc 'npm run step${i}'`, `boom ${i}`, 1));
+  }
+  assert.ok(fired, "repeated real failures still stop the run");
+  assert.equal(unwrapShell(`/bin/zsh -lc "git status"`), "git status");
+});
+
+test("a lead reading many files in a row is not a tool loop", () => {
+  const lead = new StallDetector({ repeatLimit: 2 });
+  for (let i = 0; i < 20; i++) assert.equal(lead.observe({ type: "tool", text: `명령: read /repo/src/file${i}.kt` }), undefined);
 });

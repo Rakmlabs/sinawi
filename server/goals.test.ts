@@ -383,3 +383,45 @@ test("a skill choice after an interrupted worker pauses forced replanning", asyn
   assert.equal(session.goal?.stopped, undefined);
   assert.ok(!session.events.some((event) => event.metadata?.phase === "self-work"));
 });
+
+test("a question to a goal that had stopped is answered without reopening the leftover items", async () => {
+  let question = false;
+  let workerRuns = 0;
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") { workerRuns++; return { exitCode: 0, finalText: "상태: 완료" }; }
+    if (question) return { exitCode: 0, finalText: `워크트리는 두 개입니다.\n${checklist("- [ ] A")}` };
+    return { exitCode: 0, finalText: `${checklist("- [ ] A")}\n<<DELEGATE to="claude">>A<</DELEGATE>>` };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "A", agent: "codex", workers: ["claude"], cwd: process.cwd(), goal: true });
+  await waitFor(() => Boolean(session.goal?.stopped));
+  const stopped = session.goal!.stopped;
+  const ranBefore = workerRuns;
+  const eventsBefore = session.events.length;
+  question = true;
+  await orchestra.followup(session.id, "워크트리가 나눠져있어?");
+  await waitFor(() => session.status === "done");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(session.status, "done");
+  assert.equal(workerRuns, ranBefore, "no worker runs for a question");
+  assert.equal(session.goal!.stopped, stopped, "the goal stays stopped");
+  assert.ok(!session.events.slice(eventsBefore).some((event) => /이어서 진행합니다/u.test(event.text)));
+  // Telling it to go on reopens the loop.
+  question = false;
+  await orchestra.followup(session.id, "계속해");
+  await waitFor(() => workerRuns > ranBefore);
+  await waitFor(() => Boolean(session.goal?.stopped));
+});
+
+test("a delegation tag missing one closing bracket still reaches the worker", async () => {
+  const briefs: string[] = [];
+  const runner = async (options: RunCliOptions) => {
+    if (options.usageContext?.role === "worker") { briefs.push(options.prompt); return { exitCode: 0, finalText: "상태: 완료\n열었습니다." }; }
+    return { exitCode: 0, finalText: `열겠습니다.\n<<DELEGATE to="claude">\n화면을 여세요\n<</DELEGATE>>` };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "브라우저 띄워봐", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await waitFor(() => session.status !== "running");
+  assert.equal(briefs.length, 1);
+  assert.match(briefs[0], /화면을 여세요/u);
+});

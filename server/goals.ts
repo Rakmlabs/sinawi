@@ -48,7 +48,7 @@ export const settledCount = (items: readonly GoalItem[] = []) => items.filter((i
 /** Rules for a lead that runs the request to completion; `split`: it may also split it into chats. */
 export function goalRules(split: boolean): string {
   return `## 끝까지 진행 (앱이 붙임)
-질문·설명·한 번에 끝나는 작은 수정이면 평소처럼 답하고 아래 형식을 쓰지 않는다.
+질문·설명·한 번에 끝나는 작은 수정이면 평소처럼 답하고 아래 형식을 쓰지 않는다. 사용자의 이번 메시지가 질문이나 확인이면 답만 한다. 체크리스트에 남은 항목이 있어도 이번 응답에서 위임하지 않고, 남은 항목이 있다는 것만 한 줄로 알린다. 사용자가 계속하라고 하면 그때 이어 간다.
 여러 단계를 거쳐야 끝나는 일이면, 앱이 사용자의 요청이 끝날 때까지 턴을 이어 간다. 한 턴에 다 하려 하지 말고 체크리스트로 관리한다.
 - 응답마다 체크리스트 전체를 이 형식으로 쓴다(빠진 항목 없이, 순서 유지):
 <<CHECKLIST>>
