@@ -410,6 +410,9 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
     const text = event?.type === "content_block_delta" && event.delta?.type === "text_delta" && !data.parent_tool_use_id ? event.delta.text : undefined;
     return typeof text === "string" && text ? [{ type: "message", text, draft: true }] : [];
   }
+  // Claude reports a long tool call every 30 s ("tool_progress"): the run is alive (the raw line already
+  // counted as activity), but it is not a new tool call and shows nothing worth a line in the chat.
+  if (agent === "claude" && data.type === "tool_progress") return [];
   if (agent === "grok" || agent === "claude") {
     const deniedCommand = permissionDenial(data);
     if (deniedCommand) return [{ type: "warning", text: `권한 거부: ${deniedCommand}`, sessionId }];
@@ -419,7 +422,7 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
     // Grok Build streaming-json: {type:"text"|"thought", data:"..."}, {type:"end", sessionId, stopReason}
     if (data.type === "text" && typeof data.data === "string") return [{ type: "message", text: data.data, finalText: data.data, appendFinal: true, delta: true }];
     if (data.type === "thought" || data.type === "available_commands" || data.type === "usage") return [];
-    if (data.type === "tool_call") return [{ type: "tool", text: describeToolCall(data.toolName ?? data.title ?? data.kind, data.rawInput), sessionId: data.sessionId }];
+    if (data.type === "tool_call") return [{ type: "tool", text: describeToolCall(data.toolName ?? data.title ?? data.kind, data.rawInput), sessionId: data.sessionId, call: true }];
     if (data.type === "tool_call_update") {
       const output = asText(data.content) || asText(data.rawOutput);
       const status = String(data.status ?? "").toLowerCase();
@@ -449,7 +452,7 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
     for (const block of claudeBlocks) {
       if (!block || typeof block !== "object") continue;
       if (block.type === "tool_use") {
-        normalized.push({ type: "tool", text: describeToolCall(block.name, block.input), sessionId });
+        normalized.push({ type: "tool", text: describeToolCall(block.name, block.input), sessionId, call: true });
       } else if (block.type === "tool_result") {
         const raw = asText(block.content);
         normalized.push({ type: "tool", text: `도구 결과: ${raw ? clipToolResult(raw) : clippedJson(block.content)}`, sessionId, failed: block.is_error === true });

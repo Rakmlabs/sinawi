@@ -63,3 +63,14 @@ test("attached skills do not waive invocation evidence for another native skill"
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /확인할 수 없/);
 });
+
+test("a 403 in file content or a tap coordinate is not /design being blocked", () => {
+  const brief = "스킬: impeccable\n## 목표\n상세 화면을 고친다. /design은 쓰지 않는다.";
+  const tools = [
+    "스킬 불러옴: impeccable",
+    "도구 결과: 402\t    </View>\n403\t      <Text size={15} weight=\"bold\">{value}</Text>\n404\t    </View>",
+    "도구 결과: Button \"a, 11명 · 1층, 바로 사용 가능 · 19:00까지\" 탭 201 403",
+    "도구 결과: 403\t};",
+  ].join("\n");
+  assert.deepEqual(workerInvocationWarnings({ agent: "claude", brief, skills: "impeccable", tools, output: "상태: 완료" }), []);
+});

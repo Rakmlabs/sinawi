@@ -364,3 +364,11 @@ test("a lead reading many files in a row is not a tool loop", () => {
   const lead = new StallDetector({ repeatLimit: 2 });
   for (let i = 0; i < 20; i++) assert.equal(lead.observe({ type: "tool", text: `명령: read /repo/src/file${i}.kt` }), undefined);
 });
+
+test("a tool call's arguments are not an outcome: waiting on workers is not a repeated error", () => {
+  const lead = new StallDetector();
+  for (let i = 0; i < 8; i++) {
+    assert.equal(lead.observe({ type: "tool", text: `mcp__sinawi_lead__collect_results: {"task_ids":["t1"],"wait":true,"timeout_sec":600,"n":${i}}`, call: true }), undefined);
+    assert.equal(lead.observe({ type: "tool", text: `도구 결과: {"results":[],"still_running":["t1"],"n":${i}}`, failed: false }), undefined);
+  }
+});

@@ -94,6 +94,7 @@ export function codexLeadArgs(launch: LeadMcpLaunch): string[] {
 /** Lead prompt section when the tools are attached: when they help, not rules to follow. */
 export const LEAD_TOOLS_GUIDE = `## 담당 도구 (${LEAD_MCP_SERVER})
 이 실행에는 앱이 만든 담당 도구가 붙어 있습니다. 필요하다고 판단할 때 직접 부르세요.
+- 도구를 부르기 전에 무엇을 할지 한 줄로 먼저 말하세요(예: "Play Console 입력을 워커에게 맡기겠습니다."). 사용자는 그 한 줄로 요청이 접수됐는지 압니다. 워커가 오래 걸리면 collect_results(wait)를 다시 불러 기다립니다. 기다리는 것은 실패가 아닙니다.
 - delegate_task: 워커에게 일을 맡깁니다. 독립적인 일은 여러 번 불러 동시에 돌리고(같은 CLI도 여러 명 가능), collect_results(wait)로 결과를 모아 검증한 뒤 답하세요. 디자인·화면 작업은 kind:"design"으로 맡기면 워커가 브라우저로 확인하고 스크린샷을 보고에 붙입니다. 결과의 이미지 줄(![](경로))은 답에 그대로 옮기면 채팅에 보입니다.
 - 증거 파일이 이미 있거나 이번 턴에 이미 검증했다면 같은 화면의 동일한 스크린샷 촬영·읽기를 다시 맡기지 마세요. 보고된 경로와 워커 worktree 경로를 확인하고 결과를 수용하거나, 결함·변경할 방법·새 검증 기준을 적은 다른 브리프로 맡기세요. 판단이나 병합 결정만 남으면 증거와 함께 사용자에게 보고하고 요청과 권한 범위 안에서 질문·병합 절차로 넘기세요.
 - write_skill / update_skill: 같은 종류의 지시를 반복하게 되면 스킬로 남겨 delegate_task의 skills로 붙이세요.

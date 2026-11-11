@@ -376,7 +376,7 @@ export class StallDetector {
 
   get signal(): StallSignal | undefined { return this.fired; }
 
-  observe(line: { type: string; text: string; failed?: boolean }): StallSignal | undefined {
+  observe(line: { type: string; text: string; failed?: boolean; call?: boolean }): StallSignal | undefined {
     if (this.fired) return this.fired;
     if (isPureNoise(line.text)) return;
     this.lastProgress = this.now();
@@ -392,7 +392,8 @@ export class StallDetector {
     const resultText = structured?.output ?? line.text;
     // Failures count as "the same" only within one tool family: a rejected git push and a failing
     // gh run watch are different problems even when their output looks alike.
-    const failure = command || verdict === false ? undefined : failureSignature(resultText, verdict === true || line.type === "error");
+    // A call's arguments say nothing about how it went: `collect_results {"timeout_sec":600}` is a wait, not a timeout.
+    const failure = command || line.call || verdict === false ? undefined : failureSignature(resultText, verdict === true || line.type === "error");
     const signature = failure && this.lastFamily ? `${this.lastFamily}: ${failure}` : failure;
     this.recent.push({ signature, command, text: clip(stripToolNoise(command ? `명령: ${command}` : resultText).replace(/\s+/gu, " "), 200) });
     if (this.recent.length > this.window) this.recent.shift();

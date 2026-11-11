@@ -419,6 +419,8 @@ export interface NormalizedLine {
   sessionId?: string;
   /** A tool result's own verdict (is_error, status): true failed, false succeeded, absent when the CLI does not say. */
   failed?: boolean;
+  /** A tool call (what the agent is about to run), not its result: its arguments are never judged as an outcome. */
+  call?: boolean;
 }
 
 /** A schedule change or run shown as a small card in the lead's chat (SessionEvent.metadata.schedule). */
