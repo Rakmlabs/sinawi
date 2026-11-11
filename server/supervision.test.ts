@@ -372,3 +372,12 @@ test("a tool call's arguments are not an outcome: waiting on workers is not a re
     assert.equal(lead.observe({ type: "tool", text: `도구 결과: {"results":[],"still_running":["t1"],"n":${i}}`, failed: false }), undefined);
   }
 });
+
+test("rules open with the language rule, and a worker is told that ending its turn is its report", () => {
+  assert.match(ORCHESTRATOR_RULES.split("\n")[1], /모든 출력은 한국어다/u);
+  assert.match(WORKER_RULES.split("\n")[1], /모든 출력은 한국어다/u);
+  assert.match(WORKER_RULES, /이 턴이 끝나면 그것이 보고다/u);
+  assert.match(WORKER_RULES, /당신은 워커다/u);
+  assert.doesNotMatch(WORKER_RULES, /총괄은 질문에는 직접 답하고/u, "the lead's line stays out of a worker's rules");
+  assert.match(ORCHESTRATOR_RULES, /몇 분 이상 걸리는 명령은 총괄이 직접 돌리며 기다리지 않고 워커에게 맡긴다/u);
+});

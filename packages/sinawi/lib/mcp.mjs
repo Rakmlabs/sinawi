@@ -51,8 +51,13 @@ const post = (body, token) => new Promise((resolve, reject) => {
 });
 
 readline.createInterface({ input: process.stdin }).on("line", async (line) => {
+  if (!line.trim()) return;
   let message;
-  try { message = JSON.parse(line); } catch { return; }
+  try { message = JSON.parse(line); } catch {
+    // Silence would leave the client waiting for an answer that never comes.
+    send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error: each line must be one JSON-RPC message." } });
+    return;
+  }
   if (!message || message.id === undefined || message.id === null) return;
   // Read on each call: a token renewed in the app works without restarting the client.
   const token = readToken();
@@ -67,6 +72,6 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
     if (data && data.jsonrpc) send(data);
     else send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: (data && data.error) || `Sinawi answered ${res.status}` } });
   } catch (error) {
-    send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: `Sinawi is not reachable at ${base.origin}: ${(error && error.message) || error}` } });
+    send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: `Sinawi is not reachable at ${base.origin}: ${(error && error.message) || error}. Open the Sinawi app and try again (Sinawi 앱을 실행한 뒤 다시 시도하세요).` } });
   }
 });

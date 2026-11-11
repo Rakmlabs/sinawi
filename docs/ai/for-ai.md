@@ -90,7 +90,7 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 |---|---|---|---|
 | `delegate_task` | lead only | no | Hand a brief to a worker (Claude/Codex/Grok CLI) and get a task_id back at once; several calls run in parallel. `kind: "design"` returns screenshots. |
 | `check_task` | lead only | no (read) | Status of delegated tasks (running/done/error/stopped); all of this turn's tasks when task_id is empty. |
-| `collect_results` | lead only | no (read) | Receive results of delegated tasks, optionally waiting (wait, timeout_sec). Results are returned only once. |
+| `collect_results` | lead only | no (read) | Receive results of delegated tasks, optionally waiting (wait, timeout_sec). While `still_running` is returned the work is not failed: call again. Results are returned once unless `include_collected` is set. |
 | `write_skill` | lead only | no | Save a reusable skill (instructions in Markdown) for this lead or the project, to attach to later briefs. |
 | `update_skill` | lead only | no | Edit the description or body of a skill made with write_skill. |
 | `list_skills` | lead only | no (read) | Skills this lead can attach to worker briefs (lead skills and project skills). |

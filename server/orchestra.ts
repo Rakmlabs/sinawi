@@ -1,4 +1,5 @@
 import { numberedOptions } from "../src/composer.js";
+import { maxEvents, trimEvents } from "./events.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
@@ -23,7 +24,7 @@ import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule }
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
 import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeStatus, worktreeWorkerNote } from "./worktrees.js";
 import { applyStewardPatch, askPrompt, DEFAULT_MERGE_POLICY, mergeThreadReports, isReportPrompt, LEGACY_MERGE_POLICY, MAX_ASK_DEPTH, mergeRule, parseAsks, parseLeadCreates, MAX_NEW_CHATS, MAX_NEW_LEADS, parseNotes, projectState, readNotes, readUserPreferences, replyPrompt, reportDue, reportPrompt, rolloverContext, removeStewardDir, saveNotes, saveTranscript, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardName, stewardNotesId, stewardRules, stewardStartText, stripLeadBlocks, transcriptPath, type SessionSummary, type NewChatRequest, type NewLeadRequest, type StewardAsk, type StewardPatch } from "./steward.js";
-import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
+import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, GOAL_DONE_BUT_BLOCKED, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
 import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 import { withJosa } from "./korean.js";
 import { existingEvidence, VerifyEvidenceGuard } from "./verify-evidence.js";
@@ -31,7 +32,7 @@ import { existingEvidence, VerifyEvidenceGuard } from "./verify-evidence.js";
 // A lead sometimes drops one bracket of the tag (`<<DELEGATE to="claude">`); the brief is still meant for the worker.
 const delegationPattern = /<<DELEGATE\b([^<>]{0,500})>{1,2}(.*?)<<?\/DELEGATE>{1,2}/gis;
 const delegationAttributePattern = /\b([a-z][\w-]*)\s*=\s*(["'])(.*?)\2/giu;
-const maxEvents = 2_000;
+
 const maxDelegations = 6;
 /** Extra delegation rounds the orchestrator may use to re-plan after verification. */
 const maxReplanRounds = 2;
@@ -166,6 +167,16 @@ function titleFrom(prompt: string) {
   return compact.length > 48 ? `${compact.slice(0, 47)}…` : compact || "새 세션";
 }
 
+/**
+ * A worker's whole report is "waiting for the build notification": it ended its turn on a background job, which dies with the turn.
+ * Reported as done, the lead and the user waited for a result that could not come.
+ */
+export function onlyWaiting(report: string): boolean {
+  const text = report.trim();
+  if (!text || text.length > 200) return false;
+  return /(?:기다립니다|기다리겠습니다|기다리는 중|알려\s?드리겠습니다|waiting (?:for|on)\b|will (?:report|notify|let you know))/iu.test(text) && !/(?:완료|통과|성공|passed|exit 0)/iu.test(text);
+}
+
 /** A worker's result block as built in execute(): "[label 결과]\n" + the report. */
 const REPORT_HEADER = /^\[[^\]\n]*결과\]\n/u;
 /** The report opens with "상태: 완료" (not "부분 완료" or "막힘"), optionally in bold. */
@@ -234,6 +245,9 @@ export class Orchestra {
   persistSchedules?: (schedules: Schedule[]) => void | Promise<void>;
   /** Sessions whose already-published events were edited or removed since the last publish. */
   private rewrittenEvents = new Set<string>();
+  /** Order of every event this run appended. Positions in `session.events` shift once the cap trims it, so "what happened since X" is asked by order, never by index. */
+  private eventOrder = new WeakMap<SessionEvent, number>();
+  private eventCount = 0;
   /** Tunable stall thresholds (tests shorten these). */
   stallOptions: StallOptions = {};
   /**
@@ -456,6 +470,10 @@ export class Orchestra {
     this.rewrittenEvents.add(session.id);
   }
 
+  private eventsSince(session: Session, mark: number): SessionEvent[] {
+    return session.events.filter((event) => (this.eventOrder.get(event) ?? 0) > mark);
+  }
+
   private broadcast(session: Session) {
     this.publish(session, this.rewrittenEvents.delete(session.id) ? { full: true } : undefined);
     void Promise.resolve(this.persist(this.list(), [session.id])).catch(() => undefined);
@@ -475,7 +493,8 @@ export class Orchestra {
     const event = { id, sessionId: session.id, agent, type, text, time: new Date().toISOString(), ...metadata } satisfies SessionEvent;
     if (type === "delegation" && metadata.taskStatus === "running") event.delegationId = id;
     session.events.push(event);
-    if (session.events.length > maxEvents) session.events.splice(0, session.events.length - maxEvents);
+    this.eventOrder.set(event, ++this.eventCount);
+    trimEvents(session.events, maxEvents);
     this.lastEventAt.set(session.id, Date.now());
     this.touchInactivityTimer(session);
     this.broadcast(session);
@@ -728,14 +747,14 @@ export class Orchestra {
       const stewardReview = await this.stewardContext(session);
       const evidence = await existingEvidence(workerResults.join("\n"), session.cwd, [...(session.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR]);
       const evidenceNote = evidence.length ? `\n\n앱이 존재를 확인한 증거 파일(내용의 정확성·완료 여부는 별도 판단):\n${evidence.map((file) => `- \`${file}\``).join("\n")}\n이 경로를 사용하세요. 메인 폴더에서 상대 경로가 없다는 이유로 다시 촬영하지 마세요.` : "";
-      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${ORCHESTRATOR_RULES}${skillCatalog(installedSkills)}${skillPreferences}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${evidenceNote}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
-      const reviewStart = session.events.length;
+      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${ORCHESTRATOR_RULES}${skillPreferences}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${evidenceNote}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
+      const reviewStart = this.eventCount;
       let review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
       if (controller.signal.aborted) return this.finishStopped(session, controller);
       if (review.exitCode !== 0) throw new Error(`${agentNames[session.agent]} 후속 실행이 종료 코드 ${review.exitCode}로 끝났습니다.`);
       this.noteChecklist(session, review.finalText);
       // Exit code 0 but the CLI stopped early: hand over the workers' reports instead of a silent "완료".
-      if (session.events.slice(reviewStart).some((event) => event.type === "error" && event.role === "orchestrator" && /중단되었습니다 \(/u.test(event.text))) {
+      if (this.eventsSince(session, reviewStart).some((event) => event.type === "error" && event.role === "orchestrator" && /중단되었습니다 \(/u.test(event.text))) {
         this.event(session, session.agent, "warning", "총괄 검증이 중간에 끊겼습니다. 아래는 검증하지 못한 워커 보고입니다.", { role: "orchestrator", metadata: { phase: "verify-cut", round } });
         this.event(session, session.agent, "message", workerResults.join("\n\n"), { role: "orchestrator", metadata: { phase: "worker-report", round } });
         return this.finish(session);
@@ -746,7 +765,7 @@ export class Orchestra {
       // User choices also pause recovery after an interrupted worker.
       if (!next.length && !pendingResults.length && numberedOptions(stripLeadBlocks(review.finalText)).length) return this.finish(session);
       if (roundFailed && !next.length) {
-        const selfWork = session.events.slice(reviewStart).filter((event) => event.role === "orchestrator" && (event.type === "edit" || event.type === "command" || event.type === "tool") && /^(명령|파일 (수정|쓰기|생성)|편집|쓰기)\s*:/u.test(event.text));
+        const selfWork = this.eventsSince(session, reviewStart).filter((event) => event.role === "orchestrator" && (event.type === "edit" || event.type === "command" || event.type === "tool") && /^(명령|파일 (수정|쓰기|생성)|편집|쓰기)\s*:/u.test(event.text));
         this.event(session, session.agent, "warning", `검증 실패 후 총괄이 재위임하지 않고 ${selfWork.length ? `직접 작업했습니다 (${selfWork.length}건: ${selfWork.slice(0, 3).map((event) => event.text.slice(0, 60)).join(", ")})` : "마무리하려 합니다"}.`, { role: "orchestrator", metadata: { phase: "self-work", round } });
         if (strict) {
           // Enforce once: Grok orchestrators must hand the failed work back to a worker.
@@ -788,7 +807,12 @@ export class Orchestra {
   private async runBriefNow(session: Session, turn: LeadTurn, task: string, worker: AgentSelection, roundWorktrees: Map<string, NonNullable<Session["worktrees"]>[number]>, extra: string, extraAttachedSkills: string[]): Promise<string | typeof STOPPED> {
     const { controller, userPrompt, systemPrompt, skills, installedSkills, requiresGrokMedia, mediaPrompt } = turn;
     if (controller.signal.aborted) return STOPPED;
-    const brief = ensureBrief(task, userPrompt);
+    // An automatic turn's "user request" is the app's own follow-up text ("delegate the next item", a peer's question,
+    // a schedule). Attached to a brief as the user's words, the worker took it as something asked of it.
+    const appMade = (text: string) => /^\[(?:앱[\s—\]]|담당 「|일정)/u.test(text.trimStart());
+    const userWords = !appMade(userPrompt) ? userPrompt
+      : session.goal ? [...session.events].reverse().find((event) => event.agent === "user" && event.type === "message" && !appMade(event.text))?.text ?? "" : "";
+    const brief = ensureBrief(task, userWords);
     const workerId = worker.id!;
     const resumeIdForBrief = worker.sessionMode === "new" ? undefined : workerSessionId(session, workerId);
     const workerResume = resumeIdForBrief ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events, workerId)}` : "";
@@ -816,7 +840,7 @@ export class Orchestra {
     idleTimer.unref();
     const runWorker = (id?: string) => this.runAgent(session, worker.agent, workerPrompt, worker.model, worker.reasoningEffort, id, controller.signal, false, false, "worker", delegationId, workerId, label, requiresGrokMedia);
     let result;
-    const eventStart = session.events.length;
+    const eventStart = this.eventCount;
     try {
       try {
         result = await runWorker(resumeId);
@@ -854,11 +878,15 @@ export class Orchestra {
     }
     const report = (result.finalText || `${agentNames[result.agent]}가 결과 없이 종료되었습니다(코드 ${result.exitCode}).`) + invocationNote;
     // Exit code 0 but the CLI reported it stopped early (e.g. Grok "cancelled"): not a success.
-    const interrupted = session.events.slice(eventStart).find((event) => event.type === "error" && event.delegationId === delegationId && /중단되었습니다 \(/.test(event.text));
+    const interrupted = this.eventsSince(session, eventStart).find((event) => event.type === "error" && event.delegationId === delegationId && /중단되었습니다 \(/.test(event.text));
     if (interrupted) {
       const out = `[${label} 결과 — 중단됨: ${interrupted.text} 아래 내용은 불완전할 수 있다]\n${report}`;
       this.event(session, result.agent, "status", `작업이 중간에 중단되었습니다. ${interrupted.text}`, { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
       return out;
+    }
+    if (onlyWaiting(result.finalText)) {
+      this.event(session, result.agent, "status", "결과 없이 기다린다는 말로 끝났습니다.", { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "error", model: result.model, reasoningEffort: result.reasoningEffort });
+      return `[${label} 결과 — 미완료: 결과 없이 기다린다는 말로 턴을 끝냈다. 턴이 끝나면 이 워커가 백그라운드로 돌리던 명령도 꺼진다. 같은 턴 안에서 끝까지 기다려 결과를 보고하라고 다시 맡겨야 한다]\n${report}`;
     }
     this.event(session, result.agent, "status", "작업을 완료했습니다.", { role: "worker", workerId, workerLabel: label, delegationId, taskStatus: "done", model: result.model, reasoningEffort: result.reasoningEffort });
     return `[${label} 결과]\n${report}`;
@@ -2136,9 +2164,16 @@ export class Orchestra {
     const workers = turn.workers;
     const busy = (id: string) => turn.tasks.some((task) => task.workerId === id && task.status === "running");
     const isAgent = (value: unknown): value is AgentId => value === "claude" || value === "codex" || value === "grok";
-    const requested = typeof args.worker === "string" ? args.worker.trim() : "";
+    let requested = typeof args.worker === "string" ? args.worker.trim() : "";
+    // `agent: "claude-2"` is a worker ID in the wrong field. Dropping it sent the brief to whichever worker was free.
+    const misplaced = typeof args.agent === "string" && args.agent.trim() && !isAgent(args.agent.trim().toLowerCase()) ? args.agent.trim() : "";
+    if (misplaced) {
+      if (!requested && workers.some((worker) => worker.id === misplaced)) requested = misplaced;
+      else if (!requested) throw new Error(`agent는 claude, codex, grok 중 하나입니다. '${misplaced}'라는 워커는 없습니다. 있는 워커: ${workers.map((worker) => worker.id).join(", ") || "없음"} (워커 ID는 worker에 넣습니다).`);
+    }
     const model = typeof args.model === "string" && args.model.trim() ? args.model.trim().slice(0, 100) : undefined;
-    let agent = isAgent(args.agent) ? args.agent : undefined;
+    const asked = typeof args.agent === "string" ? args.agent.trim().toLowerCase() : "";
+    let agent = isAgent(asked) ? asked : undefined;
     if (requested) {
       const exact = workers.find((worker) => worker.id === requested);
       if (exact) {
@@ -2204,9 +2239,11 @@ export class Orchestra {
     const turn = this.liveLeadTurn(session);
     const ids = Array.isArray(args.task_ids) ? args.task_ids.filter((item): item is string => typeof item === "string") : [];
     const group = typeof args.group === "string" && args.group ? args.group : undefined;
-    const picked = turn.tasks.filter((task) => (ids.length ? ids.includes(task.id) : !task.collected) && (!group || task.group === group));
+    const again = args.include_collected === true;
+    const picked = turn.tasks.filter((task) => (ids.length ? ids.includes(task.id) : again || !task.collected) && (!group || task.group === group));
+    const waitStart = Date.now();
     if (args.wait !== false && picked.some((task) => task.status === "running")) {
-      const seconds = Math.min(LEAD_WAIT_LIMIT_SEC, Math.max(1, Number(args.timeout_sec) || LEAD_WAIT_LIMIT_SEC));
+      const seconds = Math.min(LEAD_WAIT_LIMIT_SEC, Math.max(1, Number(args.timeout_sec ?? args.timeout_s ?? args.timeout_seconds ?? args.timeout) || LEAD_WAIT_LIMIT_SEC));
       let timer: NodeJS.Timeout | undefined;
       const keepAlive = touch ? setInterval(touch, 20_000) : undefined;
       keepAlive?.unref();
@@ -2226,8 +2263,11 @@ export class Orchestra {
     return {
       results: finished.map((task) => ({ task_id: task.id, worker: task.workerId, status: task.status, result: task.result ?? "" })),
       ...(running.length ? { still_running: running.map((task) => task.id) } : {}),
+      ...(running.length ? { waited_sec: Math.round((Date.now() - waitStart) / 1_000), next: `아직 실행 중인 일이 있습니다. 실패가 아닙니다. 한 번에 최대 ${LEAD_WAIT_LIMIT_SEC}초까지 기다리니 collect_results(wait)를 다시 부르세요.` } : {}),
       ...(note ? { worktrees: note } : {}),
-      ...(!picked.length ? { note: "받을 결과가 없습니다." } : {}),
+      ...(!picked.length ? { note: !turn.tasks.length ? "이번 턴에 맡긴 일이 없습니다. delegate_task로 먼저 맡기세요."
+        : ids.length || group ? `그 task_ids/group에 맞는 일이 없습니다. 이번 턴의 일: ${turn.tasks.map((task) => task.id).join(", ")}`
+        : `이번 턴에 맡긴 ${turn.tasks.length}건은 이미 모두 받았습니다. 다시 부르지 마세요. 결과를 다시 봐야 하면 include_collected:true.` } : {}),
     };
   }
 
@@ -2817,7 +2857,7 @@ export class Orchestra {
     goal.stopped = text;
     goal.outcome = outcome;
     const blocked = goal.items.filter((item) => item.status === "blocked");
-    this.event(session, session.agent, outcome === "complete" && !blocked.length ? "status" : "warning", `${text}${goal.items.length ? ` (${settledCount(goal.items)}/${goal.items.length} 항목)` : ""}${blocked.length ? `\n사람이 풀어야 할 것:\n${blocked.map((item) => `- ${item.text}${item.note ? ` — ${item.note}` : ""}`).join("\n")}` : ""}`);
+    this.event(session, session.agent, outcome === "complete" && !blocked.length ? "status" : "warning", `${outcome === "complete" && blocked.length ? GOAL_DONE_BUT_BLOCKED : text}${goal.items.length ? ` (${settledCount(goal.items)}/${goal.items.length} 항목)` : ""}${blocked.length ? `\n사람이 풀어야 할 것:\n${blocked.map((item) => `- ${item.text}${item.note ? ` — ${item.note}` : ""}`).join("\n")}` : ""}`);
     if (session.parentId) void this.childSettled(session);
   }
 

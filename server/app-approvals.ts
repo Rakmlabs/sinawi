@@ -72,6 +72,9 @@ export class ApprovalStore {
 
   async create(input: Pick<AppApproval, "tool" | "args" | "summary" | "source" | "sessionId" | "workspaceId" | "requester" | "sessionTitle" | "workspaceName">): Promise<AppApproval> {
     await this.load();
+    // A model that retries must not stack identical cards: the request it already made is still waiting.
+    const same = [...this.items.values()].find((item) => item.status === "pending" && item.tool === input.tool && item.source === input.source && item.sessionId === input.sessionId && item.workspaceId === input.workspaceId && JSON.stringify(item.args) === JSON.stringify(input.args));
+    if (same) return same;
     const item: AppApproval = { ...input, id: randomUUID(), status: "pending", createdAt: new Date().toISOString() };
     this.items.set(item.id, item);
     await this.persist();

@@ -48,7 +48,7 @@ export const settledCount = (items: readonly GoalItem[] = []) => items.filter((i
 /** Rules for a lead that runs the request to completion; `split`: it may also split it into chats. */
 export function goalRules(split: boolean): string {
   return `## 끝까지 진행 (앱이 붙임)
-질문·설명·한 번에 끝나는 작은 수정이면 평소처럼 답하고 아래 형식을 쓰지 않는다. 사용자의 이번 메시지가 질문이나 확인이면 답만 한다. 체크리스트에 남은 항목이 있어도 이번 응답에서 위임하지 않고, 남은 항목이 있다는 것만 한 줄로 알린다. 사용자가 계속하라고 하면 그때 이어 간다.
+질문·설명·한 번에 끝나는 작은 수정이면 평소처럼 답하고 아래 형식을 쓰지 않는다. 사용자의 이번 메시지가 질문이나 확인이면 답만 하고 체크리스트는 바꾸지 않는다. 남은 항목이 있어도 이번 응답에서 위임하지 않고, 남은 항목이 있다는 것만 한 줄로 알린다.
 여러 단계를 거쳐야 끝나는 일이면, 앱이 사용자의 요청이 끝날 때까지 턴을 이어 간다. 한 턴에 다 하려 하지 말고 체크리스트로 관리한다.
 - 응답마다 체크리스트 전체를 이 형식으로 쓴다(빠진 항목 없이, 순서 유지):
 <<CHECKLIST>>
@@ -58,7 +58,9 @@ export function goalRules(split: boolean): string {
 <</CHECKLIST>>
 - 처음 쓸 때는 사용자 원문의 요청을 하나도 빠뜨리지 않고 항목으로 나눈다. 큰 일은 검증할 수 있는 단위로 쪼갠다.
 - [x]는 워커 보고와 파일·테스트로 확인한 것만 표시한다. 보고만 보고 체크하지 않는다.
-- [!]는 키·계정·결제·존재하지 않는 외부 API·사용자의 결정처럼 에이전트가 할 수 없는 것만이다. 어렵거나 실패했다는 이유로 쓰지 않는다. 막힌 항목이 있어도 나머지는 계속한다.
+- [!]는 키·계정·결제·존재하지 않는 외부 API·사용자의 결정처럼 에이전트가 할 수 없는 것, 또는 이미 돌고 있는 외부 빌드·배포·심사처럼 기다리는 것만 남은 항목이다(— 대기: 무엇을, 어디서 확인하는지). 어렵거나 실패했다는 이유로 쓰지 않는다. 막힌 항목이 있어도 나머지는 계속한다.
+- 사용자 결정이 있어야 다음으로 갈 수 있으면 그 항목을 [!]로 표시하고, 답 끝에 1. 2. 번호 선택지와 물음표로 끝나는 질문을 쓴다. 이 형식이어야 앱이 이어가기를 멈추고 답을 기다린다.
+- 새 사용자 메시지가 지금 체크리스트와 관계없는 새 요청이고 남은 [ ] 항목이 없으면, 끝난 항목은 지우고 새 요청의 항목으로 체크리스트를 새로 쓴다.
 - 스킬 선택을 묻는 턴에는 위임하지 않고 사용자 답을 기다린다. 체크리스트는 추천 질문 앞에 두고 열린 항목을 그대로 유지한다. 앱은 선택 질문에서 자동 이어가기를 쉬고 사용자 답으로 재개한다.
 - 그 외에 남은 [ ] 항목이 있으면 이번 응답에서 다음 항목을 워커에게 위임한다. 앱이 다음 턴을 연다.
 - 각 항목이 끝나면 워커가 작업 브랜치에 커밋하게 한다(메시지에 무엇을 했는지).${split ? `
@@ -70,7 +72,7 @@ ${GOAL_FORMAT}` : ""}`;
 
 export function goalTurnPrompt(items: readonly GoalItem[], turn: number): string {
   const open = openItems(items);
-  return `[앱 — ${turn}번째 이어가기] 아래는 지금 체크리스트입니다. 지난 턴의 결과를 작업 트리의 파일·커밋·테스트로 확인해 체크리스트를 고치고, 남은 항목 중 다음 것을 워커에게 위임하세요. 남은 항목 ${open.length}개.\n\n<<CHECKLIST>>\n${renderChecklist(items)}\n<</CHECKLIST>>`;
+  return `[앱 — ${turn}번째 이어가기] 아래는 지금 체크리스트입니다. 지난 턴의 결과를 작업 트리의 파일·커밋·테스트로 확인해 체크리스트를 고치세요. 남은 [ ] 항목이 있으면 다음 것을 워커에게 위임하세요. 남은 것이 이미 돌고 있는 빌드·배포·심사를 기다리는 것뿐이면 새로 위임하거나 이 턴에서 기다리지 말고, 상태를 한 번 확인해 그 항목을 [!] … — 대기: …로 바꾸고 한국어 한 줄로 알리세요. 남은 항목 ${open.length}개.\n\n<<CHECKLIST>>\n${renderChecklist(items)}\n<</CHECKLIST>>`;
 }
 
 export type GoalStop = "complete" | "idle" | "turns" | "time" | "no-checklist";
@@ -86,9 +88,12 @@ export function nextGoalStep(session: Pick<Session, "goal">, now = Date.now()): 
   return { continue: true };
 }
 
+/** Every item is settled but some are blocked: "all done" taught the lead and the user to read a blocked item as done. */
+export const GOAL_DONE_BUT_BLOCKED = "할 수 있는 일은 모두 마쳤습니다. 남은 것은 사람이 풀거나 기다려야 합니다.";
+
 export const GOAL_STOP_TEXT: Record<GoalStop, string> = {
   complete: "요청한 일을 모두 마쳤습니다.",
-  idle: `${GOAL_MAX_IDLE_TURNS}턴 연속 진전이 없어 멈췄습니다.`,
+  idle: `${GOAL_MAX_IDLE_TURNS}턴 연속 진전이 없어 멈췄습니다. 이어 가려면 \"계속\"이라고 보내세요.`,
   turns: `자동 턴 상한(${GOAL_MAX_AUTO_TURNS}턴)에 닿아 멈췄습니다.`,
   time: `시간 상한(${GOAL_MAX_HOURS}시간)에 닿아 멈췄습니다.`,
   "no-checklist": "체크리스트가 없어 이어 가지 않았습니다.",

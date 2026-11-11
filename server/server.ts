@@ -1337,10 +1337,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const toolContext = (caller: CallerContext): ToolContext => ({
     dispatch: (method, path, body) => {
       const url = new URL(path, "http://sinawi.local");
-      const askedSession = method === "POST" ? /^\/api\/sessions\/([^/]+)\/live$/.exec(url.pathname) : null;
+      // A lead works inside its workspace: it neither asks nor instructs a chat of another one.
+      const askedSession = method === "POST" ? (caller.surface === "lead" ? /^\/api\/sessions\/([^/]+)\/(?:live|messages)$/ : /^\/api\/sessions\/([^/]+)\/live$/).exec(url.pathname) : null;
       if (askedSession) {
         const target = orchestra.get(decodeURIComponent(askedSession[1]));
-        if (target && target.workspaceId !== caller.workspaceId) throw new Error("같은 공간의 채팅에만 질문할 수 있습니다. 먼저 담당을 같은 공간으로 옮기세요.");
+        if (target && target.workspaceId !== caller.workspaceId) throw new Error("같은 공간의 채팅에만 질문하거나 지시할 수 있습니다. 먼저 담당을 같은 공간으로 옮기세요.");
       }
       if (/^\/api\/(?:stewards|settings)(?:\/|$)/.test(url.pathname) && !url.searchParams.has("workspace")) url.searchParams.set("workspace", caller.workspaceId);
       return dispatch(method, `${url.pathname}${url.search}`, body);

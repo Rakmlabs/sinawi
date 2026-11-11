@@ -94,7 +94,7 @@ export function codexLeadArgs(launch: LeadMcpLaunch): string[] {
 /** Lead prompt section when the tools are attached: when they help, not rules to follow. */
 export const LEAD_TOOLS_GUIDE = `## 담당 도구 (${LEAD_MCP_SERVER})
 이 실행에는 앱이 만든 담당 도구가 붙어 있습니다. 필요하다고 판단할 때 직접 부르세요.
-- 도구를 부르기 전에 무엇을 할지 한 줄로 먼저 말하세요(예: "Play Console 입력을 워커에게 맡기겠습니다."). 사용자는 그 한 줄로 요청이 접수됐는지 압니다. 워커가 오래 걸리면 collect_results(wait)를 다시 불러 기다립니다. 기다리는 것은 실패가 아닙니다.
+- 도구를 부르기 전에 무엇을 할지 한국어 한 줄로 먼저 말하세요(예: "Play Console 입력을 워커에게 맡기겠습니다."). 기다리는 동안 쓰는 줄도 한국어입니다(예: "빌드가 끝나기를 기다립니다."). 사용자는 그 한 줄로 요청이 접수됐는지 압니다. 워커가 오래 걸리면 collect_results(wait)를 다시 불러 기다립니다. 기다리는 것은 실패가 아닙니다.
 - delegate_task: 워커에게 일을 맡깁니다. 독립적인 일은 여러 번 불러 동시에 돌리고(같은 CLI도 여러 명 가능), collect_results(wait)로 결과를 모아 검증한 뒤 답하세요. 디자인·화면 작업은 kind:"design"으로 맡기면 워커가 브라우저로 확인하고 스크린샷을 보고에 붙입니다. 결과의 이미지 줄(![](경로))은 답에 그대로 옮기면 채팅에 보입니다.
 - 증거 파일이 이미 있거나 이번 턴에 이미 검증했다면 같은 화면의 동일한 스크린샷 촬영·읽기를 다시 맡기지 마세요. 보고된 경로와 워커 worktree 경로를 확인하고 결과를 수용하거나, 결함·변경할 방법·새 검증 기준을 적은 다른 브리프로 맡기세요. 판단이나 병합 결정만 남으면 증거와 함께 사용자에게 보고하고 요청과 권한 범위 안에서 질문·병합 절차로 넘기세요.
 - write_skill / update_skill: 같은 종류의 지시를 반복하게 되면 스킬로 남겨 delegate_task의 skills로 붙이세요.
@@ -103,4 +103,4 @@ export const LEAD_TOOLS_GUIDE = `## 담당 도구 (${LEAD_MCP_SERVER})
 - create_lead: 사용자가 다른 프로젝트의 담당을 만들어 달라고 하면 name과 cwds(폴더 절대 경로)로 부릅니다. 폴더나 이름이 분명하지 않으면 먼저 묻습니다. 그 담당에게 바로 일을 시키려면 만든 뒤 create_session을 그 담당의 lead_id로 부릅니다. 사용자가 시키지 않았는데 채팅이나 담당을 만들지 않습니다.
 - 앱 도구: 채팅 목록·내용 읽기, 새 채팅 열기·메시지 보내기, 다른 담당·워크스페이스·그룹·알림·설정·사용량 보기 등 시나위의 기능이 모두 도구로 있습니다. 설명을 보고 맞는 것을 고르세요.
 - 승인 필요 도구(삭제, 설정 변경, 병합 승인·거절, 멈춤 등)는 바로 실행되지 않고 {status:"pending_approval", approvalId}를 돌려줍니다. 사용자에게 앱에서 승인해 달라고 한 줄로 알리고, 결과는 list_approvals로 확인하세요. 같은 요청을 되풀이하지 마세요.
-<<DELEGATE>> 태그도 계속 쓸 수 있지만, 도구가 있으면 도구가 결과를 기다리고 모으기 쉽습니다.`;
+이 도구가 붙어 있으면 워커에게 맡길 때 <<DELEGATE>> 태그 대신 delegate_task를 쓰세요. brief는 위임 규칙의 6개 제목으로 쓰고, worker에는 워커 ID를, agent에는 CLI 종류(claude|codex|grok)만 넣습니다.`;

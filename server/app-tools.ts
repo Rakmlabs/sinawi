@@ -202,8 +202,8 @@ const LEAD_ONLY: AppTool[] = [
     description: "워커(Claude/Codex/Grok CLI)에게 일을 맡기고 바로 task_id를 돌려받는다. 여러 번 부르면 동시에 실행된다. 같은 CLI를 두 번 맡겨도 각자 다른 워커로 병렬 실행된다. 결과는 collect_results로 받는다. 디자인·UI 작업은 kind:'design'.",
     properties: {
       brief: str("워커에게 줄 구체적인 지시. 목표, 맥락, 바꿀 파일, 완료 조건, 보고 형식을 적는다."),
-      worker: str("기존 워커 ID(예: 'codex-2'). 비우면 agent로 고른다."),
-      agent: agentEnum("워커 CLI. 작업에 필요한 기능을 가진 CLI를 직접 고른다. 팀에 없거나 쉬는 워커가 없으면 새 워커를 만든다(작업공간이 허용한 CLI만)."),
+      worker: str("기존 워커 ID(예: 'codex-2'): 이전 delegate_task·check_task 결과의 worker 값. 비우면 agent로 고른다."),
+      agent: agentEnum("워커 CLI 종류만(claude|codex|grok). 워커 ID는 worker에 넣는다. 작업에 필요한 기능을 가진 CLI를 직접 고른다. 팀에 없거나 쉬는 워커가 없으면 새 워커를 만든다(작업공간이 허용한 CLI만)."),
       model: str("모델(선택)."),
       skills: strings("브리프에 붙일 스킬 이름(write_skill로 만든 것 또는 설치된 스킬)."),
       group: str("묶음 이름(선택). collect_results에서 group으로 모아 받는다."),
@@ -214,12 +214,13 @@ const LEAD_ONLY: AppTool[] = [
   leadTool({ name: "check_task", risk: "read", description: "맡긴 일의 상태(running/done/error/stopped)를 본다. task_id를 비우면 이번 턴의 모든 일.", properties: { task_id: str("delegate_task가 준 ID.") } }),
   leadTool({
     name: "collect_results", risk: "read",
-    description: "맡긴 일의 결과를 받는다. wait=true면 끝날 때까지(최대 timeout_sec) 기다린다. 받은 결과는 다시 돌려주지 않는다.",
+    description: `맡긴 일의 결과를 받는다. wait=true면 끝날 때까지 기다린다(한 번에 최대 ${LEAD_WAIT_LIMIT_SEC}초). still_running이 오면 실패가 아니니 다시 부른다. 한 번 받은 결과는 include_collected:true일 때만 다시 준다.`,
     properties: {
       task_ids: strings("받을 일의 ID. 비우면 아직 받지 않은 모든 일."),
       group: str("이 묶음의 일만."),
       wait: bool("끝날 때까지 기다리기 (기본 true)."),
       timeout_sec: num(`기다릴 최대 초 (기본·최대 ${LEAD_WAIT_LIMIT_SEC}).`),
+      include_collected: bool("이미 받은 결과도 다시 받기 (기본 false)."),
     },
   }),
   leadTool({
@@ -839,24 +840,73 @@ export type ToolCall = (name: string, args: Record<string, unknown>) => Promise<
  * Answers one MCP JSON-RPC message for a surface. Undefined for notifications (no id). A tool that
  * throws comes back as an MCP tool error (`isError`), so the AI reads the reason and can try again.
  */
+const MCP_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
+/** One tool result may not flood the caller: CLIs reject or truncate very large MCP results on their own, without saying where. */
+export const MAX_TOOL_RESULT_CHARS = 80_000;
+
+/** What an AI client outside the app must know before its first call; a lead gets the same from its own guide. */
+const EXTERNAL_INSTRUCTIONS = [
+  "Sinawi runs the Claude Code, Codex and Grok CLIs as one team on this Mac. These tools drive the running app.",
+  "IDs come from list_* tools (list_sessions, list_leads, list_workspaces); never guess one.",
+  "A tool marked [approval] does not run at once: it returns status \"pending_approval\" and waits for the user to approve it in the app. Tell the user, check list_approvals(approval_id) later, and do not send the same request again.",
+  "send_message starts work in a chat and returns at once; read progress with get_session.",
+  "Tool descriptions and errors are in Korean. Answer the user in their own language.",
+].join("\n");
+
+/** Names a model commonly writes for a real argument. An unknown name was dropped silently, so `timeout_s` waited the default instead. */
+const ARG_ALIASES: Record<string, string> = { timeout_s: "timeout_sec", timeout_seconds: "timeout_sec", timeout: "timeout_sec", sessionId: "session_id", leadId: "lead_id", workspaceId: "workspace_id", taskId: "task_id", task_ids_list: "task_ids" };
+
+/**
+ * Arguments as the tool's schema names them, checked before anything runs or an approval card is made:
+ * a missing required argument or an unknown name is an error that says what the tool takes.
+ */
+export function checkedArgs(tool: Pick<AppTool, "name" | "inputSchema">, raw: Record<string, unknown>): Record<string, unknown> {
+  const known = Object.keys((tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {});
+  const args: Record<string, unknown> = {};
+  const unknown: string[] = [];
+  for (const [key, value] of Object.entries(raw)) {
+    const alias = ARG_ALIASES[key];
+    if (known.includes(key)) args[key] = value;
+    else if (alias && known.includes(alias) && raw[alias] === undefined) args[alias] = value;
+    else unknown.push(key);
+  }
+  const takes = known.length ? `이 도구의 인자: ${known.join(", ")}` : "이 도구는 인자를 받지 않습니다";
+  if (unknown.length) throw new Error(`${tool.name}에 없는 인자입니다: ${unknown.join(", ")}. ${takes}.`);
+  const required = (tool.inputSchema as { required?: string[] }).required ?? [];
+  const missing = required.filter((key) => args[key] === undefined || args[key] === null || args[key] === "");
+  if (missing.length) throw new Error(`${tool.name}에 필요한 인자가 빠졌습니다: ${missing.join(", ")}. ${takes}.`);
+  return args;
+}
+
+function resultText(value: unknown): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (text.length <= MAX_TOOL_RESULT_CHARS) return text;
+  return `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n[잘림: 전체 ${text.length}자 중 앞 ${MAX_TOOL_RESULT_CHARS}자만 보냈습니다. limit을 줄이거나 ID를 하나씩 지정해 다시 부르세요.]`;
+}
+
 export async function handleToolMcp(message: JsonRpcMessage, surface: ToolSurface, serverName: string, call: ToolCall): Promise<object | undefined> {
   if (!message || message.id === undefined || message.id === null) return undefined;
   const id = message.id;
   switch (message.method) {
     case "initialize":
-      return { jsonrpc: "2.0", id, result: { protocolVersion: message.params?.protocolVersion || "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: serverName, version: "1.0.0" } } };
+      return { jsonrpc: "2.0", id, result: {
+        protocolVersion: MCP_VERSIONS.includes(message.params?.protocolVersion ?? "") ? message.params!.protocolVersion : MCP_VERSIONS[0],
+        capabilities: { tools: {} }, serverInfo: { name: serverName, title: "Sinawi", version: "1.0.0" },
+        ...(surface === "external" ? { instructions: EXTERNAL_INSTRUCTIONS } : {}),
+      } };
     case "ping":
       return { jsonrpc: "2.0", id, result: {} };
     case "tools/list":
       return { jsonrpc: "2.0", id, result: { tools: toolsFor(surface).map(listedTool) } };
     case "tools/call": {
       const name = message.params?.name ?? "";
-      if (!findTool(surface, name)) return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } };
+      const tool = findTool(surface, name);
+      if (!tool) return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } };
       const raw = message.params?.arguments;
       const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
       try {
-        const value = await call(name, args);
-        return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] } };
+        const value = await call(name, checkedArgs(tool, args));
+        return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: resultText(value) }] } };
       } catch (error) {
         return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] } };
       }

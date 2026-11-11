@@ -90,7 +90,7 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 |---|---|---|---|
 | `delegate_task` | 담당만 | 아니오 | 워커(Claude/Codex/Grok CLI)에게 일을 맡기고 바로 task_id를 돌려받는다. 여러 번 부르면 동시에 실행된다. 같은 CLI를 두 번 맡겨도 각자 다른 워커로 병렬 실행된다. 결과는 collect_results로 받는다. 디자인·UI 작업은 kind:'design'. |
 | `check_task` | 담당만 | 아니오(읽기) | 맡긴 일의 상태(running/done/error/stopped)를 본다. task_id를 비우면 이번 턴의 모든 일. |
-| `collect_results` | 담당만 | 아니오(읽기) | 맡긴 일의 결과를 받는다. wait=true면 끝날 때까지(최대 timeout_sec) 기다린다. 받은 결과는 다시 돌려주지 않는다. |
+| `collect_results` | 담당만 | 아니오(읽기) | 맡긴 일의 결과를 받는다. wait=true면 끝날 때까지 기다린다(한 번에 최대 600초). still_running이 오면 실패가 아니니 다시 부른다. 한 번 받은 결과는 include_collected:true일 때만 다시 준다. |
 | `write_skill` | 담당만 | 아니오 | 재사용할 스킬(작업 지침 문서)을 만든다. 같은 종류의 일을 여러 번 맡길 때 브리프 대신 스킬로 남겨 delegate_task의 skills에 붙인다. |
 | `update_skill` | 담당만 | 아니오 | write_skill로 만든 스킬의 설명이나 본문을 고친다. |
 | `list_skills` | 담당만 | 아니오(읽기) | 이 담당이 워커 브리프에 붙일 수 있는 스킬(담당 스킬, 프로젝트 스킬)을 본다. |

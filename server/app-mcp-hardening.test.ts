@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { APP_TOOLS, injectRequest, withoutLaunchDetails, type ToolContext } from "./app-tools.js";
+import { APP_TOOLS, checkedArgs, handleToolMcp, injectRequest, MAX_TOOL_RESULT_CHARS, withoutLaunchDetails, type ToolContext } from "./app-tools.js";
 import { appMcpTokenPath, ensureAppMcpToken, rotateAppMcpToken } from "./app-mcp.js";
 import { ApprovalStore } from "./app-approvals.js";
 import { createServer } from "./server.js";
@@ -103,4 +103,34 @@ test("a lead's folder stays under <data>/stewards whatever ID stored data holds"
   for (const bad of ["..", "../x", "a/../../b", "a/b", "", ".hidden/..", "x\\y"]) assert.throws(() => stewardDir(directory, bad), /담당 ID/u, bad);
   await writeFile(join(directory, "probe"), "");
   assert.throws(() => notesPath(directory, "../../probe"));
+});
+
+test("the same request sent twice while it waits is one approval card", async (t) => {
+  const directory = await tempDir(t, "sinawi-approvals-dedupe-");
+  const store = new ApprovalStore(directory);
+  const input = { tool: "delete_session", args: { session_id: "s" }, summary: "삭제", source: "external" as const, workspaceId: "default" };
+  const first = await store.create(input);
+  assert.equal((await store.create({ ...input, args: { session_id: "s" } })).id, first.id);
+  assert.notEqual((await store.create({ ...input, args: { session_id: "other" } })).id, first.id);
+  await store.decide(first.id, false, async () => undefined);
+  assert.notEqual((await store.create(input)).id, first.id, "a decided request can be asked again");
+});
+
+test("a tool call with an unknown or missing argument fails with the names the tool takes, before anything runs", async () => {
+  const collect = APP_TOOLS.find((tool) => tool.name === "collect_results")!;
+  assert.deepEqual(checkedArgs(collect, { wait: true, timeout_s: "2400" }), { wait: true, timeout_sec: "2400" }, "a common misspelling is the real argument");
+  assert.throws(() => checkedArgs(collect, { wait: true, forever: true }), /없는 인자입니다: forever.*timeout_sec/u);
+  let ran = false;
+  const answer = await handleToolMcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "delete_session", arguments: {} } }, "external", "sinawi", async () => { ran = true; }) as { result: { isError?: boolean; content: Array<{ text: string }> } };
+  assert.equal(ran, false, "no approval card for a request that cannot run");
+  assert.equal(answer.result.isError, true);
+  assert.match(answer.result.content[0].text, /필요한 인자가 빠졌습니다: session_id/u);
+});
+
+test("a huge tool result is cut with a note instead of flooding the caller", async () => {
+  const answer = await handleToolMcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_sessions", arguments: {} } }, "external", "sinawi", async () => "가".repeat(MAX_TOOL_RESULT_CHARS + 500)) as { result: { content: Array<{ text: string }> } };
+  assert.match(answer.result.content[0].text, /\[잘림: 전체 80500자/u);
+  const hello = await handleToolMcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "1999-01-01" } }, "external", "sinawi", async () => undefined) as { result: { protocolVersion: string; instructions?: string } };
+  assert.equal(hello.result.protocolVersion, "2025-06-18", "an unknown protocol version is answered with one the server speaks");
+  assert.match(hello.result.instructions ?? "", /pending_approval/u);
 });
