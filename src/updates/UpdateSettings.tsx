@@ -1,5 +1,6 @@
 // Settings section: "자동으로 업데이트 확인" toggle, manual "업데이트 확인", current status.
 import { useLang } from "../i18n";
+import { Markdown } from "../Markdown";
 import { useUpdateT } from "./strings";
 import { useAppUpdate } from "./useAppUpdate";
 import "./update.css";
@@ -41,7 +42,7 @@ export function UpdateSettings() {
       <p className="sinawi-update-muted" aria-live="polite">
         {[state.currentVersion && ut("update.currentVersion", { version: state.currentVersion }), status, checked && ut("update.lastChecked", { time: checked })].filter(Boolean).join(" · ")}
       </p>
-      {state.version && state.notes && <div className="sinawi-update-notes">{state.notes}</div>}
+      {state.version && state.notes && <div className="sinawi-update-notes"><Markdown text={state.notes} /></div>}
     </section>
   );
 }

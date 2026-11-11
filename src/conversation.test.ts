@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canPromoteLive, canUndoAutoHandoff, conversationText, delegationTasks, formatElapsed, delegationWorkers, liveBadgeLabel, mainConversation, mergeSession } from "./conversation";
+import { canPromoteLive, canUndoAutoHandoff, conversationText, delegationTasks, formatElapsed, delegationWorkers, liveBadgeLabel, mainConversation, mergeSession, streamingText } from "./conversation";
 import type { Session, SessionEvent } from "../server/types";
 
 const event = (id: string, type: SessionEvent["type"], agent: SessionEvent["agent"], text: string, extra: Partial<SessionEvent> = {}): SessionEvent => ({ id, sessionId: "s", type, agent, text, time: "2026-10-30T00:00:00.000Z", ...extra });
@@ -220,4 +220,51 @@ test("unfinished checklist and notes blocks stay out of streaming chat text", ()
 
 test("orphan app block markers never render as chat text", () => {
   assert.equal(conversationText("완료했습니다.\n<</CHECKLIST>>\n<</NOTES>>"), "완료했습니다.");
+});
+
+test("a streaming reply hides unterminated control blocks and half-written markers", () => {
+  assert.equal(streamingText('확인할게요.\n<<ASK to="서버">>배포 일정이'), "확인할게요.");
+  assert.equal(streamingText('검토합니다.\n<<DELEGATE to="claude">>내부 작업'), "검토합니다.");
+  assert.equal(streamingText('검토합니다.\n<<DELEGATE to="claude">>내부 작업<</DELE'), "검토합니다.");
+  assert.equal(streamingText("나눠서 진행합니다.\n<<DELE"), "나눠서 진행합니다.");
+  assert.equal(streamingText("나눠서 진행합니다.\n<<"), "나눠서 진행합니다.");
+  assert.equal(streamingText('채팅을 엽니다.\n<<NEW_CHAT title="문서'), "채팅을 엽니다.");
+  assert.equal(streamingText('목표입니다.\n<<GOAL id="g1" title="로그인">>\n## 목표'), "목표입니다.");
+  assert.equal(streamingText('담당을 만듭니다.\n<<NEW_LEAD name="앱" cwd="/a">>'), "담당을 만듭니다.");
+  // Closed blocks still render as conversationText does; ordinary text is left alone.
+  assert.equal(streamingText('<<ASK to="서버">>일정?<</ASK>>\n다음'), conversationText('<<ASK to="서버">>일정?<</ASK>>\n다음'));
+  assert.equal(streamingText("a < b 이고 <b>굵게</b>"), "a < b 이고 <b>굵게</b>");
+  // Stored text is never cut: conversationText keeps an unterminated block as written.
+  assert.match(conversationText('<<ASK to="서버">>배포'), /<<ASK/);
+});
+
+test("control block labels follow the app language", async () => {
+  const { setLang } = await import("./i18n");
+  try {
+    setLang("en");
+    assert.equal(conversationText('<<ASK to="server">>When?<</ASK>>'), "> **To “server”:** When?");
+    assert.equal(conversationText("<<NEW_CHAT>>Docs<</NEW_CHAT>>"), "> **New chat:** Docs");
+    assert.equal(conversationText('<<NEW_LEAD name="App" cwd="/a">>x<</NEW_LEAD>>'), "> **New lead “App”:** `/a`");
+    setLang("ko");
+    assert.equal(conversationText('<<ASK to="서버">>언제?<</ASK>>'), "> **「서버」에게:** 언제?");
+    assert.equal(conversationText('<<NEW_CHAT title="문서">>정리<</NEW_CHAT>>'), "> **새 채팅 「문서」:** 정리");
+  } finally {
+    setLang("ko");
+  }
+});
+
+test("a REST snapshot older than the WebSocket state does not roll the status back", () => {
+  const at = (id: string, minute: number) => event(id, "message", "codex", id, { time: `2026-10-30T00:0${minute}:00.000Z` });
+  const live = session([at("a", 1), at("b", 2), at("done", 3)], { status: "done", endedAt: "2026-10-30T00:03:00.000Z" });
+  const stale = session([at("a", 1), at("b", 2)], { status: "running", title: "새 제목" });
+  const merged = mergeSession(live, stale, { snapshot: true });
+  assert.equal(merged.status, "done");
+  assert.equal(merged.endedAt, "2026-10-30T00:03:00.000Z");
+  assert.equal(merged.title, "새 제목", "other fields still come from the response");
+  assert.deepEqual(merged.events.map((item) => item.id), ["a", "b", "done"]);
+  // A snapshot that has the latest event (or a later one) is current.
+  const fresh = session([at("a", 1), at("b", 2), at("done", 3), at("next", 4)], { status: "running" });
+  assert.equal(mergeSession(live, fresh, { snapshot: true }).status, "running");
+  // WebSocket frames are in order: an incremental frame with only a status change wins.
+  assert.equal(mergeSession(session([at("a", 1)], { status: "running" }), session([], { status: "stopped" })).status, "stopped");
 });

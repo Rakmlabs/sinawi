@@ -43,8 +43,9 @@ import { stewardDescription, stewardIdOf } from "../lead";
 import { accountScopeKey, scopedApi, workspaceApi, workspacePath, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
-import { adoptSession as adoptInto, replaceSession, upsertPushedSession } from "./session-store";
+import { adoptSession as adoptInto, applySessionList, replaceSession, upsertPushedSession } from "./session-store";
 import { useAppSocket } from "./useAppSocket";
+import { draftKey, draftStore } from "./draft-store";
 import { useAttachments } from "./useAttachments";
 import { useChatScroll } from "./useChatScroll";
 import { useComposerCompletion } from "./useComposerCompletion";
@@ -154,7 +155,13 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const [editingRecommendation, setEditingRecommendation] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [skills, setSkills] = useState<string[]>([]);
-  const [prompt, setPrompt] = useState("");
+  // The unsent prompt survives a window reload (the app reloads the window after a server restart
+  // that outlasts the socket's reconnect). sessionStorage: this window only, gone when it closes.
+  const unsentPromptKey = `orchestra.${workspaceId}.unsentPrompt`;
+  const [prompt, setPrompt] = useState(() => { try { return sessionStorage.getItem(unsentPromptKey) ?? ""; } catch { return ""; } });
+  useEffect(() => {
+    try { if (prompt) sessionStorage.setItem(unsentPromptKey, prompt); else sessionStorage.removeItem(unsentPromptKey); } catch { /* Optional. */ }
+  }, [prompt, unsentPromptKey]);
   const [groupId, setGroupId] = useState("");
   useEffect(() => {
     if (groupId && !groups.some((group) => group.id === groupId)) setGroupId("");
@@ -320,7 +327,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     setFileCompletion(undefined);
     historyIndex.current = -1;
   }, [selected]);
+  /** Counts full `sessions` lists from the WebSocket (sent on every connect). */
+  const sessionListFrames = useRef(0);
   const load = async () => {
+    const framesBefore = sessionListFrames.current;
     try {
       const [bootstrapResult, sessionsResult, settingsResult] = await Promise.allSettled([
         api<Bootstrap>(workspacePath("/bootstrap", workspaceId)),
@@ -331,7 +341,12 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         setBoot(bootstrapResult.value);
         setCwd((c) => c || bootstrapResult.value.defaultCwd);
       }
-      if (sessionsResult.status === "fulfilled") setSessions(sessionsResult.value);
+      // On (re)connect the socket sends the full list too, and it can arrive before this response:
+      // then the REST list is the older one. Otherwise merge per session rather than replace.
+      if (sessionsResult.status === "fulfilled" && sessionListFrames.current === framesBefore) {
+        const fresh = sessionsResult.value;
+        setSessions((old) => applySessionList(old, fresh));
+      }
       if (settingsResult.status === "fulfilled") setRoutingSettings(settingsResult.value);
       else setRoutingSettings(undefined);
       const failure = [bootstrapResult, sessionsResult, settingsResult].find((result) => result.status === "rejected");
@@ -373,16 +388,12 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     void workspaceApi("/notifications", { workspaceId, type: "error", title: t("ws.requestError"), body: error, key: `request:${error.slice(0, 100)}` }).catch(() => undefined);
     setError("");
   }, [error, workspaceId]);
-  // Messages agents are still writing, keyed by session and writer (see server SessionDraft).
-  const [drafts, setDrafts] = useState<Record<string, SessionDraft>>({});
+  // Messages agents are still writing live in draftStore, not in this component's state: a draft
+  // frame arrives ~every 50ms and must re-render only the message that shows it.
+  useEffect(() => () => draftStore.clear(), []);
   const onServerMessage = (message: ServerMessage) => {
     if (message.type === "draft" && typeof message.sessionId === "string") {
-      const draft = message as unknown as SessionDraft;
-      const key = `${draft.sessionId}:${draft.workerId ?? ""}`;
-      setDrafts((old) => {
-        if (!draft.text) { if (!(key in old)) return old; const next = { ...old }; delete next[key]; return next; }
-        return { ...old, [key]: draft };
-      });
+      draftStore.put(message as unknown as SessionDraft);
       return;
     }
     if (message.type === "notifications") window.dispatchEvent(new Event("orchestra:notifications"));
@@ -390,7 +401,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     if (message.type === "app-approvals") window.dispatchEvent(new CustomEvent(APP_APPROVALS_EVENT, { detail: message.approvals }));
     if (message.type === "browser-command") window.dispatchEvent(new CustomEvent("orchestra:browser-command", { detail: message }));
     if (message.type.startsWith("computer-")) handleComputerMessage(message);
-    if (message.type === "sessions") setSessions(message.sessions);
+    if (message.type === "sessions") { sessionListFrames.current += 1; setSessions(message.sessions); }
     if (message.type === "groups") setBoot((old) => ({ ...old, groups: message.groups }));
     if (message.type === "session_deleted") {
       setSessions((old) => old.filter((session) => session.id !== message.sessionId));
@@ -399,7 +410,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     if (message.type === "session") setSessions((old) => upsertPushedSession(old, message.session as Session, Boolean(message.incremental)));
   };
   useEffect(() => { void load(); }, []);
-  const connected = useAppSocket(onServerMessage, () => { setDrafts({}); void load(); });
+  const connected = useAppSocket(onServerMessage, () => { draftStore.clear(); void load(); });
   const canSendBase = Boolean(
     new Set([...skills, ...messageSkills]).size <= 20 &&
     (sessionRunning || !busy) &&
@@ -409,7 +420,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     connected,
   );
   const canSend = Boolean((prompt.trim() || attachments.some((item) => item.kind === "element" || item.screenshotPath)) && canSendBase && attachmentsReady);
-  const { bottom, chatBody, showChatBottom, scrollToChatBottom, onChatScroll } = useChatScroll({
+  const { bottom, chatBody, showChatBottom, scrollToChatBottom, chatScrollHandlers } = useChatScroll({
     resetKey: [selected, workerSelection?.taskId],
     followKey: [active?.events.at(-1)?.id, active?.events.at(-1)?.text, pendingRecommendation, editingRecommendation],
     observeKey: [selected, workerSelection?.taskId, active?.events.length],
@@ -844,8 +855,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                   </div>}
                   {active && active.status !== "running" && <QuotaReturnBanner active={active} threshold={quotaThreshold} allowedAgents={allowedAgents} busy={busy}
                     onReturn={(eventId) => void sessionAction(`/sessions/${active.id}/quota/return`, { eventId })} />}
-                  <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} onScroll={onChatScroll}>
-                    {selectedWorker ? <><WorkerThread key={`${active?.id}-${selectedWorker.id}`} worker={selectedWorker} draft={active?.status === "running" ? drafts[`${active.id}:${selectedWorker.id}`]?.text : undefined} /><div ref={bottom} /></> : !active ? (
+                  <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} {...chatScrollHandlers}>
+                    {selectedWorker ? <><WorkerThread key={`${active?.id}-${selectedWorker.id}`} worker={selectedWorker} draftKey={active?.status === "running" ? draftKey(active.id, selectedWorker.id) : undefined} /><div ref={bottom} /></> : !active ? (
                       pendingRecommendation ? <div className="messages routing-message">
                         <div className="message user-message"><div className="message-author"><strong>{t("names.user")}</strong></div><div className="message-text">{prompt}</div></div>
                         <RecommendationCard value={pendingRecommendation} settings={routingSettings} skills={boot.skills} editing={editingRecommendation} busy={busy} runDisabled={!canSend || Boolean(unavailableWarning)} availableAgents={teamAgents} onEdit={() => setEditingRecommendation((old) => !old)} onChange={(value) => setRecommendation({ key: routingKey, value })} onRun={() => void send(true)} />
@@ -873,7 +884,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     ) : (
                       <MessageList active={active} events={conversationEvents} tasksById={tasksById} latestHandoffId={latestHandoffId} latestAssistantId={latestAssistant?.id}
                         choiceOptions={choiceOptions} streamingMessageId={streamingMessageId} busy={busy} bottomRef={bottom}
-                        draft={active.status === "running" ? drafts[`${active.id}:`] : undefined}
+                        draftKey={active.status === "running" ? draftKey(active.id) : undefined}
                         lookupSession={(id) => sessions.find((item) => item.id === id)} onOpenSession={selectConversation} onStop={() => stopSession(active.id)}
                         onUndoHandoff={(eventId) => void sessionAction(`/sessions/${active.id}/handoff/undo`, { eventId })}
                         onOpenWorker={(workerId) => { selectWorker(active.id, workerId); if (!sidebarState.current.overlay) setSidebarOpen(true); }}

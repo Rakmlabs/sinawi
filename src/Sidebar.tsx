@@ -229,8 +229,9 @@ export function Sidebar(props: SidebarProps) {
       ]} />;
   };
   const sessionRow = (session: Session) => {
-    const workers = delegationWorkers(session, Date.now());
     const open = workerTree.expanded.has(session.id);
+    // The worker tree walks every event of the session: build it only for chats whose tree is open.
+    const workers = open ? delegationWorkers(session, Date.now()) : [];
     const parentActive = selected === session.id && tab === "workspace" && !props.selectedWorker;
     return <div key={session.id} className="sidebar-chat">
 
@@ -258,7 +259,7 @@ export function Sidebar(props: SidebarProps) {
         {props.onDeleteWorker && <button className="sidebar-worker-delete" aria-label={t("side.deleteWorkerNamed", { name })} title={t("side.deleteWorker")} disabled={busy} onClick={() => setDeletingWorker({ sessionId: session.id, workerId: worker.id, name, running: worker.status === "running" })}><Trash2 size={14} /></button>}
 </li>;
       })}
-      {!workers.length && <li className="sidebar-empty">{session.status === "running" ? t("side.orchestratorHandling") : t("side.noWorkers")}</li>}
+      {open && !workers.length && <li className="sidebar-empty">{session.status === "running" ? t("side.orchestratorHandling") : t("side.noWorkers")}</li>}
     </ul>
     {subChats(session.id).length > 0 && <div className="sidebar-subchats" aria-label={t("side.subChats", { title: session.title })}>{subChats(session.id).map(sessionRow)}</div>}
   </div>;

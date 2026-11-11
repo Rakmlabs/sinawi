@@ -9,7 +9,7 @@ test("app containers do not own a ticking clock", () => {
     assert.doesNotMatch(source, /setInterval|useNow\(|setNow\(/, path);
   }
   const sockets = readFileSync(new URL("./app/useAppSocket.ts", import.meta.url), "utf8");
-  assert.match(sockets, /reconnectDelay\(attempt\+\+\)/);
+  assert.match(sockets, /nextReconnectDelay\(attempt\+\+, hadOpened\)/);
   assert.match(sockets, /attempt = 0/);
   assert.match(sockets, /parseServerMessage\(event\.data\)/);
   const notifications = readFileSync(new URL("./NotificationsCenter.tsx", import.meta.url), "utf8");

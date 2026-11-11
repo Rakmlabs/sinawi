@@ -62,6 +62,10 @@ const ko = {
   "viewport.desktop": "데스크톱",
   "viewport.tablet": "태블릿",
   "live.status": "상태",
+  "conv.askTo": "「{to}」에게:",
+  "conv.newChat": "새 채팅:",
+  "conv.newChatTitled": "새 채팅 「{title}」:",
+  "conv.newLead": "새 담당 「{name}」:",
   "live.directive": "지시",
   "delegation.preparing": "작업을 준비하고 있습니다",
   "viewer.fileTooLarge": "{name}: 80MB보다 큰 파일은 작업 폴더에 두고 열어 주세요.",
@@ -1285,6 +1289,10 @@ const en: Record<MessageKey, string> = {
   "viewport.desktop": "Desktop",
   "viewport.tablet": "Tablet",
   "live.status": "Status",
+  "conv.askTo": "To “{to}”:",
+  "conv.newChat": "New chat:",
+  "conv.newChatTitled": "New chat “{title}”:",
+  "conv.newLead": "New lead “{name}”:",
   "live.directive": "Directive",
   "delegation.preparing": "Preparing the task",
   "viewer.fileTooLarge": "{name}: files over 80MB must be opened from the working folder.",
@@ -2464,6 +2472,11 @@ export function setLang(lang: Lang) {
   current = lang;
   if (typeof document !== "undefined") document.documentElement.lang = lang;
   for (const listener of listeners) listener();
+}
+
+/** BCP 47 locale for dates and times in the current language (never hardcode "ko-KR"). */
+export function dateLocale(): string {
+  return current === "ko" ? "ko-KR" : "en-US";
 }
 
 export function t(key: MessageKey, params?: Record<string, string | number>): string {

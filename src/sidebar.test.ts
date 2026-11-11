@@ -131,9 +131,12 @@ test("inactive conversation workers are initially collapsed and failed tasks exp
     { id: "task", sessionId: chat.id, type: "delegation", agent: "grok", text: "조사", time: "2026-10-30T00:00:00Z" },
     { id: "failed", sessionId: chat.id, type: "error", agent: "grok", delegationId: "task", taskStatus: "error", text: "실패", time: "2026-10-30T00:00:01Z" },
   ];
-  const html = render({ sessions: [chat] });
-  assert.match(html, /aria-expanded="false" aria-controls="workers-inactive"/);
-  assert.match(html, /aria-label="채팅-inactive 작업 세션" hidden=""/);
+  const collapsed = render({ sessions: [chat] });
+  assert.match(collapsed, /aria-expanded="false" aria-controls="workers-inactive"/);
+  // A collapsed tree is not built at all (it would walk every event on each render).
+  assert.match(collapsed, /aria-label="채팅-inactive 작업 세션" hidden=""><\/ul>/);
+  const html = render({ sessions: [chat], selected: chat.id, tab: "sessions" });
+  assert.match(html, /aria-expanded="true" aria-controls="workers-inactive"/);
   assert.match(html, /Grok Build/);
   assert.match(html, /작업 1개/);
   assert.match(html, /CLI 기본 모델/);

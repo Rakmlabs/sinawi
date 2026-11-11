@@ -101,6 +101,9 @@ export function createUpdateStore(deps: UpdateDeps) {
   let cancelSessionTimer: (() => void) | null = null;
   let cancelServerTimer: (() => void) | null = null;
   let idleMismatches = 0;
+  /** One install at a time: a double click on "Restart now" must not install twice. */
+  let installInFlight: Promise<void> | null = null;
+  let restartInFlight = false;
 
   const set = (patch: Partial<UpdateState>) => {
     state = { ...state, ...patch };
@@ -129,9 +132,40 @@ export function createUpdateStore(deps: UpdateDeps) {
     }
   }
 
+  /**
+   * An update is downloaded and waiting: look for a newer release without losing it. The downloaded
+   * one is replaced only when a different version comes back and finishes downloading.
+   */
+  async function recheckReady(manual: boolean) {
+    const previous = pending!;
+    // A background check keeps the banner as is; a manual one shows "checking" in settings.
+    if (manual) set({ phase: "checking", manual, error: null });
+    const stillOurs = () => pending === previous && ["ready", "checking"].includes(state.phase);
+    let update: PendingUpdate | null;
+    try {
+      update = await deps.check();
+    } catch (error) {
+      if (stillOurs()) set({ phase: "ready", lastChecked: deps.now(), error: manual ? message(error) : null });
+      return;
+    }
+    set({ lastChecked: deps.now() });
+    if (!stillOurs()) return;
+    if (!update || update.version === previous.version) { set({ phase: "ready" }); return; }
+    pending = update;
+    set({ version: update.version, notes: update.body?.trim() ?? "", date: update.date ?? null });
+    await download();
+    // The newer download failed: fall back to the update that is already on disk.
+    if (pending === update && state.phase === "downloadFailed") {
+      pending = previous;
+      set({ phase: "ready", version: previous.version, notes: previous.body?.trim() ?? "", date: previous.date ?? null });
+    }
+  }
+
   async function check(manual: boolean) {
-    // While an update is downloaded or being applied, keep it (a re-check would discard the download).
-    if (!deps.supported || busy()) return;
+    if (!deps.supported) return;
+    if (state.phase === "ready" && pending) return recheckReady(manual);
+    // While an update is downloading or being applied, keep it (a re-check would discard the download).
+    if (busy()) return;
     set({ phase: "checking", manual, error: null });
     try {
       const update = await deps.check();
@@ -145,18 +179,25 @@ export function createUpdateStore(deps: UpdateDeps) {
     }
   }
 
-  async function install() {
+  function install(): Promise<void> {
     const update = pending;
-    if (!update) return;
+    if (!update) return Promise.resolve();
+    if (installInFlight) return installInFlight;
     cancelSessionTimer?.();
     cancelSessionTimer = null;
-    set({ phase: "installing", error: null });
-    try {
-      await update.install();
-      await deps.relaunch();
-    } catch (error) {
-      set({ phase: "installFailed", error: message(error) });
-    }
+    // A retry must be visible again even if the user closed the earlier failure.
+    set({ phase: "installing", error: null, dismissedVersion: null });
+    installInFlight = (async () => {
+      try {
+        await update.install();
+        await deps.relaunch();
+      } catch (error) {
+        set({ phase: "installFailed", error: message(error) });
+      } finally {
+        installInFlight = null;
+      }
+    })();
+    return installInFlight;
   }
 
   async function runningSessions(): Promise<number> {
@@ -176,7 +217,8 @@ export function createUpdateStore(deps: UpdateDeps) {
   }
 
   const setServer = (server: ServerState) => {
-    const same = JSON.stringify(server) === JSON.stringify(state.server);
+    // Only a different kind re-shows a closed notice; the running count changes all the time.
+    const same = server.kind === state.server.kind;
     set({ server, serverDismissed: same ? state.serverDismissed : false });
   };
 
@@ -229,10 +271,17 @@ export function createUpdateStore(deps: UpdateDeps) {
     },
     /** "지금 재시작": installs right away when idle, otherwise asks first. */
     async restart() {
-      if (!pending || !["ready", "installFailed"].includes(state.phase)) return;
-      const running = await runningSessions();
-      if (running > 0) { set({ phase: "confirmSessions", running }); return; }
-      await install();
+      if (!pending || restartInFlight || !["ready", "installFailed"].includes(state.phase)) return;
+      restartInFlight = true;
+      try {
+        const running = await runningSessions();
+        // Another action (e.g. "Restart now anyway") started the install while we asked /api/health.
+        if (!["ready", "installFailed"].includes(state.phase)) return;
+        if (running > 0) { set({ phase: "confirmSessions", running }); return; }
+        await install();
+      } finally {
+        restartInFlight = false;
+      }
     },
     /** "끝나면 재시작": install + relaunch as soon as no session runs. */
     restartWhenIdle() {
@@ -257,7 +306,9 @@ export function createUpdateStore(deps: UpdateDeps) {
 export type UpdateStore = ReturnType<typeof createUpdateStore>;
 
 function updateBannerPhase(state: UpdateState): boolean {
-  if (["confirmSessions", "waitingForSessions", "installing", "installFailed"].includes(state.phase)) return true;
+  if (["confirmSessions", "waitingForSessions", "installing"].includes(state.phase)) return true;
+  // The X on a failed install hides it for that version; a retry clears the dismissal (install()).
+  if (state.phase === "installFailed") return state.version !== state.dismissedVersion;
   // Background failures stay quiet (the next check retries); a manual check reports them.
   if (state.phase === "downloadFailed") return state.manual && state.version !== state.dismissedVersion;
   return state.phase === "ready" && state.version !== state.dismissedVersion;

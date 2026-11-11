@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { FileAudio, FileImage, FileSpreadsheet, FileText, FileVideo, Presentation } from "lucide-react";
 import { MarkdownSessionContext, localImageSrc } from "./markdown-images";
 import { formatBytes, galleryCells, isLongText, kindLabel, mediaUrl, parseAttachmentMessage, type MediaRef } from "./viewer-model";
@@ -72,8 +72,15 @@ export function ImageGrid({ items }: { items: MediaRef[] }) {
   </div>;
 }
 
-export function MessageFold({ text, streaming, children }: { text: string; streaming?: boolean; children?: ReactNode }) {
-  const long = !streaming && isLongText(text);
+/**
+ * Folds a long message to a short clip with an expand toggle. A reply the user watched arrive stays
+ * open: folding it the moment the run ends would yank the text they are reading. `keepOpen` covers
+ * the latest reply, whose stored row mounts fresh when it replaces the live draft.
+ */
+export function MessageFold({ text, streaming, keepOpen, children }: { text: string; streaming?: boolean; keepOpen?: boolean; children?: ReactNode }) {
+  const wasStreaming = useRef(false);
+  if (streaming) wasStreaming.current = true;
+  const long = !streaming && !keepOpen && !wasStreaming.current && isLongText(text);
   const [open, setOpen] = useState(false);
   return <div className="message-fold">
     <div className={long && !open ? "message-fold-clip" : undefined}>{children}</div>

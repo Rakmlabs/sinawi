@@ -4,7 +4,7 @@ import { workerLogSummary, type workerLogRows } from "../worker-log";
 import { toggleTerminal } from "../terminal-events";
 import { eventLabels, names } from "./labels";
 import type { EventType, Session } from "../../server/types";
-import { t } from "../i18n";
+import { dateLocale, t } from "../i18n";
 
 type Row = ReturnType<typeof workerLogRows>[number];
 type Filter = "all" | "commands" | "files" | "errors";
@@ -45,7 +45,7 @@ export function ActivityPanel({ active, connected, rows, onClose }: { active: Se
         <ol className="event-list" id="activity-log" role="log" aria-label={t("activity.recent")} aria-live="off">
           {shown.length === 0 && <li className="thread-empty">{rows.length ? t("activity.filteredNone") : t("activity.none")}</li>}
           {[...shown].reverse().map((row) => <li className={`activity-summary event-${row.type}`} key={row.event.id}>
-            <time>{new Date(row.event.time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })}</time>
+            <time>{new Date(row.event.time).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit", hour12: false })}</time>
             <div>
               <div className="activity-who"><span className={`agent-dot ${row.event.agent}`} aria-hidden="true" />{row.event.workerLabel ?? names[row.event.agent]} · {eventLabels[row.type]}</div>
               <div className="activity-detail" title={workerLogSummary(row)}>{workerLogSummary(row)}</div>

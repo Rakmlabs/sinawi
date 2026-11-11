@@ -6,13 +6,14 @@ import { useSmoothText } from "./smooth-text";
 import type { DelegationTask, DelegationWorker } from "./conversation";
 import { cleanBriefTitle, groupWorkerLog, summarizeOutput, workerLogRows, type ItemStatus, type WorkerLogItem } from "./worker-log";
 import type { SessionStatus } from "../server/types";
-import { t, translatedMap } from "./i18n";
+import { dateLocale, t, translatedMap } from "./i18n";
 import { Beat } from "./Beat";
+import { useDraft } from "./app/draft-store";
 
 const statuses = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
 const itemStatuses = translatedMap<ItemStatus>({ in_progress: "worker.inProgress", completed: "worker.succeeded", failed: "worker.failed" });
 const changeLabels = translatedMap({ add: "worker.add", modify: "worker.modify", delete: "worker.delete" });
-const clockTime = (time: string) => new Date(time).toLocaleTimeString("ko-KR", { hour12: false });
+const clockTime = (time: string) => new Date(time).toLocaleTimeString(dateLocale(), { hour12: false });
 const LONG_TEXT = 160;
 
 function Chevron({ open }: { open: boolean }) {
@@ -92,15 +93,18 @@ function TaskLog({ task, index }: { task: DelegationTask; index: number }) {
 }
 
 /** What the worker is writing right now, revealed smoothly until the stored message replaces it. */
-function WorkerDraft({ text }: { text: string }) {
+function WorkerDraft({ draftKey }: { draftKey: string }) {
+  // Subscribes to this one draft so its ~50ms frames re-render only this block.
+  const text = useDraft(draftKey)?.text ?? "";
   const shown = useSmoothText(text);
+  if (!text) return null;
   return <div className="wt-draft streaming-message" aria-busy="true"><Markdown text={shown} /></div>;
 }
 
-export function WorkerThread({ worker, draft }: { worker: DelegationWorker; draft?: string }) {
+export function WorkerThread({ worker, draftKey }: { worker: DelegationWorker; draftKey?: string }) {
   return <div className="worker-thread" role="log" aria-label={t("worker.logLabel")} aria-live="off">
     <div className="worker-thread-heading"><AgentMark agent={worker.agent} /><strong>{worker.label} · {t("worker.taskCount", { n: worker.tasks.length })}</strong><span className={`status-label ${worker.status}`}>{worker.status === "running" && <Beat />}{statuses[worker.status]}</span></div>
     {worker.tasks.map((task, index) => <TaskLog key={task.event.id} task={task} index={index} />)}
-    {draft && <WorkerDraft text={draft} />}
+    {draftKey && <WorkerDraft draftKey={draftKey} />}
   </div>;
 }

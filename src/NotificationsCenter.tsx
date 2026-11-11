@@ -15,7 +15,7 @@ import type { AppNotification, NotificationType } from "../server/notification-t
 import type { WorkspaceId } from "../server/types";
 import { openTerminal, terminalOwnsKeyboardEvent } from "./terminal-events";
 import { useNow } from "./app/clock";
-import { t, translatedMap } from "./i18n";
+import { dateLocale, t, translatedMap } from "./i18n";
 import { toastEnabled } from "./settings/notification-prefs";
 import { openSettings } from "./settings/settings-nav";
 import { tauriInvoke } from "./onboarding-state";
@@ -53,11 +53,11 @@ export function notificationRelativeTime(value: string, now = Date.now()): strin
   if (hours < 24) return t("time.hoursAgo", { n: hours });
   const days = Math.floor(hours / 24);
   if (days < 7) return t("time.daysAgo", { n: days });
-  return new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric" }).format(new Date(value));
+  return new Intl.DateTimeFormat(dateLocale(), { month: "short", day: "numeric" }).format(new Date(value));
 }
 
 function absoluteTime(value: string): string {
-  return new Intl.DateTimeFormat("ko-KR", {
+  return new Intl.DateTimeFormat(dateLocale(), {
     year: "numeric",
     month: "long",
     day: "numeric",

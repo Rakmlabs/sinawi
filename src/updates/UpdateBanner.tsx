@@ -1,6 +1,7 @@
 // Small non-modal update notice (bottom-right). Never blocks the app; installs only on click.
 import { useState } from "react";
 import { ArrowUpCircle, ServerCog, X } from "lucide-react";
+import { Markdown } from "../Markdown";
 import { bannerContent } from "./update-store";
 import { useUpdateT } from "./strings";
 import { useAppUpdate } from "./useAppUpdate";
@@ -14,7 +15,9 @@ export function UpdateBanner() {
   if (!content) return null;
 
   if (content === "server") {
-    const text = state.server.kind === "pending" ? ut("update.serverPending", { count: state.server.running }) : ut("update.serverStale");
+    const text = state.server.kind === "pending"
+      ? state.server.running > 0 ? ut("update.serverPending", { count: state.server.running }) : ut("update.serverPendingIdle")
+      : ut("update.serverStale");
     return (
       <div className="sinawi-update" role="status" aria-live="polite">
         <div className="sinawi-update-row">
@@ -55,7 +58,7 @@ export function UpdateBanner() {
         {(phase === "confirmSessions" || phase === "waitingForSessions") && <button type="button" className="sinawi-update-secondary" onClick={actions.cancelRestart}>{ut("update.cancel")}</button>}
         {state.notes && phase !== "installing" && <button type="button" className="sinawi-update-link" aria-expanded={showNotes} onClick={() => setShowNotes((open) => !open)}>{showNotes ? ut("update.hideNotes") : ut("update.notes")}</button>}
       </div>
-      {showNotes && state.notes && <div className="sinawi-update-notes">{state.notes}</div>}
+      {showNotes && state.notes && <div className="sinawi-update-notes"><Markdown text={state.notes} /></div>}
     </div>
   );
 }

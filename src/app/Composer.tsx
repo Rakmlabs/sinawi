@@ -96,6 +96,7 @@ export function Composer(props: ComposerProps) {
       composerInput.current?.setSelectionRange(cursor, cursor);
     });
   };
+  const locked = composerLocked(sessionRunning, busy);
   const action = composerAction(sessionRunning, Boolean(prompt.trim() || attachments.length));
   // The send button turns into stop in place: a second click meant for "send" must not stop the run.
   const stopSince = useRef(0);
@@ -172,7 +173,10 @@ export function Composer(props: ComposerProps) {
         ref={composerInput}
         className={listItem ? "list-line" : undefined}
         onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-        disabled={composerLocked(sessionRunning, busy)}
+        // readOnly, not disabled: disabling blurs the field, so after sending in an idle chat the
+        // caret (and a Korean IME session) was gone. Typing waits; focus stays.
+        readOnly={locked}
+        aria-disabled={locked || undefined}
         onPaste={pasteImage}
         aria-controls={slash || fileCompletion ? "slash-skills" : undefined}
         aria-expanded={Boolean(slash || fileCompletion)}
@@ -200,6 +204,8 @@ export function Composer(props: ComposerProps) {
         onKeyDown={(e) => {
           // Hangul IME: the key that commits a syllable must not send, continue a list or indent.
           if (isImeComposing(e.nativeEvent)) return;
+          // Locked while a send is in flight: no second send from Enter or a numbered choice.
+          if (locked) { if (e.key === "Enter" || /^[1-9]$/.test(e.key)) e.preventDefault(); return; }
           // Enter with nothing to complete (`/xyz`, `@nomatch`) closes the list and sends as usual.
           const unmatchedEnter = e.key === "Enter" && !e.shiftKey && ((fileCompletion && !fileSuggestions.length) || (slash && !slashItems.length));
           if (unmatchedEnter) { setFileCompletion(undefined); setSlash(undefined); }

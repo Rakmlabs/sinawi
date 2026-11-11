@@ -632,12 +632,12 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       options.onDraft?.(text);
     };
     let lastErrorText = "";
+    // The stored line goes out before its draft is cleared: the other way round the text vanishes for a frame.
     const flushDelta = () => {
-      draft("");
-      if (!deltaBuffer.trim()) { deltaBuffer = ""; return; }
       const text = deltaBuffer;
       deltaBuffer = "";
-      options.onLine({ type: "message", text, finalText: text });
+      if (text.trim()) options.onLine({ type: "message", text, finalText: text });
+      draft("");
     };
     const output = createInterface({ input: child.stdout });
     let turnEndTimer: NodeJS.Timeout | undefined;
@@ -671,8 +671,8 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
         if (normalized.delta) { deltaBuffer += normalized.text; draft(deltaBuffer); continue; }
         if (normalized.type !== "message") flushDelta();
         draftText = "";
-        draft("");
         options.onLine(normalized);
+        draft("");
       }
     });
     // stderr is not activity: a CLI stuck in a retry loop prints there forever (see RunCliOptions.onActivity).

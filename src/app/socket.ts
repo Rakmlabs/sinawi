@@ -14,6 +14,20 @@ export function reconnectDelay(attempt: number, random: () => number = Math.rand
   return Math.round(ceiling / 2 + unit * (ceiling / 2));
 }
 
+/** After a connection that had been open drops (e.g. the server restarting after an update), retry fast this many times. */
+export const FAST_RECONNECT_ATTEMPTS = 10;
+export const FAST_RECONNECT_CAP_MS = 2_000;
+
+/**
+ * Delay before reconnect `attempt` (0-based). A connection that had been open is most likely a
+ * server restart that is back within seconds, and the window may be reloaded soon after: retry
+ * within 2s at first instead of backing off to 30s.
+ */
+export function nextReconnectDelay(attempt: number, hadOpened: boolean, random: () => number = Math.random): number {
+  if (hadOpened && attempt < FAST_RECONNECT_ATTEMPTS) return reconnectDelay(attempt, random, 500, FAST_RECONNECT_CAP_MS);
+  return reconnectDelay(hadOpened ? attempt - FAST_RECONNECT_ATTEMPTS : attempt, random);
+}
+
 export type ServerMessage = { type: string; [key: string]: any };
 
 /** A frame that is not JSON or has no string `type` is logged and dropped instead of throwing. */

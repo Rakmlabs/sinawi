@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseServerMessage, reconnectDelay, RECONNECT_CAP_MS } from "./app/socket";
+import { FAST_RECONNECT_ATTEMPTS, nextReconnectDelay, parseServerMessage, reconnectDelay, RECONNECT_CAP_MS } from "./app/socket";
 
 test("reconnect delay doubles per attempt with equal jitter and caps at 30s", () => {
   assert.equal(reconnectDelay(0, () => 0), 500);
@@ -36,4 +36,12 @@ test("server frames parse to typed messages and bad frames are logged and droppe
   assert.equal(parseServerMessage('{"type":3}', warn), undefined);
   assert.equal(parseServerMessage(new ArrayBuffer(2), warn), undefined);
   assert.equal(warnings.length, 6);
+});
+
+test("after an open connection drops, the first retries come within 2s, then back off as usual", () => {
+  for (let attempt = 0; attempt < FAST_RECONNECT_ATTEMPTS; attempt += 1) {
+    assert.ok(nextReconnectDelay(attempt, true, () => 1) <= 2_000, `attempt ${attempt}`);
+  }
+  assert.equal(nextReconnectDelay(FAST_RECONNECT_ATTEMPTS, true, () => 1), reconnectDelay(0, () => 1));
+  assert.equal(nextReconnectDelay(4, false, () => 1), reconnectDelay(4, () => 1), "never connected: plain backoff");
 });

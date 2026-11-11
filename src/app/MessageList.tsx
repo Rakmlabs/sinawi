@@ -7,14 +7,15 @@ import { AgentMark } from "../AgentMark";
 import { CopyButton } from "../CopyButton";
 import { Markdown } from "../Markdown";
 import { MessageFold, UserMessageBody } from "../media-ui";
-import { canPromoteLive, canUndoAutoHandoff, conversationText, liveBadgeLabel, type DelegationTask } from "../conversation";
+import { canPromoteLive, canUndoAutoHandoff, conversationText, liveBadgeLabel, streamingText, type DelegationTask } from "../conversation";
 import { parseAttachmentMessage } from "../viewer-model";
 import { Elapsed } from "./Elapsed";
 import { names, statusLabels } from "./labels";
-import type { Session, SessionDraft, SessionEvent } from "../../server/types";
+import type { Session, SessionEvent } from "../../server/types";
+import { useDraft, useDraftAgent } from "./draft-store";
 import { useSmoothText } from "../smooth-text";
 import { cleanBriefTitle } from "../worker-log";
-import { getLang, t, type MessageKey } from "../i18n";
+import { dateLocale, t, type MessageKey } from "../i18n";
 import { ComputerTrail } from "../ComputerUse";
 import { QuietIndicator } from "./QuietIndicator";
 import { WorktreePanel } from "./WorktreePanel";
@@ -41,13 +42,16 @@ export type MessageListProps = {
   onChoose: (option: string) => void;
   /** Runs the plan a plan-mode turn just wrote. */
   onExecutePlan?: () => void;
-  /** The lead's message still being written, shown live below the last event. */
-  draft?: SessionDraft;
+  /** Key of the lead's message still being written (draft-store), shown live below the last event. */
+  draftKey?: string;
 };
 
 /** A message that is still arriving: revealed smoothly with a caret, replaced by the stored message when done. */
-function DraftMessage({ draft, continued }: { draft: SessionDraft; continued: boolean }) {
-  const text = conversationText(useSmoothText(draft.text));
+function DraftMessage({ draftKey, continued }: { draftKey: string; continued: boolean }) {
+  // Only this component subscribes to the draft text, so a ~50ms draft frame re-renders just it.
+  const draft = useDraft(draftKey);
+  const text = streamingText(useSmoothText(draft?.text ?? ""));
+  if (!draft?.text) return null;
   return <article className={`message assistant-message streaming-message${continued ? " continued" : ""}`} aria-busy="true">
     {!continued && <div className="message-author"><AgentMark agent={draft.agent} /><strong>{names[draft.agent] || draft.agent}</strong></div>}
     <div className="message-text"><Markdown text={text} /></div>
@@ -95,7 +99,7 @@ function DelegationCard({ e, task, active, onOpenWorker }: { e: SessionEvent; ta
 /** A schedule the lead (or the user) made, changed or that ran: one line with when it runs next. */
 function ScheduleCardView({ e }: { e: SessionEvent }) {
   const card = e.metadata!.schedule!;
-  const locale = getLang() === "ko" ? "ko-KR" : "en-US";
+  const locale = dateLocale();
   const next = card.nextRunAt && card.enabled !== false && card.action !== "deleted" ? t("steward.scheduleNext", { time: new Date(card.nextRunAt).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) }) : "";
   return <article className={`schedule-card ${card.action}`} aria-label={t(`steward.scheduleCard.${card.action}` as MessageKey)}>
     <CalendarClock size={14} aria-hidden="true" />
@@ -109,9 +113,12 @@ function ScheduleCardView({ e }: { e: SessionEvent }) {
 }
 
 /** The main conversation of the active session: messages, handoffs and delegation cards. */
-export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan, draft, lookupSession, onOpenSession, onStop }: MessageListProps) {
+export function MessageList({ active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, bottomRef, onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan, draftKey, lookupSession, onOpenSession, onStop }: MessageListProps) {
   const last = events.at(-1);
   const activity = currentActivity(active);
+  // Only who is writing (changes when a draft starts or ends), not the text: keeps this list still per frame.
+  const draftAgent = useDraftAgent(draftKey);
+  const draft = draftAgent ? { agent: draftAgent } : undefined;
   const draftContinues = Boolean(draft && last && last.agent === draft.agent && last.type !== "delegation" && last.type !== "handoff" && !last.metadata?.live);
   return <div className="messages">
     <GoalPanel session={active} lookup={lookupSession} onOpenSession={onOpenSession} onStop={onStop} />
@@ -135,14 +142,15 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
       const lead = isUser ? leadMessage(e.text) : undefined;
       if (lead) return <article className="message assistant-message lead-message" key={e.id}>
         <div className="message-author"><UserCheck size={15} aria-hidden="true" /><strong>{t(lead.kind === "ask" ? "steward.askFrom" : "steward.replyFrom", { name: lead.from })}</strong>
-          <time dateTime={e.time} title={new Date(e.time).toLocaleString("ko-KR")}>{new Date(e.time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</time></div>
+          <time dateTime={e.time} title={new Date(e.time).toLocaleString(dateLocale())}>{new Date(e.time).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" })}</time></div>
         <div className="message-text"><MessageFold text={lead.body} streaming={false}><Markdown text={lead.body} /></MessageFold></div>
       </article>;
-      const text = isUser ? e.text : conversationText(e.text);
+      // The reply still arriving may end in a half-written control block; stored replies never do.
+      const text = isUser ? e.text : streamingMessageId === e.id ? streamingText(e.text) : conversationText(e.text);
       const copied = isUser ? (parseAttachmentMessage(text).body || text) : text;
       const liveBadge = liveBadgeLabel(e);
       const continued = continuesPrevious(events, index);
-      const time = <time dateTime={e.time} title={new Date(e.time).toLocaleString("ko-KR")}>{new Date(e.time).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</time>;
+      const time = <time dateTime={e.time} title={new Date(e.time).toLocaleString(dateLocale())}>{new Date(e.time).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" })}</time>;
       const copy = <CopyButton text={copied} className="message-copy" ariaLabel={t("msg.copy", { agent: names[e.agent] || e.agent })} />;
       return <article className={`message ${isUser ? "user-message" : "assistant-message"}${continued ? " continued" : ""}${streamingMessageId === e.id && !draft ? " streaming-message" : ""}`} key={e.id}>
         {/* The user's own messages are a plain bubble (like Claude / ChatGPT); time and copy appear on hover. */}
@@ -154,7 +162,7 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
           {copy}
         </div>}
         {isUser && liveBadge && <em className={`live-status-badge${e.metadata?.live === "directive" ? " directive" : ""}`}>{liveBadge}</em>}
-        <div className={`message-text ${e.type === "error" ? "error-banner" : e.type === "warning" ? "warning-banner" : ""}`} role={e.type === "error" || e.type === "warning" ? "alert" : undefined}>{isUser ? <UserMessageBody text={text} /> : <MessageFold text={text} streaming={streamingMessageId === e.id}><Markdown text={text} /></MessageFold>}</div>
+        <div className={`message-text ${e.type === "error" ? "error-banner" : e.type === "warning" ? "warning-banner" : ""}`} role={e.type === "error" || e.type === "warning" ? "alert" : undefined}>{isUser ? <UserMessageBody text={text} /> : <MessageFold text={text} streaming={streamingMessageId === e.id} keepOpen={e.id === latestAssistantId}><Markdown text={text} /></MessageFold>}</div>
         {(isUser || continued) && <div className="message-actions">{time}{copy}</div>}
         {!isUser && e.id === latestAssistantId && active.permissionMode === "plan" && active.status !== "running" && onExecutePlan && e.type === "message" &&
           <button type="button" className="button primary execute-plan" disabled={busy} title={t("msg.executePlanTitle")} onClick={onExecutePlan}>{t("msg.executePlan")}</button>}
@@ -164,7 +172,7 @@ export function MessageList({ active, events, tasksById, latestHandoffId, latest
         </div>}
       </article>;
     })(), <ComputerTrail key={`cu-${e.id}`} sessionId={active.id} from={e.time} to={events[index + 1]?.time} />])}
-    {draft?.text && <DraftMessage draft={draft} continued={draftContinues} />}
+    {draftKey && draft && <DraftMessage draftKey={draftKey} continued={draftContinues} />}
     <WorktreePanel session={active} />
     {active.status === "running" && (
       <div className="thinking" role="status">

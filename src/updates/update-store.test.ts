@@ -71,10 +71,37 @@ test("checks ~10s after launch, downloads in background, then every 6h; never in
   assert.deepEqual(state.progress, { downloaded: 10, total: 10 });
   assert.equal(state.currentVersion, "1.0.0");
   assert.equal(bannerContent(state), "update");
-  // A downloaded update is kept: later checks do not discard it, and nothing installs by itself.
+  // A downloaded update is kept: a later check finding the same version keeps it, and nothing installs by itself.
   await h.advance(CHECK_INTERVAL_MS);
-  assert.equal(h.calls.check, 1);
+  assert.equal(h.calls.check, 2);
+  assert.equal(h.store.getState().phase, "ready");
+  assert.equal(h.store.getState().version, "1.2.0");
   assert.equal(h.calls.install + h.calls.relaunch, 0);
+});
+
+test("a check while an update is ready picks up a newer release, and keeps the old one if that download fails", async () => {
+  const h = harness();
+  await h.store.checkNow();
+  assert.equal(h.store.getState().phase, "ready");
+  let downloads = 0;
+  h.setUpdate({ version: "1.3.0", body: "newer", async download() { downloads += 1; throw new Error("offline"); }, async install() {} });
+  await h.store.checkNow();
+  assert.equal(downloads, 1);
+  assert.equal(h.store.getState().phase, "ready");
+  assert.equal(h.store.getState().version, "1.2.0", "falls back to the downloaded update");
+  h.setUpdate({ version: "1.3.0", body: "newer", async download() { downloads += 1; }, async install() {} });
+  await h.store.checkNow();
+  assert.equal(h.store.getState().phase, "ready");
+  assert.equal(h.store.getState().version, "1.3.0");
+  assert.equal(h.store.getState().notes, "newer");
+});
+
+test("a double click on restart installs once", async () => {
+  const h = harness();
+  await h.store.checkNow();
+  await Promise.all([h.store.restart(), h.store.restart(), h.store.restartAnyway()]);
+  assert.equal(h.calls.install, 1);
+  assert.equal(h.calls.relaunch, 1);
 });
 
 test("auto-check off: no scheduled check, manual check still works; preference persisted", async () => {
@@ -158,6 +185,23 @@ test("background download failures stay quiet; manual ones show in the banner", 
   assert.equal(bannerContent(h.store.getState()), "update");
 });
 
+test("closing a failed install hides it until the restart is retried", async () => {
+  let fail = true;
+  const h = harness();
+  h.setUpdate({ version: "1.2.0", async download() {}, async install() { if (fail) throw new Error("disk full"); } });
+  await h.store.checkNow();
+  await h.store.restart();
+  assert.equal(bannerContent(h.store.getState()), "update");
+  h.store.dismiss();
+  assert.equal(h.store.getState().phase, "installFailed");
+  assert.equal(bannerContent(h.store.getState()), null);
+  await h.store.restart();
+  assert.equal(bannerContent(h.store.getState()), "update", "a failed retry shows again");
+  fail = false;
+  await h.store.restart();
+  assert.equal(h.calls.relaunch, 1);
+});
+
 test("dismiss hides the banner for that version only", async () => {
   const h = harness();
   await h.store.checkNow();
@@ -197,4 +241,17 @@ test("outside Tauri nothing runs", async () => {
 
 test("update strings: en has exactly the ko keys", () => {
   assert.deepEqual(Object.keys(updateDictionaries.en).sort(), Object.keys(updateDictionaries.ko).sort());
+});
+
+test("a closed server notice stays closed while only the running count changes", async () => {
+  const h = harness({ serverVersions: async () => ({ bundled: "new", installed: "old" }) });
+  h.setUpdate(null);
+  h.setHealth({ running: 2, version: "old" });
+  await h.store.recheckServer();
+  assert.equal(bannerContent(h.store.getState()), "server");
+  h.store.dismiss();
+  h.setHealth({ running: 1, version: "old" });
+  await h.store.recheckServer();
+  assert.deepEqual(h.store.getState().server, { kind: "pending", running: 1 });
+  assert.equal(bannerContent(h.store.getState()), null);
 });
