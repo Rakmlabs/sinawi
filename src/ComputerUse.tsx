@@ -1,7 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Check, MousePointerClick, OctagonX, X } from "lucide-react";
 import type { ComputerActivity } from "../server/computer-bridge";
-import { activitiesBetween, getComputerSnapshot, imageUrl, revokeComputer, startComputerUse, stopComputer, subscribeComputer } from "./computer-use";
+import { activitiesBetween, getComputerSnapshot, imageUrl, revokeComputer, sessionActivity, startComputerUse, stopComputer, subscribeComputer } from "./computer-use";
 import { useWorkspaces } from "./workspace-context";
 import { t, useT } from "./i18n";
 import { SettingRow, StatusBadge } from "./settings/controls";
@@ -59,16 +59,20 @@ function Entry({ item }: { item: ComputerActivity }) {
 }
 
 /** Computer actions a session took between two chat messages, like a folded tool-call list. */
-export function ComputerTrail({ sessionId, from, to }: { sessionId: string; from?: string; to?: string }) {
+export const ComputerTrail = memo(function ComputerTrail({ sessionId, from, to }: { sessionId: string; from?: string; to?: string }) {
   useT();
-  const { activity } = useComputer();
+  // One subscription per chat message: select this session's slice (stable while it is unchanged),
+  // so banner state and other sessions' activity never re-render the trails.
+  const getSlice = useCallback(() => sessionActivity(getComputerSnapshot().activity, sessionId), [sessionId]);
+  const activity = useSyncExternalStore(subscribeComputer, getSlice, getSlice);
+  if (!activity.length) return null;
   const items = activitiesBetween(activity, sessionId, from, to);
   if (!items.length) return null;
   return <section className="cu-trail" aria-label={t("cu.entry")}>
     <header><MousePointerClick size={13} aria-hidden="true" />{t("cu.entry")} · {items.length}</header>
     <ol>{items.map((item) => <Entry key={item.id} item={item} />)}</ol>
   </section>;
-}
+});
 
 /** Onboarding/permissions row: the per-workspace switch state (off by default). */
 export function ComputerUseStatus({ workspaceId }: { workspaceId: string }) {

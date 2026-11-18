@@ -2,7 +2,7 @@ import { terminalOwnsKeyboardEvent } from "./terminal-events";
 import { AgentMark } from "./AgentMark";
 import { goalProgress } from "./goal-progress";
 import { leadGroups, leadHue, leadName, leadPreview, stewardDescription, stewardIdOf, type LeadGroup } from "./lead";
-import { useEffect, useReducer, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useEffect, useMemo, useReducer, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
 import { delegationWorkers } from "./conversation";
@@ -14,7 +14,7 @@ import { reloadApp } from "./reload";
 import { isMacPlatform } from "./sidebar-rail";
 import { Beat } from "./Beat";
 import { DeleteDialog } from "./DeleteDialog";
-import { t, translatedMap } from "./i18n";
+import { t, translatedMap, useT } from "./i18n";
 
 const agentNames: Record<Session["agent"], string> = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
 const statusLabels = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
@@ -83,14 +83,25 @@ export function workerTreeReducer(state: WorkerTreeState, action: WorkerTreeActi
   return { activation, expanded: action.id ? new Set([...state.expanded, action.id]) : state.expanded };
 }
 
-export function Sidebar(props: SidebarProps) {
+/** The key of a session's delegation list: changes only when a delegation is added or removed. */
+export function delegationKey(events: Session["events"] | undefined): string {
+  return JSON.stringify(events?.filter((event) => event.type === "delegation").map((event) => event.id) ?? []);
+}
+
+/**
+ * Memoized: the app re-renders per composer keystroke, and the sidebar must not. Its callbacks come
+ * from `useStableHandlers` in WorkspaceApp; `useT` keeps a language switch re-rendering it.
+ */
+export const Sidebar = memo(function Sidebar(props: SidebarProps) {
+  useT();
   const { closed: railClosed, tab, onNavigate, onSkills, connected, sessions, groups, busy, selected, onNew, onSelect, onHelp } = props;
   const { workspaces } = useWorkspaces();
   const [footerMenu, setFooterMenu] = useState<{ x: number; y: number }>();
   const [workerTree, dispatchWorkerTree] = useReducer(workerTreeReducer, { expanded: new Set(selected ? [selected] : []) });
   const [closed, setClosed] = useState<Set<string>>(new Set());
   const activeSession = sessions.find((session) => session.id === selected);
-  const taskKey = JSON.stringify(activeSession?.events.filter((event) => event.type === "delegation").map((event) => event.id) ?? []);
+  const activeEvents = activeSession?.events;
+  const taskKey = useMemo(() => delegationKey(activeEvents), [activeEvents]);
   useEffect(() => {
     dispatchWorkerTree({ type: "activate", id: selected, taskKey, workerId: props.selectedWorker });
     if (!selected) return;
@@ -425,4 +436,4 @@ export function Sidebar(props: SidebarProps) {
       { kind: "action", label: t("side.deleteChat"), icon: <Trash2 size={15} />, danger: true, disabled: busy || session.status === "running", title: session.status === "running" ? t("side.stopFirst") : undefined, onSelect: () => setDeleting({ kind: "session", id: session.id, name: session.title }) },
     ];
   }
-}
+});

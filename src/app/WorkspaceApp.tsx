@@ -45,6 +45,7 @@ import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
 import { adoptSession as adoptInto, applySessionList, replaceSession, upsertPushedSession } from "./session-store";
 import { useAppSocket } from "./useAppSocket";
+import { useStableHandlers } from "./stable-callbacks";
 import { draftKey, draftStore } from "./draft-store";
 import { useAttachments } from "./useAttachments";
 import { useChatScroll } from "./useChatScroll";
@@ -317,7 +318,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   }, [shownCwd]);
   const routingKey = JSON.stringify({ allowedAgents, prompt, cwd, skills, messageSkills, mode, routingSettings, systemPrompt, groupId });
   const pendingRecommendation = recommendation?.key === routingKey ? recommendation.value : undefined;
-  const availableAgents = boot.agents.filter((agent) => agent.available && allowedAgents.includes(agent.id as AgentId)).map((agent) => agent.id as AgentId);
+  const availableAgents = useMemo(() => boot.agents.filter((agent) => agent.available && allowedAgents.includes(agent.id as AgentId)).map((agent) => agent.id as AgentId), [boot.agents, allowedAgents]);
   const unavailableSelections = !active && boot.agents.length ? (mode === "manual" ? [agent, ...workers] : pendingRecommendation ? [pendingRecommendation.planner.agent, pendingRecommendation.orchestrator.agent, ...pendingRecommendation.workers.map((worker) => worker.agent)] : []).filter((id) => !availableAgents.includes(id)) : [];
   const unavailableWarning = teamAvailabilityWarning(allowedAgents, unavailableSelections);
   const sessionRunning = active?.status === "running";
@@ -743,9 +744,100 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     }
   };
   const sessionAction = (path: string, body?: unknown, method?: string) => safe(async () => { replaceFromServer(await api<Session>(path, body, method)); });
+  // The composer's text lives in this component, so every keystroke re-renders it. The heavy parts
+  // (message list, sidebar, team picker) are memoized and get stable callbacks that call the latest
+  // closures, so a keystroke skips them however long the history is.
+  const lookupSession = useCallback((id: string) => sessions.find((item) => item.id === id), [sessions]);
+  const messageHandlers = useStableHandlers({
+    onOpenSession: (id: string) => selectConversation(id),
+    onStop: () => { if (active) stopSession(active.id); },
+    onUndoHandoff: (eventId: string) => { if (active) void sessionAction(`/sessions/${active.id}/handoff/undo`, { eventId }); },
+    onOpenWorker: (workerId: string) => { if (!active) return; selectWorker(active.id, workerId); if (!sidebarState.current.overlay) setSidebarOpen(true); },
+    onPromote: (eventId: string) => promoteLiveMessage(eventId),
+    onChoose: (option: string) => { void send(false, option); },
+    onExecutePlan: () => { void send(false, t("msg.executePlanPrompt"), fullAccessAllowed && permissionModeBeforePlan.current === "full" ? "full" : "auto"); },
+  });
+  const sidebarHandlers = useStableHandlers({
+    onNavigate: (next: string) => { setTab(next); closeSidebarOverlay(); },
+    onSkills: () => { closeSidebarOverlay(); openTools("skills"); },
+    onSettings: () => { closeSidebarOverlay(); openSettingsAt(); },
+    onNew: (id?: string) => { newSession(); setGroupId(id ?? ""); closeSidebarOverlay(); },
+    onNewSteward: () => { newSession(); setStewardDraft({}); closeSidebarOverlay(); window.setTimeout(() => composerInput.current?.focus(), 0); },
+    onNewStewardThread: (id: string) => { newSession(); pickSteward(id); closeSidebarOverlay(); window.setTimeout(() => composerInput.current?.focus(), 0); },
+    onSelectWorker: (sessionId: string, taskId: string) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); },
+    onSelect: (id: string) => { selectConversation(id); closeSidebarOverlay(); },
+    onHelp: () => { closeSidebarOverlay(); openSettingsAt("environment", "env-onboarding"); },
+    onUsage: () => { closeSidebarOverlay(); openUsage(); },
+    onCreateGroup: (name: string) => safe(async () => {
+      const group = await api<Group>("/groups", { name, workspaceId });
+      setBoot((old) => ({ ...old, groups: [...old.groups.filter((item) => item.id !== group.id), group] }));
+    }),
+    onRenameGroup: (id: string, name: string) => safe(async () => {
+      const group = await api<Group>(`/groups/${id}`, { name }, "PATCH");
+      setBoot((old) => ({ ...old, groups: old.groups.map((item) => item.id === id ? group : item) }));
+    }),
+    onDeleteGroup: (id: string) => safe(async () => {
+      await api(`/groups/${id}`, undefined, "DELETE");
+      setBoot((old) => ({ ...old, groups: old.groups.filter((item) => item.id !== id) }));
+      setSessions((old) => old.map((session) => session.groupId === id ? { ...session, groupId: undefined } : session));
+      if (groupId === id) setGroupId("");
+    }),
+    onMoveSession: (id: string, target: WorkspaceId) => safe(async () => {
+      const updated = await api<Session>(`/sessions/${id}/workspace`, { workspaceId: target }, "PATCH");
+      setSessions((old) => old.map((session) => session.id === id ? updated : session));
+      if (selected === id) { newSession(); setGroupId(""); }
+    }),
+    onMoveGroup: (id: string, target: WorkspaceId) => safe(async () => {
+      await api(`/groups/${id}/workspace`, { workspaceId: target }, "PATCH");
+      setBoot((old) => ({ ...old, groups: old.groups.map((group) => group.id === id ? { ...group, workspaceId: target } : group) }));
+      setSessions((old) => old.map((session) => session.groupId === id ? { ...session, workspaceId: target } : session));
+      if (active?.groupId === id) newSession();
+      if (groupId === id) setGroupId("");
+    }),
+    onMoveSteward: (id: string, target: WorkspaceId) => safe(async () => {
+      await api<Steward>(`/stewards/${id}`, { workspaceId: target }, "PATCH");
+      setStewards((old) => old.filter((steward) => steward.id !== id));
+      setSessions((old) => old.map((session) => stewardIdOf(session) === id ? { ...session, workspaceId: target } : session));
+      if (active && stewardIdOf(active) === id) newSession();
+    }),
+    onAssign: (id: string, group: string | null) => safe(() => assignGroup(id, group)),
+    onRenameSession: (id: string, title: string) => safe(async () => {
+      const updated = await api<Session>(`/sessions/${id}`, { title }, "PATCH");
+      setSessions((old) => old.map((session) => session.id === id ? updated : session));
+    }),
+    onSetSteward: (id: string, enabled: boolean) => safe(async () => {
+      replaceFromServer(await api<Session>(`/sessions/${id}/steward`, { enabled }, "PATCH"));
+    }),
+    onDeleteWorker: (sessionId: string, workerId: string) => safe(async () => {
+      const updated = await api<Session>(`/sessions/${sessionId}/workers/${encodeURIComponent(workerId)}`, undefined, "DELETE");
+      replaceFromServer(updated);
+      setWorkerSelection((current) => current?.sessionId === sessionId && current.taskId === workerId ? undefined : current);
+    }),
+    onDeleteSession: (id: string, removeWorktrees?: boolean) => safe(async () => {
+      const cleanup = await api<{ kept: { branch: string }[] } | undefined>(`/sessions/${id}${removeWorktrees ? "?worktrees=remove" : ""}`, undefined, "DELETE");
+      setSessions((old) => old.filter((session) => session.id !== id));
+      if (selected === id) newSession();
+      if (cleanup?.kept.length) setError(t("wt.deleteKept", { branches: cleanup.kept.map((item) => item.branch).join(", ") }));
+    }),
+  });
+  const teamHandlers = useStableHandlers({
+    onAdvanced: () => setSessionOptions(true),
+    onSave: (next: AgentSelection, crew: AgentSelection[]) => safe(async () => {
+      if (active) {
+        replaceFromServer(await api<Session>(`/sessions/${active.id}/team`, { ...next, workers: crew.map((worker) => worker.agent), workerConfigs: crew }, "PATCH"));
+      } else if (pendingRecommendation) {
+        setRecommendation({ key: routingKey, value: { ...pendingRecommendation, orchestrator: next, workers: crew } });
+      } else {
+        setAgent(next.agent); setModel(next.model ?? ""); setReasoningEffort(next.reasoningEffort ?? "");
+        setWorkers(crew.map((worker) => worker.agent)); setWorkerConfigs(crew); setMode("manual");
+      }
+    }),
+  });
+  const manualTeam = useMemo(() => ({ agent, model, reasoningEffort, workers, workerConfigs }), [agent, model, reasoningEffort, workers, workerConfigs]);
+  const agentPolicy = useMemo(() => ({ workspaceId, allowedAgents }), [workspaceId, allowedAgents]);
   return (
     <WorkspacesContext.Provider value={scopedWorkspaces}>
-    <WorkspaceAgentPolicy.Provider value={{ workspaceId, allowedAgents }}>
+    <WorkspaceAgentPolicy.Provider value={agentPolicy}>
     <MarkdownSessionContext.Provider value={active?.id}>
     <ViewerContext.Provider value={viewerApi}>
     <MotionConfig reducedMotion="user">
@@ -761,62 +853,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         <TerminalPanel storageKey={workspaceId} cwd={shownCwd} homeCwd={boot.homeCwd} onHeightChange={setTerminalHeight} />
         {sidebarOverlay && sidebarOpen && <div className="sidebar-scrim" aria-hidden="true" onClick={() => setSidebarOpen(false)} />}
         <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} tab={tab}
-          onNavigate={(next) => { setTab(next); closeSidebarOverlay(); }} onSkills={() => { closeSidebarOverlay(); openTools("skills"); }} onSettings={() => { closeSidebarOverlay(); openSettingsAt(); }} connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
-          onNew={(id) => { newSession(); setGroupId(id ?? ""); closeSidebarOverlay(); }}
-          onNewSteward={() => { newSession(); setStewardDraft({}); closeSidebarOverlay(); window.setTimeout(() => composerInput.current?.focus(), 0); }}
-          stewards={stewards} onNewStewardThread={(id) => { newSession(); pickSteward(id); closeSidebarOverlay(); window.setTimeout(() => composerInput.current?.focus(), 0); }} selectedWorker={selectedWorker?.id} onSelectWorker={(sessionId, taskId) => { selectWorker(sessionId, taskId); closeSidebarOverlay(); }} onSelect={(id) => { selectConversation(id); closeSidebarOverlay(); }}
-          onHelp={() => { closeSidebarOverlay(); openSettingsAt("environment", "env-onboarding"); }} onUsage={() => { closeSidebarOverlay(); openUsage(); }}
-          onCreateGroup={(name) => safe(async () => {
-            const group = await api<Group>("/groups", { name, workspaceId });
-            setBoot((old) => ({ ...old, groups: [...old.groups.filter((item) => item.id !== group.id), group] }));
-          })}
-          onRenameGroup={(id, name) => safe(async () => {
-            const group = await api<Group>(`/groups/${id}`, { name }, "PATCH");
-            setBoot((old) => ({ ...old, groups: old.groups.map((item) => item.id === id ? group : item) }));
-          })}
-          onDeleteGroup={(id) => safe(async () => {
-            await api(`/groups/${id}`, undefined, "DELETE");
-            setBoot((old) => ({ ...old, groups: old.groups.filter((item) => item.id !== id) }));
-            setSessions((old) => old.map((session) => session.groupId === id ? { ...session, groupId: undefined } : session));
-            if (groupId === id) setGroupId("");
-          })}
-          onMoveSession={(id, target) => safe(async () => {
-            const updated = await api<Session>(`/sessions/${id}/workspace`, { workspaceId: target }, "PATCH");
-            setSessions((old) => old.map((session) => session.id === id ? updated : session));
-            if (selected === id) { newSession(); setGroupId(""); }
-          })}
-          onMoveGroup={(id, target) => safe(async () => {
-            await api(`/groups/${id}/workspace`, { workspaceId: target }, "PATCH");
-            setBoot((old) => ({ ...old, groups: old.groups.map((group) => group.id === id ? { ...group, workspaceId: target } : group) }));
-            setSessions((old) => old.map((session) => session.groupId === id ? { ...session, workspaceId: target } : session));
-            if (active?.groupId === id) newSession();
-            if (groupId === id) setGroupId("");
-          })}
-          onMoveSteward={(id, target) => safe(async () => {
-            await api<Steward>(`/stewards/${id}`, { workspaceId: target }, "PATCH");
-            setStewards((old) => old.filter((steward) => steward.id !== id));
-            setSessions((old) => old.map((session) => stewardIdOf(session) === id ? { ...session, workspaceId: target } : session));
-            if (active && stewardIdOf(active) === id) newSession();
-          })}
-          onAssign={(id, group) => safe(() => assignGroup(id, group))}
-          onRenameSession={(id, title) => safe(async () => {
-            const updated = await api<Session>(`/sessions/${id}`, { title }, "PATCH");
-            setSessions((old) => old.map((session) => session.id === id ? updated : session));
-          })}
-          onSetSteward={(id, enabled) => safe(async () => {
-            replaceFromServer(await api<Session>(`/sessions/${id}/steward`, { enabled }, "PATCH"));
-          })}
-          onDeleteWorker={(sessionId, workerId) => safe(async () => {
-            const updated = await api<Session>(`/sessions/${sessionId}/workers/${encodeURIComponent(workerId)}`, undefined, "DELETE");
-            replaceFromServer(updated);
-            setWorkerSelection((current) => current?.sessionId === sessionId && current.taskId === workerId ? undefined : current);
-          })}
-          onDeleteSession={(id, removeWorktrees) => safe(async () => {
-            const cleanup = await api<{ kept: { branch: string }[] } | undefined>(`/sessions/${id}${removeWorktrees ? "?worktrees=remove" : ""}`, undefined, "DELETE");
-            setSessions((old) => old.filter((session) => session.id !== id));
-            if (selected === id) newSession();
-            if (cleanup?.kept.length) setError(t("wt.deleteKept", { branches: cleanup.kept.map((item) => item.branch).join(", ") }));
-          })} />
+          connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
+          stewards={stewards} selectedWorker={selectedWorker?.id} {...sidebarHandlers} />
         <div
           className="sr-only"
           role="status"
@@ -885,12 +923,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                       <MessageList active={active} events={conversationEvents} tasksById={tasksById} latestHandoffId={latestHandoffId} latestAssistantId={latestAssistant?.id}
                         choiceOptions={choiceOptions} streamingMessageId={streamingMessageId} busy={busy} bottomRef={bottom}
                         draftKey={active.status === "running" ? draftKey(active.id) : undefined}
-                        lookupSession={(id) => sessions.find((item) => item.id === id)} onOpenSession={selectConversation} onStop={() => stopSession(active.id)}
-                        onUndoHandoff={(eventId) => void sessionAction(`/sessions/${active.id}/handoff/undo`, { eventId })}
-                        onOpenWorker={(workerId) => { selectWorker(active.id, workerId); if (!sidebarState.current.overlay) setSidebarOpen(true); }}
-                        onPromote={promoteLiveMessage}
-                        onChoose={(option) => void send(false, option)}
-                        onExecutePlan={() => void send(false, t("msg.executePlanPrompt"), fullAccessAllowed && permissionModeBeforePlan.current === "full" ? "full" : "auto")} />
+                        lookupSession={lookupSession} {...messageHandlers} />
                     )}
                   </div>
                   {showChatBottom && !selectedWorker && <button type="button" className="chat-bottom-button" onClick={() => scrollToChatBottom()}><ArrowDown size={15} />{t("ws.toBottom")}</button>}
@@ -906,19 +939,9 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
                     send={send} runCommand={runCommand} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
-                      manual={{ agent, model, reasoningEffort, workers, workerConfigs }} availableAgents={teamAgents}
+                      manual={manualTeam} availableAgents={teamAgents}
                       quotaFallback={quotaFallback} quotaThreshold={quotaThreshold} routingSettings={routingSettings} busy={busy}
-                      onAdvanced={() => setSessionOptions(true)}
-                      onSave={(next, crew) => safe(async () => {
-                        if (active) {
-                          replaceFromServer(await api<Session>(`/sessions/${active.id}/team`, { ...next, workers: crew.map((worker) => worker.agent), workerConfigs: crew }, "PATCH"));
-                        } else if (pendingRecommendation) {
-                          setRecommendation({ key: routingKey, value: { ...pendingRecommendation, orchestrator: next, workers: crew } });
-                        } else {
-                          setAgent(next.agent); setModel(next.model ?? ""); setReasoningEffort(next.reasoningEffort ?? "");
-                          setWorkers(crew.map((worker) => worker.agent)); setWorkerConfigs(crew); setMode("manual");
-                        }
-                      })} />} />}
+                      {...teamHandlers} />} />}
                 </section>
                 {activityOpen && <ActivityPanel active={active} connected={connected} rows={activityEvents} onClose={() => setActivityOpen(false)} />}
               </div>

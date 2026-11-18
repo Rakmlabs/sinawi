@@ -31,6 +31,28 @@ export function activitiesBetween(list: readonly ComputerActivity[], sessionId: 
   return list.filter((a) => a.sessionId === sessionId && Date.parse(a.time) >= start && Date.parse(a.time) < end);
 }
 
+const NO_ACTIVITY: readonly ComputerActivity[] = Object.freeze([]);
+const bySession = new WeakMap<readonly ComputerActivity[], Map<string, ComputerActivity[]>>();
+
+/**
+ * One session's activities (time order), grouped once per activity list. The same list gives the
+ * same array, and a session without activity gets one shared empty array: a chat's trails stay
+ * still (and skip their per-message filter) unless that session's computer activity changes.
+ */
+export function sessionActivity(list: readonly ComputerActivity[], sessionId: string): readonly ComputerActivity[] {
+  let groups = bySession.get(list);
+  if (!groups) {
+    groups = new Map();
+    for (const item of list) {
+      if (!item.sessionId) continue;
+      const group = groups.get(item.sessionId);
+      if (group) group.push(item); else groups.set(item.sessionId, [item]);
+    }
+    bySession.set(list, groups);
+  }
+  return groups.get(sessionId) ?? NO_ACTIVITY;
+}
+
 /** Merges activity entries by id, keeping time order and the newest 500. */
 export function mergeActivity(current: readonly ComputerActivity[], incoming: readonly ComputerActivity[]): ComputerActivity[] {
   const byId = new Map(current.map((a) => [a.id, a]));

@@ -1,4 +1,6 @@
+import { memo } from "react";
 import { TeamBar } from "../TeamBar";
+import { useT } from "../i18n";
 import { useQuotas } from "../QuotaContext";
 import { automaticTeamDefaults } from "../workspaces";
 import { normalizeWorkerConfigs } from "../../server/workers";
@@ -26,7 +28,9 @@ export type TeamBarSlotProps = {
  * Team picker in the composer bottom bar. The automatic default depends on quota windows expiring, so only this
  * slot keeps a (coarse, 30 s — the quota refresh period) clock, and only while that default shows.
  */
-export function TeamBarSlot({ workspaceId, active, pendingRecommendation, mode, manual, availableAgents, quotaFallback, quotaThreshold, routingSettings, busy, onAdvanced, onSave }: TeamBarSlotProps) {
+export const TeamBarSlot = memo(function TeamBarSlot({ workspaceId, active, pendingRecommendation, mode, manual, availableAgents, quotaFallback, quotaThreshold, routingSettings, busy, onAdvanced, onSave }: TeamBarSlotProps) {
+  // Memoized (the composer re-renders it per keystroke); `useT` keeps a language switch reaching it.
+  useT();
   const { providers } = useQuotas();
   const automaticShown = !active && !pendingRecommendation && mode === "auto";
   const now = useNow(30_000, automaticShown);
@@ -47,4 +51,4 @@ export function TeamBarSlot({ workspaceId, active, pendingRecommendation, mode, 
     ) : { agent: manual.agent, model: manual.model, reasoningEffort: manual.reasoningEffort });
   const workers = active ? normalizeWorkerConfigs(active.workers, active.workerConfigs) : pendingRecommendation?.workers ?? normalizeWorkerConfigs(manual.workers, manual.workerConfigs);
   return <TeamBar orchestrator={orchestrator} workers={workers} settings={routingSettings} availableAgents={availableAgents} disabled={busy} running={active?.status === "running"} automatic={automaticShown} onAdvanced={onAdvanced} onSave={onSave} />;
-}
+});
