@@ -35,8 +35,8 @@ import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
 import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from "./mcp-clients.js";
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
-import { mediaRouteRequired, mediaUnavailableMessage } from "./media-routing.js";
-import { accountDirFor, accountLoginCommand, allowedAgentsForWorkspace, assertMediaAllowed, blockedToolMessage, defaultWorkspacePolicy, isToolLocked, lockedToolsFor, normalizeWorkspacePolicy, policyDenyPatterns, WorkspacePolicyError, type WorkspacePolicyResolver } from "./workspace-policy.js";
+import { mediaRouteRequired } from "./media-routing.js";
+import { accountDirFor, accountLoginCommand, allowedAgentsForWorkspace, blockedToolMessage, defaultWorkspacePolicy, isToolLocked, lockedToolsFor, normalizeWorkspacePolicy, policyDenyPatterns, WorkspacePolicyError, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { loadUsage } from "./usage.js";
 import { loadProviderQuotas } from "./quota.js";
 import { exhaustionFromQuota } from "./quota-fallback.js";
@@ -580,16 +580,6 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   authInterval.unref();
   httpServer.once("close", () => { clearInterval(authInterval); terminal.close(); });
   websocket.once("close", () => { clearInterval(authInterval); terminal.close(); });
-  const assertMediaAvailable = async (prompt: string, workspaceId: WorkspaceId) => {
-    await modelsReady;
-    const settings = await routing.loadSettings(policyFor(workspaceId).accounts);
-    if (!mediaRouteRequired(prompt, settings.rules)) return;
-    assertMediaAllowed(policyFor(workspaceId));
-    const available = await quotaAwareAgents(await getAvailableAgents(), workspaceId);
-    if (!available.includes("grok") || !allowedFor(workspaceId).includes("grok") || settings.modelOptions.grok.authStatus === "unauthenticated") {
-      throw new Error(mediaUnavailableMessage);
-    }
-  };
   let limitsRefresh: Promise<void> | undefined;
   const refreshClaudeLimits = () => {
     if (limitsRefresh) return limitsRefresh;
@@ -853,7 +843,6 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const input = routingInput(req.body);
       if (!(await stat(input.cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
       const workspaceId = workspace(req.body?.workspaceId, currentWorkspace());
-      await assertMediaAvailable(input.prompt, workspaceId);
       const permitted = (await getAvailableAgents()).filter((id) => allowedFor(workspaceId).includes(id));
       const available = await quotaAwareAgents(permitted, workspaceId);
       res.json(await routing.recommend(input.prompt, input.cwd, input.skills, available, { workspaceId, sessionId: randomUUID(), role: "router", dataDir: options.dataDir }, allowedFor(workspaceId), policyFor(workspaceId)));
@@ -1055,7 +1044,6 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const workspaceId = parsed.workspaceId ?? currentWorkspace();
       if (parsed.steward?.id) parsed.steward.id = resolveStewardId(parsed.steward.id, workspaceId);
       const input = withWorkspaceTeam(parsed, workspaceState.defaults[workspaceId] ?? {}, allowedFor(workspaceId));
-      if (input.prompt) await assertMediaAvailable(input.prompt, input.workspaceId ?? currentWorkspace());
       if (input.groupId && !(await loadGroups(options.dataDir)).some((group) => group.id === input.groupId && group.workspaceId === input.workspaceId)) throw new Error("그룹을 찾을 수 없습니다.");
       res.status(201).json(await orchestra.create(input));
     }
@@ -1075,8 +1063,6 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try {
       const id = routeParam(req.params.id);
       const prompt = string(req.body?.prompt);
-      const session = orchestra.get(id);
-      if (session) await assertMediaAvailable(prompt, session.workspaceId);
       res.json(await orchestra.followup(id, prompt, ids(req.body?.skills), conversationSettings(req.body)));
     }
     catch (error) { errorResponse(res, error); }

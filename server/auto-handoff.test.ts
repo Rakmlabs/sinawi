@@ -145,15 +145,17 @@ test("media follow-ups bypass the automatic-switch hold and use Codex and Grok w
   assert.deepEqual(session.workers, ["codex", "grok"]);
 });
 
-test("media follow-ups warn and do not run another provider when Grok is unavailable", async () => {
+test("media follow-ups keep the Grok media lead when the router has no answer", async () => {
   const calls: RunCliOptions[] = [];
   const { orchestra, session } = await fixture(async () => undefined, calls);
 
   await orchestra.followup(session.id, "썸네일 이미지를 만들어줘", [], { mode: "auto", autoSwitch: true });
+  await settle(session);
 
-  assert.equal(calls.length, 1);
-  assert.equal(session.status, "error");
-  assert.match(session.events.at(-1)?.text ?? "", /Grok 조정자를 사용할 수 없습니다/);
+  assert.equal(session.status, "done");
+  assert.equal(session.agent, "grok");
+  assert.equal(calls.at(-1)?.agent, "grok");
+  assert.equal(session.events.some((event) => /Grok 조정자를 사용할 수 없습니다/.test(event.text)), false);
 });
 
 test("manual mode and disabled automatic switching never invoke the classifier", async () => {

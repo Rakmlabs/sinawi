@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { routingInput } from "./server.js";
 import { mutateToolSettings, workspaceToolSettings } from "./store.js";
-import { defaultWorkspacePolicy, mediaBlockedMessage, WorkspacePolicyError } from "./workspace-policy.js";
+import { defaultWorkspacePolicy } from "./workspace-policy.js";
 import {
   defaultRoutingSettings, discoverLocalModels, loadRoutingSettings, RoutingService, saveRoutingSettings, validateRoutingSettings,
   type PlannerRunner,
@@ -109,20 +109,19 @@ test("legacy image migration preserves unrelated customized media rules", async 
   assert.equal(loaded.rules.at(-1)?.id, "custom");
 });
 
-test("routing rejects media requests and media rule matches when the workspace turns media off", async () => {
+test("routing recommends the team for media requests and media rule matches when the workspace turns media off", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-next22-company-media-"));
   const settings = structuredClone(defaultRoutingSettings);
   settings.rules.find((rule) => rule.id === "video")!.keywords = ["cinematic"];
   await saveRoutingSettings(settings, directory);
-  const service = new RoutingService({ dataDir: directory, skillLoader: async () => [], runner: async () => { throw new Error("must not run"); } });
+  const service = new RoutingService({ dataDir: directory, skillLoader: async () => [], runner: async () => { throw new Error("planner offline"); } });
   const usageContext = { workspaceId: "team", sessionId: "team-session", role: "router" as const };
   const policy = { ...defaultWorkspacePolicy(), mediaGeneration: false };
 
   for (const prompt of ["로고 이미지를 만들어줘", "cinematic campaign"]) {
-    await assert.rejects(
-      () => service.recommend(prompt, directory, [], ["claude", "grok"], usageContext, ["claude", "grok"], policy),
-      (error: unknown) => error instanceof WorkspacePolicyError && error.message === mediaBlockedMessage,
-    );
+    const result = await service.recommend(prompt, directory, [], ["claude", "grok"], usageContext, ["claude", "grok"], policy);
+    assert.notEqual(result.reason, "이미지·영상 생성은 Grok Imagine과 연결된 미디어 도구를 사용합니다.", prompt);
+    assert.equal(result.source, "fallback", prompt);
   }
 });
 
@@ -387,7 +386,10 @@ test("media routing overrides saved rules and planner output and attaches the di
     if (/쇼츠|릴스|마케팅 영상/.test(prompt)) assert.ok(result.skills.includes("hashed-shorts"), prompt);
   }
   assert.equal(calls, 0, "built-in media capability needs no paid classification");
-  await assert.rejects(() => service.recommend("쇼츠 만들어줘", directory, [], ["codex", "claude"], undefined, ["codex", "claude"]), /Grok 조정자를 사용할 수 없습니다/);
+  // Grok unavailable: a media prompt is recommended among the agents there are, never rejected.
+  const fallback = await service.recommend("쇼츠 만들어줘", directory, [], ["codex", "claude"], undefined, ["codex", "claude"]);
+  assert.ok(["codex", "claude"].includes(fallback.orchestrator.agent));
+  assert.ok(fallback.workers.every((worker) => worker.agent !== "grok"));
 });
 
 test("smart media routing applies the first matching ordered rule with its worker priority and reason", async () => {

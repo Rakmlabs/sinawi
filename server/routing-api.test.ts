@@ -535,28 +535,44 @@ test("Claude defaults and media capability constraints survive quota and workspa
     const quotaDefault = await route("평범한 요청");
     assert.equal(quotaDefault.status, 200);
     assert.equal(quotaDefault.body.orchestrator.agent, "claude", "one eligible provider must suffice");
-    const blocked = await route("이미지 생성해줘");
-    assert.equal(blocked.status, 400);
-    assert.match(blocked.body.error, /Grok 조정자를 사용할 수 없습니다/);
+    // Grok out of quota or disallowed: media prompts get a recommendation among the agents there are.
+    const exhausted = await route("이미지 생성해줘");
+    assert.equal(exhausted.status, 200);
+    assert.equal(exhausted.body.orchestrator.agent, "claude");
 
     await request(app, "PATCH", "/api/workspaces", { workspaceId: "personal", defaults: { quotaFallback: false, allowedAgents: ["claude"] } });
     const restricted = await route("마케팅 영상 만들어줘");
-    assert.equal(restricted.status, 400);
-    assert.match(restricted.body.error, /Grok 조정자를 사용할 수 없습니다/);
+    assert.equal(restricted.status, 200);
+    assert.equal(restricted.body.orchestrator.agent, "claude");
+    assert.ok(restricted.body.workers.every((worker: any) => worker.agent === "claude"));
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("manual media execution refuses to start when Grok is unavailable", async () => {
+test("media prompts start and continue sessions with the team when Grok is unavailable", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-next21-manual-media-"));
-  const { app, websocket } = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: ["claude", "codex"], modelRunner: async () => { throw new Error("fixture unavailable"); } });
+  const { app, orchestra, websocket } = createServer({
+    dataDir: directory, modelHomeDir: directory, availableAgents: ["claude", "codex"],
+    modelRunner: async () => { throw new Error("fixture unavailable"); },
+  });
+  // The routes must hand media prompts to the orchestra (whose routing orchestra.test.ts covers); no CLI runs here.
+  const reached: string[] = [];
+  const fake = (prompt: string) => ({ id: "media-fixture", agent: "claude", workers: ["claude"], status: "running", events: [], prompt });
+  orchestra.create = (async (input: { prompt: string }) => { reached.push(input.prompt); return fake(input.prompt); }) as unknown as typeof orchestra.create;
+  orchestra.followup = (async (_id: string, prompt: string) => { reached.push(prompt); return fake(prompt); }) as unknown as typeof orchestra.followup;
   try {
-    const result = await request(app, "POST", "/api/sessions", { prompt: "광고 영상을 만들어줘", agent: "claude", workers: ["codex"], cwd: directory, mode: "manual" });
-    assert.equal(result.status, 400);
-    assert.match(result.body.error, /Grok 조정자를 사용할 수 없습니다/);
+    await request(app, "PATCH", "/api/workspaces", { workspaceId: "personal", defaults: { allowedAgents: ["claude"] } });
+    const prompt = "카드디자인 아이콘 시안 5개를 만들어서 브라우저 탭에 보여줘. 전부 클로드로 해, 이미지를 만들든 svg든";
+    const manual = await request(app, "POST", "/api/sessions", { prompt, agent: "claude", workers: ["claude"], cwd: directory, mode: "manual" });
+    assert.equal(manual.status, 201, JSON.stringify(manual.body));
+    const auto = await request(app, "POST", "/api/sessions", { prompt: "광고 영상을 만들어줘", agent: "claude", workers: ["claude"], cwd: directory, mode: "auto" });
+    assert.equal(auto.status, 201, JSON.stringify(auto.body));
+    const followup = await request(app, "POST", "/api/sessions/media-fixture/messages", { prompt: "썸네일 이미지도 만들어줘" });
+    assert.equal(followup.status, 200, JSON.stringify(followup.body));
+    assert.deepEqual(reached, [prompt, "광고 영상을 만들어줘", "썸네일 이미지도 만들어줘"]);
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("migrated company settings reject detected and media-rule requests before creating or continuing sessions", async () => {
+test("migrated company settings with media off still start and continue sessions for media-looking requests", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-next22-company-media-"));
   const companySession: Session = {
     id: "company-media-session", title: "Company", agent: "claude", workers: ["grok"], cwd: directory,
@@ -577,23 +593,24 @@ test("migrated company settings reject detected and media-rule requests before c
     modelRunner: async () => { throw new Error("No CLI in fixture"); },
     routingRunner: async () => { launches++; return { exitCode: 0, finalText: "{}" }; },
   });
-  // An install from before workspace settings: the migrated company workspace keeps media off.
-  const expected = { error: mediaBlockedMessage, code: "workspace-policy" };
+  // An install from before workspace settings: the migrated company workspace keeps media off,
+  // which turns off Grok's media route but never rejects the request (orchestra.test.ts covers the turn).
+  const reached: string[] = [];
+  orchestra.create = (async (input: { prompt: string }) => { reached.push(input.prompt); return { id: "x", events: [] }; }) as unknown as typeof orchestra.create;
+  orchestra.followup = (async (_id: string, prompt: string) => { reached.push(prompt); return { id: "x", events: [] }; }) as unknown as typeof orchestra.followup;
   try {
     const routed = await request(app, "POST", "/api/route", { workspaceId: "company", prompt: "이미지 생성해줘", cwd: directory });
-    assert.deepEqual(routed, { status: 400, body: expected });
+    assert.notEqual(routed.body.error, mediaBlockedMessage);
 
     const created = await request(app, "POST", "/api/sessions", {
       workspaceId: "company", prompt: "광고 영상을 만들어줘", cwd: directory, agent: "claude", workers: ["grok"],
     });
-    assert.deepEqual(created, { status: 400, body: expected });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
 
-    const before = structuredClone(orchestra.get(companySession.id));
     const continued = await request(app, "POST", `/api/sessions/${companySession.id}/messages`, { prompt: "render asset" });
-    assert.deepEqual(continued, { status: 400, body: expected });
-    assert.deepEqual(orchestra.get(companySession.id), before, "rejection must precede session mutation");
-    assert.equal(orchestra.list().length, 1, "rejection must not create a session");
-    assert.equal(launches, 0, "rejection must precede planner or agent launch");
+    assert.equal(continued.status, 200, JSON.stringify(continued.body));
+    assert.deepEqual(reached, ["광고 영상을 만들어줘", "render asset"]);
+    assert.equal(launches, 0, "no planner launches for the media policy");
   } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

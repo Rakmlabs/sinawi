@@ -6,6 +6,7 @@ import test from "node:test";
 import { Orchestra, parseDelegations } from "./orchestra.js";
 import { defaultWorkspacePolicy, mediaBlockedMessage } from "./workspace-policy.js";
 import type { RunCliOptions } from "./cli.js";
+import type { AgentId } from "./types.js";
 import { publicSkills } from "./skills.js";
 
 // No workspace id is special. These tests configure "company" the way an old install's migration does:
@@ -258,25 +259,82 @@ test("with automatic switching off, media follow-ups keep the team the user pick
   assert.deepEqual(session.workers, ["claude"]);
 });
 
-test("media requests warn without execution when the workspace prohibits Grok", async () => {
+test("auto-mode media requests run with the team and one status line when the workspace prohibits Grok", async () => {
   const calls: RunCliOptions[] = [];
   const allowed = () => ["codex" as const, "claude" as const];
   const orchestra = new Orchestra(undefined, async (options) => {
     calls.push(options);
     return { exitCode: 0, finalText: "done" };
   }, undefined, undefined, undefined, allowed);
+  const fallbackNotice = /Grok을 쓸 수 없어 지금 팀\(Claude\)으로 진행합니다/;
 
-  await assert.rejects(
-    orchestra.create({ prompt: "사진 편집해줘", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "auto" }),
-    /Grok 조정자를 사용할 수 없습니다/,
-  );
+  const created = await orchestra.create({ prompt: "사진 편집해줘", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "auto" });
+  await waitUntilSettled(created);
+  assert.equal(created.status, "done");
+  assert.equal(created.agent, "claude");
+  assert.equal(created.events.filter((event) => fallbackNotice.test(event.text)).length, 1);
+
   const session = await orchestra.create({ prompt: "첫 요청", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "auto" });
   await waitUntilSettled(session);
-  await orchestra.followup(session.id, "로고 시안을 만들어줘", [], { mode: "auto" });
+  await orchestra.followup(session.id, "썸네일 이미지를 만들어줘", [], { mode: "auto" });
+  await waitUntilSettled(session);
 
-  assert.equal(calls.length, 1);
-  assert.equal(session.status, "error");
-  assert.match(session.events.at(-1)?.text ?? "", /Grok 조정자를 사용할 수 없습니다/);
+  assert.equal(session.status, "done");
+  assert.equal(session.agent, "claude");
+  assert.equal(session.events.filter((event) => fallbackNotice.test(event.text)).length, 1);
+  assert.ok(calls.every((call) => call.agent === "claude"));
+  assert.equal([...created.events, ...session.events].some((event) => /Grok 조정자를 사용할 수 없습니다/.test(event.text)), false);
+});
+
+test("a manual Claude team runs the reported icon-mockup request on Claude with Grok disallowed", async () => {
+  const calls: RunCliOptions[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => {
+    calls.push(options);
+    return { exitCode: 0, finalText: "done" };
+  }, undefined, undefined, undefined, () => ["claude" as const]);
+  const prompt = "카드디자인 안에 들어갈 아이콘의 디자인을 시안 여러 개 만들어서 브라우저에 탭 하나 띄워서 보여줘. 시안은 5개 정도. 리퀴드 글래스 스타일… 그냥 전부 클로드로 해, 이미지를 만들든 svg든 뽑아봐";
+  const session = await orchestra.create({ prompt, agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "manual" });
+  await waitUntilSettled(session);
+
+  assert.equal(session.status, "done");
+  assert.equal(session.agent, "claude");
+  assert.ok(calls.length > 0 && calls.every((call) => call.agent === "claude"));
+  assert.equal(session.events.some((event) => /Grok/.test(event.text) && event.type !== "message"), false);
+});
+
+test("auto-mode raster requests still move to Grok, unless the prompt names another agent", async () => {
+  const resolver = async () => ({ enabled: true, threshold: 3, authenticated: ["grok", "claude"] as AgentId[], quotas: [] });
+  const make = (calls: RunCliOptions[]) => new Orchestra(undefined, async (options) => {
+    calls.push(options);
+    return { exitCode: 0, finalText: "done" };
+  }, undefined, undefined, undefined, undefined, undefined, resolver);
+
+  const grokCalls: RunCliOptions[] = [];
+  const media = await make(grokCalls).create({ prompt: "썸네일 이미지를 만들어줘", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "auto" });
+  await waitUntilSettled(media);
+  assert.equal(media.agent, "grok");
+  assert.equal(media.model, "grok-4.7");
+  assert.equal(grokCalls[0]?.agent, "grok");
+
+  const claudeCalls: RunCliOptions[] = [];
+  const named = await make(claudeCalls).create({ prompt: "썸네일 이미지를 만들어줘, 클로드로 해", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "auto" });
+  await waitUntilSettled(named);
+  assert.equal(named.status, "done");
+  assert.equal(named.agent, "claude");
+  assert.ok(claudeCalls.every((call) => call.agent === "claude"));
+});
+
+test("auto-mode media falls back to the team when Grok is signed out", async () => {
+  const calls: RunCliOptions[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => {
+    calls.push(options);
+    return { exitCode: 0, finalText: "done" };
+  }, undefined, undefined, undefined, undefined, undefined, async () => ({ enabled: true, threshold: 3, authenticated: ["claude"] as AgentId[], quotas: [] }));
+  const session = await orchestra.create({ prompt: "썸네일 이미지를 만들어줘", agent: "claude", workers: ["claude"], cwd: process.cwd(), mode: "auto" });
+  await waitUntilSettled(session);
+  assert.equal(session.status, "done");
+  assert.equal(session.agent, "claude");
+  assert.equal(session.events.filter((event) => /Grok을 쓸 수 없어/.test(event.text)).length, 1);
 });
 
 test("follow-ups automatically attach marketing-shorts for reels requests", async () => {
@@ -1283,21 +1341,26 @@ test("quota resolver failures emit one bounded warning and continue with the ori
   assert.equal(session.events.filter((event) => event.text.includes("한도 정보를 불러오지 못해")).length, 1);
 });
 
-test("company media creates and followups reject before session mutation or CLI launch", async () => {
+test("company media creates and followups run with the team in code when media generation is off", async () => {
   const calls: RunCliOptions[] = [];
   const orchestra = new Orchestra(undefined, async (options) => {
     calls.push(options);
     return { exitCode: 0, finalText: "done" };
   }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
-  await assert.rejects(orchestra.create({ prompt: "이미지 생성", agent: "grok", workers: ["grok"], cwd: process.cwd(), workspaceId: "company" }), { message: mediaBlockedMessage });
-  assert.equal(orchestra.list().length, 0);
-  assert.equal(calls.length, 0);
+  const created = await orchestra.create({ prompt: "이미지 생성", agent: "claude", workers: ["claude"], cwd: process.cwd(), workspaceId: "company", mode: "auto" });
+  await waitUntilSettled(created);
+  assert.equal(created.status, "done");
+  assert.equal(created.agent, "claude", "media off never moves the lead to Grok");
+  assert.ok(calls[0]?.prompt.includes("이미지·영상 생성 도구가 꺼져 있습니다"));
   const session = await orchestra.create({ prompt: "ordinary task", agent: "grok", workers: ["grok"], cwd: process.cwd(), workspaceId: "company" });
   await waitUntilSettled(session);
-  const before = structuredClone(session);
-  await assert.rejects(orchestra.followup(session.id, "광고 영상 생성"), { message: mediaBlockedMessage });
-  assert.deepEqual(session, before);
-  assert.equal(calls.length, 1);
+  const before = calls.length;
+  await orchestra.followup(session.id, "광고 영상 생성");
+  await waitUntilSettled(session);
+  assert.equal(session.status, "done");
+  assert.ok(calls.length > before);
+  assert.ok(calls.at(-1)?.prompt.includes("이미지·영상 생성 도구가 꺼져 있습니다"));
+  assert.equal(session.events.filter((event) => /이미지·영상 생성 도구가 꺼져 있어/.test(event.text)).length, 1);
 });
 
 const mediaHint = "MEDIA_HINT: show the model and credits before generating.";

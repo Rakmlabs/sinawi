@@ -123,6 +123,9 @@ export function missingResumeText(text: string): boolean {
 }
 const resumeRetryFailed = (reason: string) => `이전 CLI 대화를 이어받지 못해 새 대화로 다시 시도했지만 실패했습니다: ${reason.replace(/\s+/gu, " ").trim().slice(0, 300) || "원인을 알 수 없습니다."}`;
 
+/** Appended to a media-looking request when the workspace turns media generation off: the team works in code. */
+const MEDIA_OFF_NOTE = "\n\n(이 작업 공간에서는 이미지·영상 생성 도구가 꺼져 있습니다. 래스터 이미지·영상을 생성하지 말고 SVG·HTML·CSS 같은 코드로 작업하세요.)";
+
 export interface QuotaFallbackContext {
   enabled: boolean;
   threshold: number;
@@ -369,6 +372,29 @@ export class Orchestra {
       : mediaRouteRequired(prompt, []));
   }
 
+  /** The workspace's media policy is on: Grok's media route may be used. Off never blocks the turn itself. */
+  private mediaPolicyOn(workspaceId: Session["workspaceId"]): boolean {
+    return this.workspacePolicyResolver?.(workspaceId).mediaGeneration !== false;
+  }
+
+  /** Grok is allowed here and, when the app knows, installed, signed in and not out of quota. */
+  private async grokMediaUsable(session: Pick<Session, "workspaceId"> & Partial<Session>): Promise<boolean> {
+    if (!this.allowedAgents({ workspaceId: session.workspaceId }).includes("grok")) return false;
+    if (!this.quotaFallbackResolver) return true;
+    try {
+      const context = await this.quotaFallbackResolver(session as Session);
+      return context.authenticated.includes("grok") && !exhaustionFromQuota(context.quotas.find((quota) => quota.agent === "grok"), context.threshold).exhausted;
+    } catch { return true; }
+  }
+
+  private mediaFallbackNotice(session: Session): void {
+    this.event(session, session.agent, "status", `Grok을 쓸 수 없어 지금 팀(${agentNames[session.agent]})으로 진행합니다.`);
+  }
+
+  private mediaPolicyNotice(session: Session): void {
+    this.event(session, session.agent, "status", "이 작업 공간에서 이미지·영상 생성 도구가 꺼져 있어 지금 팀이 코드(SVG·HTML·CSS)로 진행합니다.");
+  }
+
   private mediaWorkers(workspaceId: Session["workspaceId"]): AgentId[] {
     return (["codex", "grok"] as AgentId[]).filter((agent) => this.allowedAgents({ workspaceId }).includes(agent));
   }
@@ -531,10 +557,12 @@ export class Orchestra {
     // No first message: an empty chat that waits for one (followup starts its first turn).
     const empty = !input.prompt.trim();
     const mediaRequest = !empty && await this.isMediaRequest(input.prompt, input.skills, workspaceId);
-    if (mediaRequest) assertMediaAllowed(this.workspacePolicyResolver?.(workspaceId));
-    // Media requests move the lead to Grok only in auto mode; a manually chosen team is kept as is.
-    const mediaLead = mediaRequest && (input.mode ?? "manual") === "auto";
-    if (mediaLead && !this.allowedAgents({ workspaceId }).includes("grok")) throw new Error(mediaUnavailableMessage);
+    // Media detection never blocks a turn. With the policy off the team works in code; Grok's tools stay off.
+    const mediaOn = mediaRequest && this.mediaPolicyOn(workspaceId);
+    // Media requests move the lead to Grok only in auto mode with switching on and Grok usable;
+    // otherwise the chosen team runs as is.
+    const autoMedia = mediaOn && (input.mode ?? "manual") === "auto" && input.autoSwitch !== false;
+    const mediaLead = autoMedia && await this.grokMediaUsable({ workspaceId });
     const agent = mediaLead ? "grok" : input.agent;
     const workers: AgentId[] = [...(input.workers ?? [])];
     const model = mediaLead ? "grok-4.7" : input.model;
@@ -587,7 +615,9 @@ export class Orchestra {
     this.event(session, agent, "status", `${agentNames[agent]} 세션을 시작했습니다.`);
     if (session.steward) this.event(session, agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
     this.event(session, "user", "message", input.prompt);
-    void this.execute(session, input.prompt, selectedSkills, input.systemPrompt ?? "", controller, mediaLead || (mediaRequest && agent === "grok"))
+    if (mediaRequest && !mediaOn) this.mediaPolicyNotice(session);
+    else if (autoMedia && !mediaLead) this.mediaFallbackNotice(session);
+    void this.execute(session, `${input.prompt}${mediaRequest && !mediaOn ? MEDIA_OFF_NOTE : ""}`, selectedSkills, input.systemPrompt ?? "", controller, mediaLead || (mediaOn && agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
     return session;
   }
@@ -608,10 +638,8 @@ export class Orchestra {
     this.turnChoices.delete(session.id);
     if (commanderActive(session)) return this.executeCommander(session, userPrompt, systemPrompt, controller);
     this.assertSessionPolicy(session);
-    if (requiresGrokMedia) assertMediaAllowed(this.workspacePolicyResolver?.(session.workspaceId));
-    if (requiresGrokMedia && session.agent !== "grok") {
-      throw new Error(mediaUnavailableMessage);
-    }
+    // The media route belongs to a Grok lead under an allowing policy; any other lead just runs the team.
+    if (requiresGrokMedia && (session.agent !== "grok" || !this.mediaPolicyOn(session.workspaceId))) requiresGrokMedia = false;
     const disabledSkills = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills;
     const skills = await resolveSkillPrompt(skillIds, session.cwd, disabledSkills, this.accountsOf(session.workspaceId));
     // Installed names let the lead recommend skills before the user chooses them.
@@ -1452,7 +1480,7 @@ export class Orchestra {
     const carried = session.pendingInstructions ?? [];
     delete session.pendingInstructions;
     const mediaRequest = await this.isMediaRequest(prompt, [...(session.skills ?? []), ...skills], session.workspaceId);
-    if (mediaRequest) assertMediaAllowed(this.workspacePolicyResolver?.(session.workspaceId));
+    const mediaOn = mediaRequest && this.mediaPolicyOn(session.workspaceId);
     this.assertSessionPolicy(session);
     this.assertPermissionMode(session.workspaceId, settings.permissionMode);
     session.status = "running";
@@ -1483,12 +1511,12 @@ export class Orchestra {
     if (session.title === EMPTY_TITLE && !session.events.some((event) => event.agent === "user" && event.type === "message")) session.title = titleFrom(prompt);
     if (!alreadyLogged) this.event(session, "user", "message", prompt);
     const allowed = new Set(this.allowedAgents(session));
-    // Media keywords pick Grok only while auto-switch is on: the user's own orchestrator choice wins.
-    const mediaLead = mediaRequest && session.mode === "auto" && session.autoSwitch !== false;
-    if (mediaLead && !allowed.has("grok")) {
-      this.fail(session, new Error(mediaUnavailableMessage), controller);
-      return session;
-    }
+    // Media keywords pick Grok only while auto-switch is on and Grok is usable: the user's own choice wins,
+    // and an unusable Grok means the current team carries on, never an error.
+    const autoMedia = mediaOn && session.mode === "auto" && session.autoSwitch !== false;
+    const mediaLead = autoMedia && await this.grokMediaUsable(session);
+    if (mediaRequest && !mediaOn) this.mediaPolicyNotice(session);
+    else if (autoMedia && !mediaLead) this.mediaFallbackNotice(session);
     if (mediaLead && (session.agent !== "grok" || session.model !== "grok-4.7")) {
       const workers = session.agent === "grok" ? session.workers : this.mediaWorkers(session.workspaceId);
       this.applyTeam(session, {
@@ -1496,37 +1524,31 @@ export class Orchestra {
         workerConfigs: normalizeWorkerConfigs(workers, session.workerConfigs),
       });
     }
-    let mediaRoutingUnavailable = false;
     if (this.autoRouter && session.mode === "auto" && session.autoSwitch !== false &&
-      (mediaRequest || session.lastAutoSwitchTurn === undefined || session.turnCount - session.lastAutoSwitchTurn > 2)) {
+      (mediaLead || session.lastAutoSwitchTurn === undefined || session.turnCount - session.lastAutoSwitchTurn > 2)) {
       try {
         const recommendation = await this.autoRouter(session, prompt, controller.signal);
-        if (mediaRequest && (!recommendation || recommendation.agent !== "grok" || !allowed.has("grok"))) {
-          mediaRoutingUnavailable = true;
-        } else if (!controller.signal.aborted && recommendation && recommendation.confidence >= 0.85 &&
-          (recommendation.agent !== session.agent || mediaRequest && (session.model !== "grok-4.7" || session.workers.join(",") !== recommendation.workers.filter((agent) => allowed.has(agent)).join(","))) && allowed.has(recommendation.agent)) {
+        // A media turn already has its Grok lead: only a Grok recommendation may refine its workers.
+        if (!(mediaLead && recommendation?.agent !== "grok") && !controller.signal.aborted && recommendation && recommendation.confidence >= 0.85 &&
+          (recommendation.agent !== session.agent || mediaLead && (session.model !== "grok-4.7" || session.workers.join(",") !== recommendation.workers.filter((agent) => allowed.has(agent)).join(","))) && allowed.has(recommendation.agent)) {
           const previousConfig = this.teamConfig(session);
           const candidate = session.workerConfigs?.find((config) => config.agent === recommendation.agent);
-          const workers = (mediaRequest ? recommendation.workers : session.workers).filter((agent) => allowed.has(agent));
+          const workers = (mediaLead ? recommendation.workers : session.workers).filter((agent) => allowed.has(agent));
           if (!workers.length) throw new Error("허용된 작업자를 한 명 이상 선택하세요.");
           session.lastAutoSwitchTurn = session.turnCount;
           this.applyTeam(session, {
             agent: recommendation.agent,
-            model: mediaRequest ? "grok-4.7" : candidate?.model ?? (recommendation.agent === "grok" ? "grok-4.7" : undefined),
-            reasoningEffort: mediaRequest ? undefined : candidate?.reasoningEffort,
+            model: mediaLead ? "grok-4.7" : candidate?.model ?? (recommendation.agent === "grok" ? "grok-4.7" : undefined),
+            reasoningEffort: mediaLead ? undefined : candidate?.reasoningEffort,
             workers, workerConfigs: normalizeWorkerConfigs(workers, session.workerConfigs),
           }, { auto: true, from: session.agent, to: recommendation.agent, reason: recommendation.reason, previousConfig });
         }
-      } catch { if (mediaRequest) mediaRoutingUnavailable = true; }
-    }
-    if (mediaRequest && session.mode === "auto" && session.autoSwitch !== false && mediaRoutingUnavailable) {
-      this.fail(session, new Error(mediaUnavailableMessage), controller);
-      return session;
+      } catch { /* routing is advisory: the current team runs */ }
     }
     if (controller.signal.aborted) return session;
     const config = this.turnConfig(session);
     const selectedSkills = [...new Set([...config.skills, ...skills, ...mediaSkills(prompt, await enabledPublicSkills(session.cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills, this.accountsOf(session.workspaceId)))])];
-    void this.execute(session, carriedOverPrompt(carried, prompt), selectedSkills, config.systemPrompt, controller, mediaLead || (mediaRequest && session.agent === "grok"))
+    void this.execute(session, `${carriedOverPrompt(carried, prompt)}${mediaRequest && !mediaOn ? MEDIA_OFF_NOTE : ""}`, selectedSkills, config.systemPrompt, controller, mediaLead || (mediaOn && session.agent === "grok"))
       .catch((error) => this.fail(session, error, controller));
     return session;
   }

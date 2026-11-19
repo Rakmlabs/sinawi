@@ -10,9 +10,9 @@ import { accountEnv, runCli, type RunCliOptions } from "./cli.js";
 import { filterEnabledSkills, publicSkills } from "./skills.js";
 import { loadToolSettings, workspaceToolSettings } from "./store.js";
 import type { AgentId, AgentSelection, SkillInfo, WorkspaceAccounts, WorkspacePolicy } from "./types.js";
-import { ACCOUNT_ENV, assertMediaAllowed } from "./workspace-policy.js";
+import { ACCOUNT_ENV } from "./workspace-policy.js";
 import { defaultDataDir, envVar } from "./runtime.js";
-import { imageTextKeywords, imageVisualKeywords, isMediaRule, mediaGenerationRequired, mediaRouteRequired, mediaSkills, mediaUnavailableMessage, stripPreviewAttachments, videoKeywords } from "./media-routing.js";
+import { imageTextKeywords, imageVisualKeywords, isMediaRule, mediaGenerationRequired, mediaRouteRequired, mediaSkills, stripPreviewAttachments, videoKeywords } from "./media-routing.js";
 
 const agentIds = new Set<AgentId>(["codex", "claude", "grok"]);
 const execFileAsync = promisify(execFile);
@@ -622,13 +622,11 @@ export class RoutingService {
       const disabled = workspaceToolSettings(await loadToolSettings(this.options.dataDir), workspaceId).disabledSkills;
       return filterEnabledSkills(await (this.options.skillLoader ?? publicSkills)(cwd), disabled);
     };
-    const media = mediaRouteRequired(prompt, settings.rules);
-    if (media) assertMediaAllowed(policy);
-    if (policy && !policy.mediaGeneration) {
+    // Media is only an optional Grok route: with the policy off or Grok unusable, recommend among the agents there are.
+    const grokUsable = !(availableAgents && !availableAgents.includes("grok") || allowedAgents && !allowedAgents.includes("grok") || settings.modelOptions.grok.authStatus === "unauthenticated");
+    const media = mediaRouteRequired(prompt, settings.rules) && policy?.mediaGeneration !== false && grokUsable;
+    if (!media && (policy && !policy.mediaGeneration || !grokUsable)) {
       settings = { ...settings, rules: settings.rules.filter((rule) => !isMediaRule(rule.id)) };
-    }
-    if (media && (availableAgents && !availableAgents.includes("grok") || allowedAgents && !allowedAgents.includes("grok") || settings.modelOptions.grok.authStatus === "unauthenticated")) {
-      throw new Error(mediaUnavailableMessage);
     }
     if ([...agentIds].some((id) => settings.modelOptions[id].authStatus === "unauthenticated")) {
       availableAgents = (availableAgents ?? [...agentIds]).filter((id) => settings.modelOptions[id].authStatus !== "unauthenticated");

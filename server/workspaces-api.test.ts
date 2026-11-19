@@ -180,7 +180,7 @@ test("session and group move routes accept any existing workspace and reject unk
 test("workspace settings are validated, merged, cloned into new workspaces and enforced by the APIs", async () => {
   const directory = await mkdtemp(join(tmpdir(), "orchestra-ws-settings-"));
   await saveWorkspaceState({ currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: { default: {} } }, directory);
-  const { app, websocket } = server(directory);
+  const { app, orchestra, websocket } = server(directory);
   try {
     const initial = await request(app, "GET", "/api/workspaces");
     assert.deepEqual(initial.body.settings.default, { mediaGeneration: true, computerUse: false, grokMcp: true, blockedTools: [], authAlertTools: [] });
@@ -206,9 +206,14 @@ test("workspace settings are validated, merged, cloned into new workspaces and e
     assert.deepEqual(created.body.settings.media, { ...merged.body.settings.default, mediaGeneration: true });
     assert.equal((await request(app, "POST", "/api/workspaces", { name: "Bad", settings: { grokMcp: "x" } })).status, 400);
 
-    const blocked = await request(app, "POST", "/api/sessions", { workspaceId: "default", cwd: directory, prompt: "광고 영상을 만들어줘", agent: "claude", workers: ["grok"] });
-    assert.equal(blocked.status, 400);
-    assert.equal(blocked.body.code, "workspace-policy");
+    // Media off turns off Grok's media route, never the request: the route hands it to the orchestra (no CLI runs here).
+    const realCreate = orchestra.create.bind(orchestra);
+    const reached: string[] = [];
+    orchestra.create = (async (input: { prompt: string }) => { reached.push(input.prompt); return { id: "x", events: [] }; }) as unknown as typeof orchestra.create;
+    const media = await request(app, "POST", "/api/sessions", { workspaceId: "default", cwd: directory, prompt: "광고 영상을 만들어줘", agent: "claude", workers: ["grok"] });
+    assert.equal(media.status, 201, JSON.stringify(media.body));
+    assert.deepEqual(reached, ["광고 영상을 만들어줘"]);
+    orchestra.create = realCreate;
 
     const allowedAgents = await request(app, "PATCH", "/api/workspaces", { workspaceId: "media", defaults: { allowedAgents: ["claude"] } });
     assert.equal(allowedAgents.status, 200);

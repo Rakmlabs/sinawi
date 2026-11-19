@@ -1,4 +1,4 @@
-import type { SkillInfo } from "./types.js";
+import type { AgentId, SkillInfo } from "./types.js";
 
 export const videoKeywords = [
   "영상", "동영상", "쇼츠", "릴스", "광고 영상", "video", "shorts", "reels", "립싱크", "image to video",
@@ -28,7 +28,38 @@ function includesKeyword(prompt: string, keywords: string[]): boolean {
   });
 }
 
+/** Code-drawn visuals (SVG, HTML/CSS, icons shown in a browser tab) are work for the team, not raster generation. */
+const nonRasterMarkers = /\b(?:svg|html|css|vector|icons?|components?|browser)\b|벡터|아이콘|컴포넌트|브라우저|웹\s*페이지/iu;
+/** Words that ask for a real raster image or video even when code is mentioned too. */
+const rasterMarkers = /\b(?:png|jpe?g|webp|gif|raster|photo(?:real\w*)?|video|shorts|reels|imagine)\b|래스터|실사|사진|영상|쇼츠|릴스|ai\s*이미지/iu;
+
+export function nonRasterRequest(prompt: string): boolean {
+  const text = stripPreviewAttachments(prompt);
+  return nonRasterMarkers.test(text) && !rasterMarkers.test(text);
+}
+
+const agentWords: [AgentId, string][] = [["claude", "claude(?:\\s*code)?|클로드"], ["codex", "codex|코덱스"], ["grok", "grok(?:\\s*build)?|그록"]];
+
+/**
+ * The agent the user named for the work ("클로드로 해", "전부 Claude", "use codex"), if any.
+ * Their choice beats media keywords: only an unnamed or Grok-named media request may move to Grok.
+ */
+export function namedAgent(input: string): AgentId | undefined {
+  const prompt = stripPreviewAttachments(input);
+  for (const [agent, words] of agentWords) {
+    const name = `(?:${words})`;
+    const patterns = [
+      new RegExp(`${name}\\s*(?:으로|로|만|한테|에게|가\\s*(?:해|하|만들|맡)|이\\s*(?:해|하|만들|맡))`, "iu"),
+      new RegExp(`(?:전부|모두|전체)\\s*${name}`, "iu"),
+      new RegExp(`\\b(?:use|using|with|via)\\s+${name}\\b|\\b${name}\\s+only\\b`, "iu"),
+    ];
+    if (patterns.some((pattern) => pattern.test(prompt))) return agent;
+  }
+  return undefined;
+}
+
 export function mediaGenerationRequired(prompt: string): boolean {
+  if (nonRasterRequest(prompt)) return false;
   return includesKeyword(withoutVerificationShots(prompt), mediaGenerationKeywords);
 }
 
@@ -54,6 +85,9 @@ function withoutVerificationShots(prompt: string): string { return prompt.replac
 
 export function mediaRouteRequired(input: string, rules: readonly { id: string; keywords: string[] }[]): boolean {
   const prompt = withoutVerificationShots(stripPreviewAttachments(input));
+  const named = namedAgent(prompt);
+  if (named && named !== "grok") return false;
+  if (nonRasterRequest(prompt)) return false;
   if (/(?:docker\s+image|video\s+player|photo\s+storage\s+metadata|css\s+clip-path)/iu.test(prompt)) return false;
   return mediaGenerationRequired(prompt) || rules.some((rule) => isMediaRule(rule.id) && rule.keywords.some((keyword) => {
     const regex = keyword.trim().match(/^\/(.+)\/([dgimsuvy]*)$/u);
