@@ -1075,8 +1075,10 @@ export class Orchestra {
     const priorAgent = agent;
     const mediaWorker = requiresGrokMedia && role === "worker";
     const grokMediaTask = agent === "grok" && requiresGrokMedia && !mediaWorker;
+    const context = this.quotaFallbackResolver ? await this.quotaFallbackContext(session, signal) : undefined;
+    this.requireCurrentRun(session, signal);
     // Media handoffs belong to an individual worker, never the Grok coordinator.
-    const activeTarget = requiresGrokMedia ? agent : this.activeFallbackTarget(session, agent);
+    const activeTarget = requiresGrokMedia ? agent : this.activeFallbackTarget(session, agent, role, workerId, context);
     const choose = (context: QuotaFallbackContext) => selectQuotaFallback(agent,
       mediaWorker ? this.mediaWorkers(session.workspaceId) : this.allowedAgents(session),
       context.authenticated, context.quotas, mediaWorker ? { [agent]: [agent === "grok" ? "codex" : "grok"] } : context.order, session.workspaceId, context.threshold);
@@ -1092,8 +1094,6 @@ export class Orchestra {
       resumeSessionId = undefined;
       prompt = this.remapFallbackPrompt(prompt, priorAgent, agent, session, role);
     }
-    const context = this.quotaFallbackResolver ? await this.quotaFallbackContext(session, signal) : undefined;
-    this.requireCurrentRun(session, signal);
     const quotaState = exhaustionFromQuota(context?.quotas.find((quota) => quota.agent === agent), context?.threshold);
     if (context?.enabled && quotaState.exhausted) {
       if (grokMediaTask) throw new Error(mediaUnavailableMessage);
@@ -1247,14 +1247,49 @@ export class Orchestra {
     }
   }
 
-  private activeFallbackTarget(session: Session, initial: AgentId): AgentId {
+  /**
+   * Where an earlier quota fallback still sends a run that was asked for `initial` (a delegation or
+   * call captured before the switch). The fallback only holds while it is relevant: a later team
+   * change or handoff, a passed reset, a target the workspace no longer allows (or that is not
+   * logged in), or a worker whose own config names `initial` all end it, and the configured agent runs.
+   */
+  private activeFallbackTarget(session: Session, initial: AgentId, role: SessionEvent["role"], workerId?: string, context?: QuotaFallbackContext): AgentId {
+    const now = Date.now() / 1_000;
+    const allowed = new Set(this.allowedAgents(session));
+    const configured = role === "worker" && workerId
+      ? normalizeWorkerConfigs(session.workers, session.workerConfigs).find((worker) => worker.id === workerId)?.agent
+      : undefined;
     let current = initial;
     for (let step = 0; step < 3; step++) {
-      const handoff = [...session.events].reverse().find((event) => event.metadata?.quotaFallback && !event.metadata.undone && event.metadata.from === current);
-      if (!handoff?.metadata?.to || handoff.metadata.to === current) break;
-      current = handoff.metadata.to;
+      let index = session.events.length - 1;
+      while (index >= 0) {
+        const metadata = session.events[index].metadata;
+        if (metadata?.quotaFallback && !metadata.undone && metadata.from === current) break;
+        index--;
+      }
+      const handoff = index >= 0 ? session.events[index] : undefined;
+      const to = handoff?.metadata?.to;
+      if (!to || to === current) break;
+      const stale = session.events.slice(index + 1).some((event) => event.type === "handoff" && !event.metadata?.quotaFallback)
+        || (handoff.metadata?.resetsAt !== undefined && handoff.metadata.resetsAt <= now)
+        || !allowed.has(to)
+        || Boolean(context && !context.authenticated.includes(to))
+        || configured === current
+        || (role === "worker" && !session.workers.includes(to));
+      if (stale) {
+        if (current === initial) this.noteStaleFallback(session, index, initial, role, workerId);
+        break;
+      }
+      current = to;
     }
     return current;
+  }
+
+  /** Tells the user once per old quota switch that it no longer applies and the chosen agent runs. */
+  private noteStaleFallback(session: Session, handoffIndex: number, agent: AgentId, role: SessionEvent["role"], workerId?: string): void {
+    const text = `한도 전환이 끝나 다시 ${agentNames[agent]}로 실행합니다`;
+    if (session.events.slice(handoffIndex + 1).some((event) => event.type === "status" && event.text === text)) return;
+    this.event(session, agent, "status", text, { role: role === "worker" ? "worker" : "orchestrator", ...(role === "worker" && workerId ? { workerId } : {}) });
   }
 
   private knownReset(context: QuotaFallbackContext, agent: AgentId): number | undefined {

@@ -1143,6 +1143,84 @@ test('expired quota observations allow an explicit return but active exhausted w
   assert.equal(s.agent, 'codex');
 });
 
+// A thread like the one in the bug report: Claude ran out once and Grok took over (an old quotaFallback event).
+function fallbackThread(id: string, options: { resetsAt?: number; later?: boolean; workspaceId?: string; workers?: ("claude" | "grok")[]; workerConfigs?: { agent: "claude" | "grok"; id: string; label?: string }[] } = {}) {
+  const time = new Date().toISOString();
+  const events: Record<string, unknown>[] = [{
+    id: `${id}-quota`, sessionId: id, agent: "grok", type: "handoff", time, text: "Claude 한도 소진 → Grok Build로 전환",
+    metadata: { auto: true, quotaFallback: true, from: "claude", to: "grok", reason: "한도 소진", resetsAt: options.resetsAt ?? Date.now() / 1_000 + 3_600, previousConfig: { agent: "claude", workers: ["claude"] } },
+  }];
+  if (options.later) events.push({ id: `${id}-manual`, sessionId: id, agent: "claude", type: "handoff", time, text: "오케스트라가 Grok Build → Claude로 바뀌었습니다", role: "orchestrator" });
+  return {
+    id, agent: "claude" as const, workers: options.workers ?? ["claude" as const], ...(options.workerConfigs ? { workerConfigs: options.workerConfigs } : {}),
+    title: id, cwd: process.cwd(), status: "done" as const, createdAt: time, workspaceId: options.workspaceId ?? "personal", events,
+  } as unknown as Parameters<Orchestra["restore"]>[0][number];
+}
+
+test("a manual switch back after a quota fallback runs the chosen lead", async () => {
+  const agents: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => { agents.push(options.agent); return { exitCode: 0, finalText: "done" }; });
+  orchestra.restore([fallbackThread("manual-back", { later: true })]);
+  const session = await orchestra.followup("manual-back", "work");
+  await waitUntilSettled(session);
+  assert.deepEqual(agents, ["claude"]);
+  assert.equal(session.status, "done");
+  assert.equal(session.events.filter((event) => event.text === "한도 전환이 끝나 다시 Claude로 실행합니다").length, 1);
+  await orchestra.followup("manual-back", "again");
+  await waitUntilSettled(session);
+  assert.deepEqual(agents, ["claude", "claude"]);
+  assert.equal(session.events.filter((event) => event.text === "한도 전환이 끝나 다시 Claude로 실행합니다").length, 1, "the note is shown once");
+});
+
+test("a quota fallback whose reset has passed runs the configured agent", async () => {
+  const agents: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => { agents.push(options.agent); return { exitCode: 0, finalText: "done" }; });
+  orchestra.restore([fallbackThread("reset-passed", { resetsAt: Date.now() / 1_000 - 60 })]);
+  const session = await orchestra.followup("reset-passed", "work");
+  await waitUntilSettled(session);
+  assert.deepEqual(agents, ["claude"]);
+});
+
+test("a quota fallback to an agent the workspace turned off runs the configured agent without a policy error", async () => {
+  const agents: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => { agents.push(options.agent); return { exitCode: 0, finalText: "done" }; },
+    undefined, undefined, undefined, (id) => id === "company" ? ["claude"] : ["codex", "claude", "grok"]);
+  orchestra.restore([fallbackThread("grok-off", { workspaceId: "company" })]);
+  const session = await orchestra.followup("grok-off", "work");
+  await waitUntilSettled(session);
+  assert.deepEqual(agents, ["claude"]);
+  assert.equal(session.status, "done");
+  assert.equal(session.events.some((event) => /Grok Build 사용이 꺼져/u.test(event.text)), false);
+});
+
+test("a worker configured as Claude is not remapped by an old Claude → Grok fallback", async () => {
+  const calls: RunCliOptions[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => {
+    calls.push(options);
+    if (options.usageContext?.role === "orchestrator" && !options.prompt.includes("위임한 워커들의 결과")) return { exitCode: 0, finalText: '<<DELEGATE to="grok-2">>implement parser<</DELEGATE>>' };
+    return { exitCode: 0, finalText: "done" };
+  });
+  orchestra.restore([fallbackThread("worker-claude", {
+    workers: ["claude", "grok"], workerConfigs: [{ agent: "claude", id: "grok-2", label: "Claude" }, { agent: "grok", id: "grok" }],
+  })]);
+  const session = await orchestra.followup("worker-claude", "work");
+  await waitUntilSettled(session);
+  const workerRuns = calls.filter((call) => call.usageContext?.role === "worker");
+  assert.equal(workerRuns.length, 1);
+  assert.equal(workerRuns[0].agent, "claude");
+  assert.equal(workerRuns[0].usageContext?.workerId, "grok-2");
+});
+
+test("a quota fallback that is still active and allowed still applies", async () => {
+  const agents: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => { agents.push(options.agent); return { exitCode: 0, finalText: "done" }; });
+  orchestra.restore([fallbackThread("still-active")]);
+  const session = await orchestra.followup("still-active", "work");
+  await waitUntilSettled(session);
+  assert.deepEqual(agents, ["grok"]);
+  assert.equal(session.events.some((event) => event.text.startsWith("한도 전환이 끝나")), false);
+});
+
 test("a rejected normalized quota error falls back even when the CLI exits zero", async () => {
   const calls: RunCliOptions[] = [];
   const orchestra = new Orchestra(undefined, async (options) => {
