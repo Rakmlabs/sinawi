@@ -385,6 +385,18 @@ function permissionDenial(data: Record<string, unknown>): string | undefined {
   return explicitlyFailed && mentionsDenial ? command ?? "알 수 없는 명령" : undefined;
 }
 
+/**
+ * Claude's failed `{"type":"result","is_error":true,...}` line keeps its reason in `errors` (or `result`);
+ * without this the whole JSON line was shown as the chat error.
+ */
+function resultErrorText(data: Record<string, any>): string {
+  if (data.type !== "result") return "";
+  const errors = Array.isArray(data.errors) ? data.errors.map(asText).filter(Boolean) : [];
+  if (errors.length) return errors.join("\n");
+  if (typeof data.result === "string" && data.result.trim()) return data.result.trim();
+  return data.subtype === "error_during_execution" ? "CLI 실행 중 오류가 발생했습니다." : "";
+}
+
 export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLine[] {
   const line = rawLine.trim();
   if (!line) return [];
@@ -471,7 +483,7 @@ export function normalizeCliLine(agent: AgentId, rawLine: string): NormalizedLin
   }
 
   if (type.includes("error") || data.is_error) {
-    return [{ type: "error", text: content || clippedJson(data), sessionId }];
+    return [{ type: "error", text: resultErrorText(data) || content || clippedJson(data), sessionId }];
   }
   if (type.includes("tool") || type.includes("function")) {
     const toolCall = data.update?.toolCall ?? data.params?.update?.toolCall ?? data.params?.update;

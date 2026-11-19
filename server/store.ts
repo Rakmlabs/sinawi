@@ -1,7 +1,7 @@
 import { readdir, rename, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isArray, isPlainObject, readJsonFile, writeJsonFile } from "./json-file.js";
-import type { Bot, Group, Steward, StewardSettings, Session, ToolSettings, ToolWorkspaceSettings, WorkspaceDefaults, WorkspaceInfo, WorkspacePolicy, WorkspaceState } from "./types.js";
+import type { AgentId, Bot, Group, ResumeOrigin, Steward, StewardSettings, Session, ToolSettings, ToolWorkspaceSettings, WorkspaceDefaults, WorkspaceInfo, WorkspacePolicy, WorkspaceState } from "./types.js";
 import { defaultWorkspacePolicy, normalizeWorkspacePolicy } from "./workspace-policy.js";
 import { normalizeWorkerConfigs } from "./workers.js";
 import { defaultDataDir } from "./runtime.js";
@@ -352,7 +352,25 @@ export function workerSessionId(session: Session, workerId: string): string | un
   return session.workerSessionIds?.[workerId];
 }
 
-export function setWorkerSessionId(session: Session, workerId: string, id?: string): void {
+export function setWorkerSessionId(session: Session, workerId: string, id?: string, origin?: ResumeOrigin): void {
   if (id) (session.workerSessionIds ??= {})[workerId] = id;
   else if (session.workerSessionIds) delete session.workerSessionIds[workerId];
+  if (id && origin) (session.workerSessionOrigins ??= {})[workerId] = origin;
+  else if (session.workerSessionOrigins) delete session.workerSessionOrigins[workerId];
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-([0-9a-f])[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * Whether a resume id may be handed to `agent` (under `account`). With a recorded origin the agent
+ * and account must match. A legacy id (no origin) is judged by its shape: Claude Code session ids are
+ * random UUIDv4, Grok Build and Codex ids are time-ordered UUIDv7, so a UUID of the other kind is foreign.
+ * `movedAway` (the lead was switched off this agent at some point) makes a legacy id untrusted outright.
+ */
+export function resumeIdFits(id: string, agent: AgentId, account: string | undefined, origin?: ResumeOrigin, movedAway = false): boolean {
+  if (origin) return origin.agent === agent && (origin.account ?? "") === (account ?? "");
+  if (movedAway) return false;
+  const version = UUID.exec(id)?.[1];
+  if (!version) return true;
+  return agent === "claude" ? version === "4" : version !== "4";
 }

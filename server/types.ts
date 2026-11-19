@@ -70,6 +70,12 @@ export interface PendingInstruction {
   createdAt: string;
 }
 
+/** The CLI (and account config dir, if the workspace has its own) a resume id belongs to. */
+export interface ResumeOrigin {
+  agent: AgentId;
+  account?: string;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -84,7 +90,12 @@ export interface Session {
   createdAt: string;
   endedAt?: string;
   cliSessionId?: string;
+  /** Which CLI produced `cliSessionId`, and under which account dir: a resume id is only valid there. Unset on older sessions. */
+  cliSessionAgent?: AgentId;
+  cliSessionAccount?: string;
   workerSessionIds?: Record<string, string>;
+  /** Where each `workerSessionIds` entry came from (same rule as `cliSessionAgent`). Missing entries are legacy. */
+  workerSessionOrigins?: Record<string, ResumeOrigin>;
   events: SessionEvent[];
   groupId?: string;
   skills?: string[];

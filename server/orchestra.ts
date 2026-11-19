@@ -6,14 +6,14 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { killSessionProcessGroups, runCli } from "./cli.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
-import { workerSessionId, setWorkerSessionId, loadToolSettings, workspaceToolSettings } from "./store.js";
+import { workerSessionId, setWorkerSessionId, resumeIdFits, loadToolSettings, workspaceToolSettings } from "./store.js";
 import { clearSkillsCache, enabledPublicSkills, filterEnabledSkills, formatSkillInstructions, loadSkills, resolveSkillPrompt, scanSkillRoot, type SkillRecord } from "./skills.js";
 import { applySchedulePatch, createSchedule, describeSchedule, dueSchedules, SCHEDULE_LIMIT, type Schedule, type ScheduleInput } from "./schedules.js";
 import { LEAD_TOOLS_GUIDE, LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
 import { capabilityCatalog } from "./agent-capabilities.js";
 import { workerInvocationWarnings } from "./worker-invocation.js";
 import { briefSkillNames, isHeadlessClaudeDesign, skillCatalog, workerSkillInstructions } from "./skill-routing.js";
-import type { AgentId, AgentSelection, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
+import type { AgentId, AgentSelection, ResumeOrigin, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
@@ -115,6 +115,13 @@ function clearChangedWorkerSessions(session: Session, before: AgentSelection[], 
     }
   }
 }
+
+/** The CLI could not find the conversation it was asked to resume (Claude, Grok Build, Codex wordings). */
+const MISSING_RESUME = /No conversation found with session ID|No saved copy of session|(?:session|conversation|thread)\b[^\n]{0,80}\bnot found|no rollout found/iu;
+export function missingResumeText(text: string): boolean {
+  return MISSING_RESUME.test(text);
+}
+const resumeRetryFailed = (reason: string) => `이전 CLI 대화를 이어받지 못해 새 대화로 다시 시도했지만 실패했습니다: ${reason.replace(/\s+/gu, " ").trim().slice(0, 300) || "원인을 알 수 없습니다."}`;
 
 export interface QuotaFallbackContext {
   enabled: boolean;
@@ -550,6 +557,7 @@ export class Orchestra {
       mode: input.mode ?? "manual", autoSwitch: input.autoSwitch ?? true, turnCount: empty ? 0 : 1,
       ...(input.permissionMode ? { permissionMode: input.permissionMode } : {}),
       status: empty ? "done" : "running", createdAt: new Date().toISOString(), events: [],
+      // An imported id's account is unknown: it stays unrecorded and is judged like a legacy id (resumeIdFits).
       cliSessionId: agent === input.agent ? input.resumeSessionId : undefined,
       groupId: input.groupId,
       workspaceId,
@@ -625,13 +633,17 @@ export class Orchestra {
     const workers = normalizeWorkerConfigs(session.workers, session.workerConfigs);
     session.workerConfigs = workers;
     const workerNames = workerRoster(workers);
-    const workerContext = workers.map((worker) => `${worker.id}: ${worker.sessionMode !== "new" && workerSessionId(session, worker.id!) ? "이전 작업의 맥락을 가진 세션을 이어서 사용합니다. 기존 설명을 반복하지 않고 후속 작업을 지시할 수 있습니다." : "새 세션으로 시작합니다. 필요한 맥락을 전달하세요."}`).join("\n");
+    const workerContext = workers.map((worker) => `${worker.id}: ${worker.sessionMode !== "new" && this.workerResumeId(session, worker) ? "이전 작업의 맥락을 가진 세션을 이어서 사용합니다. 기존 설명을 반복하지 않고 후속 작업을 지시할 수 있습니다." : "새 세션으로 시작합니다. 필요한 맥락을 전달하세요."}`).join("\n");
     const exampleWorker = workers[0]?.id ?? "claude";
     const worktreeNotice = await this.worktreeNotice(session);
     const orchestration = `당신은 Sinawi의 상위 명령자입니다. 사용 가능한 워커: ${workerNames}. 워커에게 일을 맡길 때는 정확히 <<DELEGATE to="${exampleWorker}">>구체적인 작업<</DELEGATE>> 형식으로 출력하세요. 특정 모델이 필요하면 여는 태그에 model="모델명"을, 디자인 작업이면 kind="design"을 추가하세요. 같은 에이전트 워커가 여러 명이면 반드시 워커 ID로 지정하세요. 서로 다른 워커에게 준 위임은 동시에 실행되고, 같은 워커에게 준 위임은 그 워커 세션에서 차례로 실행됩니다. 독립적인 일을 병렬로 돌리려면 다른 워커에게 나누세요. 워커 결과를 받은 뒤 검증하고 사용자에게 최종 답을 작성하세요.\n\n${ORCHESTRATOR_RULES}\n\n${permissionModeRules(this.permissionModeOf(session))}\n\n${cliNotes(session.agent, "orchestrator")}${worktreeNotice}\n\n워커 세션 상태:\n${workerContext}${capabilityCatalog(this.allowedAgents(session), workers.map((worker) => worker.agent))}${skillCatalog(installedSkills)}${skillPreferences}`;
     const planningContext = plan ? `\n\n계획 전문 에이전트가 작성한 실행 계획:\n${plan}` : "";
     const handoffContext = session.handoffContext ? `\n\n이전 오케스트라의 대화 요약:\n${session.handoffContext}` : "";
-    const resumeBrief = session.cliSessionId ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}` : "";
+    const hadResume = Boolean(session.cliSessionId);
+    const leadResume = this.leadResumeId(session);
+    // A dropped foreign id: the fresh CLI session gets the conversation instead.
+    const resumeBrief = leadResume ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}`
+      : hadResume && !session.handoffContext ? `\n\n이전 대화 요약:\n${this.conversationSummary(session, session.agent)}` : "";
     const planMode = this.permissionModeOf(session) === "plan";
     const planNotice = planMode ? `\n\n${PLAN_MODE_NOTICE}${await repoSnapshot(session.cwd).then((facts) => facts ? `\n\n${facts}` : "").catch(() => "")}` : "";
     // A chat the user talks to may split a big request into goal chats; a goal chat never splits again.
@@ -647,10 +659,10 @@ export class Orchestra {
     // Tag-based leads need the same per-turn loop detection as stewards with MCP tools.
     if (!planMode) this.leadTurns.set(session.id, turn);
     const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${stewardContext}${toolsGuide}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
-    const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
+    const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, leadResume, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
-    if (first.sessionId) session.cliSessionId = first.sessionId;
-    if (first.exitCode !== 0) throw new Error(`${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
+    this.rememberLeadSession(session, first);
+    if (first.exitCode !== 0) throw new Error(first.resumeRetryFailed ? resumeRetryFailed(first.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
     this.noteChecklist(session, first.finalText);
     delete session.handoffContext;
     // Plan mode: the lead's read-only answer is the plan; nothing is handed to workers.
@@ -769,8 +781,8 @@ export class Orchestra {
         this.event(session, session.agent, "warning", `검증 실패 후 총괄이 재위임하지 않고 ${selfWork.length ? `직접 작업했습니다 (${selfWork.length}건: ${selfWork.slice(0, 3).map((event) => event.text.slice(0, 60)).join(", ")})` : "마무리하려 합니다"}.`, { role: "orchestrator", metadata: { phase: "self-work", round } });
         if (strict) {
           // Enforce once: Grok orchestrators must hand the failed work back to a worker.
-          review = await this.runAgent(session, session.agent, `방금 응답에 <<DELEGATE>>가 없습니다. 실패한 작업을 다른 접근으로 워커에게 재위임하세요(6개 제목 사용). 정말 재위임이 불가능하면 그 이유를 한 줄로 쓰고 끝내세요.`, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
-          if (review.sessionId) session.cliSessionId = review.sessionId;
+          review = await this.runAgent(session, session.agent, `방금 응답에 <<DELEGATE>>가 없습니다. 실패한 작업을 다른 접근으로 워커에게 재위임하세요(6개 제목 사용). 정말 재위임이 불가능하면 그 이유를 한 줄로 쓰고 끝내세요.`, session.model, session.reasoningEffort, this.leadResumeId(session), controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
+          this.rememberLeadSession(session, review);
           if (controller.signal.aborted) return this.finishStopped(session, controller);
           const enforcedResolution = review.exitCode === 0 ? await resolveRequests(review.finalText) : { resolved: [], failures: [] };
           next = enforcedResolution.resolved;
@@ -814,7 +826,7 @@ export class Orchestra {
       : session.goal ? [...session.events].reverse().find((event) => event.agent === "user" && event.type === "message" && !appMade(event.text))?.text ?? "" : "";
     const brief = ensureBrief(task, userWords);
     const workerId = worker.id!;
-    const resumeIdForBrief = worker.sessionMode === "new" ? undefined : workerSessionId(session, workerId);
+    const resumeIdForBrief = worker.sessionMode === "new" ? undefined : this.workerResumeId(session, worker);
     const workerResume = resumeIdForBrief ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events, workerId)}` : "";
     const label = workerLabel(worker);
     const worktree = await this.prepareWorktree(session, workerId, label);
@@ -847,7 +859,8 @@ export class Orchestra {
       } catch (error) {
         if (!resumeId || controller.signal.aborted || isQuotaExhaustion(error) || guard.stall) throw error;
       }
-      if (resumeId && !controller.signal.aborted && !guard.stall && (!result || result.exitCode !== 0 && !result.quotaFailure)) {
+      // A missing conversation was already retried fresh inside runAgentOnce.
+      if (resumeId && !controller.signal.aborted && !guard.stall && (!result || result.exitCode !== 0 && !result.quotaFailure && !result.resumeRetried)) {
         setWorkerSessionId(session, workerId);
         this.event(session, worker.agent, "status", "이전 세션에 연결하지 못해 새 세션으로 다시 시작합니다.", { role: "worker", workerId, workerLabel: label, delegationId });
         result = await runWorker();
@@ -860,13 +873,13 @@ export class Orchestra {
     }
     if (controller.signal.aborted) return STOPPED;
     if (guard.stall) {
-      if (result?.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
+      if (result?.sessionId) setWorkerSessionId(session, workerId, result.sessionId, this.resumeOrigin(session, result.agent));
       const partial = result?.finalText?.trim();
       const out = `[${label} 결과 — 앱이 정체를 감지해 중단함]\n원인: ${guard.stall.reason}\n최근 기록:\n${guard.stall.evidence.map((line) => `- ${line}`).join("\n")}${partial ? `\n중단 전 마지막 응답:\n${partial.slice(-1_500)}` : ""}\n→ 같은 방법을 반복하지 말고 원인을 진단해 다른 접근으로 다시 계획하세요.`;
       return out;
     }
     if (!result) throw new Error("작업자 세션을 시작할 수 없습니다.");
-    if (result.sessionId) setWorkerSessionId(session, workerId, result.sessionId);
+    if (result.sessionId && !result.resumeMissing) setWorkerSessionId(session, workerId, result.sessionId, this.resumeOrigin(session, result.agent));
     const invocationWarnings = workerInvocationWarnings({ agent: result.agent, attachedSkills, brief: `${task}\n${extra}`, skills: `${skills}\n${extra.includes("선택된 스킬 지침:") ? extra : ""}`, tools: result.toolText, output: result.outputText });
     for (const warning of invocationWarnings) this.event(session, result.agent, "warning", warning, { role: "worker", workerId, workerLabel: label, delegationId });
     const invocationNote = invocationWarnings.length ? `\n\n기능 실행 확인(최선 노력):\n${invocationWarnings.map((warning) => `- ${warning}`).join("\n")}` : "";
@@ -1138,7 +1151,24 @@ export class Orchestra {
     return retryExhausted ? { ...retried, exitCode: retried.exitCode || 1, quotaFailure: true } : retried;
   }
 
+  /**
+   * One run, plus one self-healing retry: when the CLI cannot find the conversation it was told to
+   * resume (expired, another provider's or another account's id), the stored id is dropped and the
+   * same prompt runs as a fresh session with the conversation summary attached.
+   */
   private async runAgentOnce(session: Session, agent: AgentId, prompt: string, model: string | undefined, reasoningEffort: string | undefined, resumeSessionId: string | undefined, signal: AbortSignal, trackPrimarySession = true, readOnly = false, role: SessionEvent["role"] = "orchestrator", delegationId?: string, workerId?: string, workerName?: string) {
+    const first = await this.runAgentAttempt(session, agent, prompt, model, reasoningEffort, resumeSessionId, signal, trackPrimarySession, readOnly, role, delegationId, workerId, workerName);
+    if (!resumeSessionId || !first.resumeMissing || signal.aborted || !this.isCurrentRun(session, signal)) return first;
+    if (role === "worker" && workerId) setWorkerSessionId(session, workerId);
+    else if (trackPrimarySession) this.forgetLeadSession(session);
+    this.event(session, agent, "status", "이전 CLI 대화를 찾지 못해 새 대화로 다시 시작합니다.", { role, workerId, workerLabel: workerName, delegationId });
+    // A worker prompt that resumed already carries its compact handoff; a lead gets the conversation.
+    const retryPrompt = role === "worker" ? prompt : `${prompt}\n\n이전 대화 요약:\n${this.conversationSummary(session, agent)}`;
+    const retried = await this.runAgentAttempt(session, agent, retryPrompt, model, reasoningEffort, undefined, signal, trackPrimarySession, readOnly, role, delegationId, workerId, workerName, true);
+    return { ...retried, resumeRetried: true, resumeRetryFailed: retried.exitCode !== 0 && !signal.aborted };
+  }
+
+  private async runAgentAttempt(session: Session, agent: AgentId, prompt: string, model: string | undefined, reasoningEffort: string | undefined, resumeSessionId: string | undefined, signal: AbortSignal, trackPrimarySession = true, readOnly = false, role: SessionEvent["role"] = "orchestrator", delegationId?: string, workerId?: string, workerName?: string, quietErrors = false) {
     this.requireCurrentRun(session, signal);
     this.assertPolicy(session.workspaceId, [agent]);
     const policy = this.workspacePolicyResolver?.(session.workspaceId);
@@ -1157,6 +1187,9 @@ export class Orchestra {
     const cliOutput: string[] = [];
     const toolOutput: string[] = [];
     let quotaErrorEvidence = false;
+    // The CLI said the resumed conversation does not exist: runAgentOnce retries fresh, so the line is not shown.
+    let resumeMissing = false;
+    let lastError = "";
     const disabledMcp = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledMcp;
     this.requireCurrentRun(session, signal);
     const blockedMcp = disabledMcp.filter((key) => key.startsWith(`${agent}:`))
@@ -1194,6 +1227,12 @@ export class Orchestra {
         if (this.controllers.get(session.id)?.signal !== signal) return;
         if (line.type !== "message" && isPureNoise(line.text)) return;
         if (line.type !== "message") line = { ...line, text: stripToolNoise(line.text) };
+        if (line.type === "error") {
+          lastError = line.text;
+          if (resumeSessionId && missingResumeText(line.text)) { resumeMissing = true; return; }
+          // The retry after a missing conversation reports its failure once, as the turn's error.
+          if (quietErrors) { cliOutput.push(line.text); output.push(line.text); if (isQuotaExhaustion(line.text)) quotaErrorEvidence = true; return; }
+        }
         if (leadDetector && !leadStall) {
           // Native Read calls use a label rather than the shell command label.
           leadStall = leadDetector.observe({ ...line, text: line.text.replace(/^파일 읽기:\s*/u, "명령: read ") });
@@ -1210,8 +1249,8 @@ export class Orchestra {
         if (line.type === "tool" || line.type === "command") toolOutput.push(line.text);
         if (line.type !== "tool" && line.type !== "command") cliOutput.push(line.text);
         if (line.type === "error" && isQuotaExhaustion(line.text)) quotaErrorEvidence = true;
-        if (trackPrimarySession && line.sessionId && agent === session.agent) session.cliSessionId = line.sessionId;
-        if (role === "worker" && workerId && line.sessionId) setWorkerSessionId(session, workerId, line.sessionId);
+        if (trackPrimarySession && line.sessionId && agent === session.agent) this.rememberLeadSession(session, { agent, sessionId: line.sessionId });
+        if (role === "worker" && workerId && line.sessionId) setWorkerSessionId(session, workerId, line.sessionId, this.resumeOrigin(session, agent));
         if (line.type === "message" && !line.appendFinal) {
           if (line.text === lastCompleteMessage) return;
           lastCompleteMessage = line.text;
@@ -1231,7 +1270,49 @@ export class Orchestra {
     if (leadStall) throw new Error(`총괄 검증 반복을 멈췄습니다: ${leadStall.reason} 확인된 증거와 남은 문제를 사용자에게 보고하고, 다른 진단·방법으로 이어가거나 병합 여부를 물어보세요.`);
     // A run the stall guard stopped ended because the app killed it, not because a quota ran out.
     const stoppedByApp = Boolean(guard?.kill.signal.aborted);
-    return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false };
+    return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false, resumeMissing, lastError, resumeRetried: false, resumeRetryFailed: false };
+  }
+
+  /** The account config dir a run of `agent` uses in this session's workspace, with the agent: where its resume ids live. */
+  private resumeOrigin(session: Session, agent: AgentId): ResumeOrigin {
+    const account = accountDirFor(this.workspacePolicyResolver?.(session.workspaceId), agent);
+    return account ? { agent, account } : { agent };
+  }
+
+  /** The lead's resume id if it belongs to the lead's current CLI and account; a foreign one is dropped. */
+  private leadResumeId(session: Session): string | undefined {
+    const id = session.cliSessionId;
+    if (!id) return;
+    const origin = session.cliSessionAgent ? { agent: session.cliSessionAgent, ...(session.cliSessionAccount ? { account: session.cliSessionAccount } : {}) } : undefined;
+    // Before ids were tagged, a stale quota fallback could store another CLI's id here after the lead had
+    // been moved off its agent: once that happened, an untagged id is not trusted.
+    const movedAway = !origin && session.events.some((event) => event.metadata?.quotaFallback && event.metadata.from === session.agent);
+    if (resumeIdFits(id, session.agent, this.resumeOrigin(session, session.agent).account, origin, movedAway)) return id;
+    this.forgetLeadSession(session);
+    return undefined;
+  }
+
+  /** A worker's resume id if it belongs to the worker's current CLI and account. */
+  private workerResumeId(session: Session, worker: AgentSelection): string | undefined {
+    const id = workerSessionId(session, worker.id!);
+    if (!id) return;
+    return resumeIdFits(id, worker.agent, this.resumeOrigin(session, worker.agent).account, session.workerSessionOrigins?.[worker.id!]) ? id : undefined;
+  }
+
+  /** Stores a run's session id as the lead's resume id only when the lead's own CLI produced it. */
+  private rememberLeadSession(session: Session, run: { agent: AgentId; sessionId?: string; resumeMissing?: boolean }): void {
+    if (!run.sessionId || run.resumeMissing || run.agent !== session.agent) return;
+    const origin = this.resumeOrigin(session, run.agent);
+    session.cliSessionId = run.sessionId;
+    session.cliSessionAgent = origin.agent;
+    if (origin.account) session.cliSessionAccount = origin.account;
+    else delete session.cliSessionAccount;
+  }
+
+  private forgetLeadSession(session: Session): void {
+    delete session.cliSessionId;
+    delete session.cliSessionAgent;
+    delete session.cliSessionAccount;
   }
 
   private async quotaFallbackContext(session: Session, signal?: AbortSignal): Promise<QuotaFallbackContext | undefined> {
@@ -3047,12 +3128,13 @@ export class Orchestra {
   private async executeCommander(session: Session, userPrompt: string, systemPrompt: string, controller: AbortController) {
     const state = session.commander!;
     const board = commanderBoard(session, (id) => this.sessions.get(id));
-    const handoff = session.handoffContext ? `\n\n이전 대화 요약:\n${session.handoffContext}` : session.cliSessionId ? "" : `\n\n이전 대화 요약:\n${this.conversationSummary(session, session.agent)}`;
+    const resume = this.leadResumeId(session);
+    const handoff = session.handoffContext ? `\n\n이전 대화 요약:\n${session.handoffContext}` : resume ? "" : `\n\n이전 대화 요약:\n${this.conversationSummary(session, session.agent)}`;
     const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${COMMANDER_RULES}\n\n${cliNotes(session.agent, "orchestrator")}${board ? `\n\n${board}` : ""}${handoff}\n\n사용자 요청:\n${userPrompt}`;
-    const result = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, session.cliSessionId, controller.signal, true, true, "orchestrator");
+    const result = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, resume, controller.signal, true, true, "orchestrator");
     if (controller.signal.aborted) return this.finishStopped(session, controller);
-    if (result.sessionId) session.cliSessionId = result.sessionId;
-    if (result.exitCode !== 0) throw new Error(`${agentNames[session.agent]} CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`);
+    this.rememberLeadSession(session, result);
+    if (result.exitCode !== 0) throw new Error(result.resumeRetryFailed ? resumeRetryFailed(result.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`);
     delete session.handoffContext;
     state.reporting = false;
     this.addGoals(session, result.finalText);
