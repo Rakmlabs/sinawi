@@ -306,7 +306,7 @@ A port other than 3001 runs **isolated**: it does not watch the browser, compute
 - It can change the files the server runs from (the app bundle, the copied server in the app's data folder, the LaunchAgent plist) and restart it.
 - On a build without the hardened runtime (a local bundle made without a Developer ID, a fork) it can start the real app binary with `DYLD_INSERT_LIBRARIES` or attach a debugger as the same user, and read the key inside a process that passes the check. The released app is signed with the hardened runtime, which closes this path.
 - In dev mode it can read the key from the dev link in a terminal's scrollback, and from the history of the browser that first opened that link (the address bar drops it; the history keeps it).
-- The key socket starts the app binary for each connection, so it runs at most four checks at once and closes further connections unanswered.
+- The key socket starts the app binary for each connection, so it runs at most four checks at once and closes further connections unanswered. The app window asks again a few times (within about 3 seconds); a program that keeps flooding the socket for longer can still keep the window from getting its key.
 - Keeping an agent out of all of that needs the agent's process confined: a macOS sandbox profile or a separate user account for agent runs. Sinawi does not do that today, so treat agents in *auto* mode as programs running as you.
 
 | Path | What it holds |
