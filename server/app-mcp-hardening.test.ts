@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { APP_TOOLS, checkedArgs, handleToolMcp, injectRequest, MAX_TOOL_RESULT_CHARS, withoutLaunchDetails, type ToolContext } from "./app-tools.js";
 import { appMcpTokenPath, ensureAppMcpToken, rotateAppMcpToken } from "./app-mcp.js";
-import { ApprovalStore } from "./app-approvals.js";
+import { APPROVAL_TTL_MS, ApprovalStore } from "./app-approvals.js";
 import { createServer } from "./server.js";
 import { notesPath, stewardDir } from "./steward.js";
 import type { Session } from "./types.js";
@@ -85,6 +85,16 @@ test("an approval is on disk as decided before its tool runs, so a restart canno
   assert.equal(onDisk, "approved");
   const restarted = new ApprovalStore(directory);
   await assert.rejects(restarted.decide(item.id, true, async () => assert.fail("must not run again")), /이미 처리된/u);
+});
+
+test("an approval older than a day is not run when approved", async (t) => {
+  const directory = await tempDir(t, "sinawi-approvals-expired-");
+  const store = new ApprovalStore(directory);
+  const item = await store.create({ tool: "delete_session", args: { session_id: "s" }, summary: "삭제", source: "external", workspaceId: "default" });
+  item.createdAt = new Date(Date.now() - APPROVAL_TTL_MS - 1000).toISOString();
+  const decided = await store.decide(item.id, true, async () => assert.fail("an expired approval must not run"));
+  assert.equal(decided.status, "failed");
+  assert.match(decided.error ?? "", /24시간/u);
 });
 
 test("two approvals of one request at once run the tool once", async (t) => {
