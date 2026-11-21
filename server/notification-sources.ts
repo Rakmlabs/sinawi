@@ -14,9 +14,12 @@ export function authNotification(workspaceId: WorkspaceId, agent: AgentId, statu
   return { workspaceId, key: `auth:${agent}`, type: "auth", title: `${agent === "grok" ? "Grok" : agent === "claude" ? "Claude" : "Codex"} 로그인 필요`, body: detail || "CLI에서 로그인한 뒤 인증 상태를 다시 확인합니다.", action: { label: "터미널에서 로그인", command: accountDir ? accountLoginCommand(agent, accountDir) : agent === "grok" ? "grok" : agent === "claude" ? "claude auth login" : "codex login" } };
 }
 
-export function sessionNotifications(session: Session, accounts?: WorkspacePolicy["accounts"]): NotificationInput[] {
+/** `once`: what makes this occurrence new (the server notifies once per value); `key` is the notification it updates. */
+export type SessionNote = NotificationInput & { once?: string };
+
+export function sessionNotifications(session: Session, accounts?: WorkspacePolicy["accounts"]): SessionNote[] {
   const action = { label: "채팅으로 이동", sessionId: session.id };
-  const notes: NotificationInput[] = [];
+  const notes: SessionNote[] = [];
   const seenMcp = new Set<string>();
   let requestId = "initial";
   for (const event of session.events) {
@@ -66,11 +69,20 @@ export function sessionNotifications(session: Session, accounts?: WorkspacePolic
       });
     }
   }
-  // A project lead reads like a message from it: its name and what it said last.
-  if (session.status === "done" && session.steward) {
+  // A project lead reads like a message from it: its name and what it said last. One notification per
+  // lead, updated by each finished turn of any of its chats (M4: an outside AI opening many chats
+  // does not pile them up). A chat that never ran a turn (an empty chat just opened) says nothing.
+  const ranTurn = session.events.some((event) => event.agent === "user" && event.type === "message");
+  // Only a turn that just ended: an old chat re-sent later (a rename, a restart) must not take over the lead's notification.
+  const endedAt = Date.parse(session.endedAt ?? "");
+  const justEnded = Number.isNaN(endedAt) || Date.now() - endedAt < 10 * 60_000;
+  if (session.status === "done" && session.steward && ranTurn) {
+    if (!justEnded) return notes;
     const said = [...session.events].reverse().find((event) => event.type === "message" && event.role === "orchestrator");
     const body = stripLeadBlocks(said?.text ?? "").replace(/\s+/gu, " ").slice(0, 300) || session.title;
-    notes.push({ workspaceId: session.workspaceId, key: `lead:${session.id}:${session.endedAt ?? session.turnCount ?? 0}`, type: "lead", title: `「${stewardName(session)}」 담당`, body, action });
+    notes.push({ workspaceId: session.workspaceId, key: `lead:${session.steward.id ?? session.id}`, once: `lead:${session.id}:${session.endedAt ?? session.turnCount ?? 0}`, type: "lead", title: `「${stewardName(session)}」 담당 · ${session.title}`.slice(0, 200), body, action });
+  } else if (session.status === "done" && session.steward) {
+    // A lead's chat that never ran a turn: nothing to tell.
   } else if (session.status === "done") notes.push({ workspaceId: session.workspaceId, key: `finished:${session.id}:${session.endedAt ?? session.turnCount ?? 0}`, type: "run-finished", title: "작업 완료", body: session.title, action });
   return notes;
 }

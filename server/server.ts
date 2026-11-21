@@ -447,10 +447,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const observedEvents = new Set<string>();
   const completedRuns = new Set<string>();
   const broadcast = (session: Session, publishOptions?: { full?: boolean }) => {
-    for (const note of sessionNotifications(session, workspaceState.settings?.[session.workspaceId]?.accounts)) {
+    for (const { once, ...note } of sessionNotifications(session, workspaceState.settings?.[session.workspaceId]?.accounts)) {
       const seen = note.type === "run-finished" || note.type === "lead" ? completedRuns : observedEvents;
-      if (note.key && !seen.has(note.key)) {
-        seen.add(note.key); notify(note);
+      const occurrence = once ?? note.key;
+      if (occurrence && !seen.has(occurrence)) {
+        seen.add(occurrence); notify(note);
         if (seen.size > 10000) seen.delete(seen.values().next().value!);
       }
     }

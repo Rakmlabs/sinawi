@@ -92,13 +92,27 @@ test("quoted failures and transient CLI errors do not notify while work continue
 test("a project lead's finished turn reads as a message from it", () => {
   const session = {
     id: "lead1", title: "첫 일", workspaceId: "personal", status: "done", endedAt: "t1", agent: "claude", cwd: "/w/api",
-    steward: { turns: 1, since: "", name: "api" },
-    events: [{ id: "1", time: "", type: "message", role: "orchestrator", agent: "claude", text: "포트는 4000입니다.\n<<NOTES>>\n- x\n<</NOTES>>" }],
+    steward: { turns: 1, since: "", name: "api", id: "lead1" },
+    events: [{ id: "0", time: "", type: "message", agent: "user", text: "포트 알려 줘" }, { id: "1", time: "", type: "message", role: "orchestrator", agent: "claude", text: "포트는 4000입니다.\n<<NOTES>>\n- x\n<</NOTES>>" }],
   } as unknown as Session;
   const [note] = sessionNotifications(session);
   assert.equal(note.type, "lead");
-  assert.equal(note.title, "「api」 담당");
+  assert.equal(note.title, "「api」 담당 · 첫 일");
   assert.equal(note.body, "포트는 4000입니다.");
+});
+
+test("a lead's chats share one notification, and an empty chat or an old turn says nothing (M4)", () => {
+  const chat = (id: string, events: unknown[], endedAt = new Date().toISOString()) => ({
+    id, title: id, workspaceId: "personal", status: "done", endedAt, agent: "claude", cwd: "/w/api",
+    steward: { turns: 1, since: "", name: "api", id: "lead1" }, events,
+  }) as unknown as Session;
+  const turn = [{ id: "u", time: "", type: "message", agent: "user", text: "일" }, { id: "a", time: "", type: "message", role: "orchestrator", agent: "claude", text: "끝" }];
+  const [one] = sessionNotifications(chat("c1", turn));
+  const [two] = sessionNotifications(chat("c2", turn));
+  assert.equal(one.key, two.key, "one notification per lead, updated");
+  assert.notEqual(one.once, two.once, "each finished turn still counts once");
+  assert.deepEqual(sessionNotifications(chat("empty", [])), [], "an empty chat an outside AI just opened");
+  assert.deepEqual(sessionNotifications(chat("old", turn, "2020-01-01T00:00:00.000Z")), [], "an old turn re-sent after a restart");
 });
 
 
