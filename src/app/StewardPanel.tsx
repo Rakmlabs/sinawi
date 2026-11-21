@@ -10,6 +10,7 @@ import { SkillPicker } from "./SkillPicker";
 import { StewardSchedules } from "./StewardSchedules";
 import { names } from "./labels";
 import { t, type MessageKey } from "../i18n";
+import { LEAD_SETTINGS_EVENT } from "./LeadTabs";
 
 type StewardInfo = {
   notes: string; transcript?: string; turns: number; rolloverAt: number;
@@ -71,6 +72,11 @@ export function StewardPanel({ session, onChange }: { session: Session; onChange
     }).catch(() => undefined);
     return () => { live = false; };
   }, [session.id, Boolean(session.steward), turnEnded, pendingAt, session.steward?.name, session.steward?.acceptWork, reload]);
+  useEffect(() => {
+    const open = (event: Event) => { if ((event as CustomEvent<{ sessionId?: string }>).detail?.sessionId === session.id) setSettingsOpen(true); };
+    window.addEventListener(LEAD_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(LEAD_SETTINGS_EVENT, open);
+  }, [session.id]);
   useEffect(() => {
     if (!settingsOpen) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : settingsButton.current;
@@ -138,13 +144,8 @@ export function StewardPanel({ session, onChange }: { session: Session; onChange
   const setWorker = (index: number, patch: Partial<AgentSelection>) => edit({ workers: draft!.workers.map((worker, at) => at === index ? { ...worker, ...patch } : worker) });
   const agentOptions = AGENTS.map((agent) => ({ value: agent, label: names[agent], icon: <AgentMark agent={agent} size="small" /> }));
   return <>
-    <header className="steward-bar">
-      <span className="steward-identity"><UserCheck size={14} aria-hidden="true" /><strong>{info?.name ?? t("steward.badge")}</strong></span>
-      <span className={`steward-state ${session.status}`}><i aria-hidden="true" />{t(`status.${session.status}` as MessageKey)}</span>
-      {status && !settingsOpen && <span className="steward-feedback" role="status">{status}</span>}
-      <button ref={settingsButton} type="button" className="button light steward-settings-trigger" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-controls={settingsId}
-        onClick={() => setSettingsOpen(true)}><Settings2 size={13} aria-hidden="true" />{t("steward.more")}</button>
-    </header>
+    {/* The lead's name, state and settings button live in the tab bar above the chat (LeadTabs). */}
+    {status && !settingsOpen && <p className="steward-feedback" role="status">{status}</p>}
     {pending && <div className="steward-merge" role="group" aria-label={t("steward.pendingMerge", { count: pending.branches.length })}>
       <GitMerge size={14} aria-hidden="true" />
       <div><strong>{t("steward.pendingMerge", { count: pending.branches.length })}</strong><span title={pending.branches.map((item) => item.branch).join(", ")}>{pending.branches.map((item) => item.workerLabel || item.branch).join(", ")}</span></div>

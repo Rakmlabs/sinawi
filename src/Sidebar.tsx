@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
 import { delegationWorkers } from "./conversation";
 import type { Group, Session, SessionStatus, Steward, WorkspaceId } from "../server/types";
-import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, RotateCw, Search, Settings2, SquarePen, UserCheck, WandSparkles, Wrench, X } from "lucide-react";
+import { BarChart3, Bot, Check, Plug, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, RotateCw, Search, Settings2, SquarePen, UserCheck, WandSparkles, Wrench, X } from "lucide-react";
 import { searchWorkspace, workspaceName } from "./workspaces";
 import { useWorkspaces } from "./workspace-context";
 import { reloadApp } from "./reload";
@@ -15,6 +15,7 @@ import { isMacPlatform } from "./sidebar-rail";
 import { Beat } from "./Beat";
 import { DeleteDialog } from "./DeleteDialog";
 import { t, translatedMap, useT } from "./i18n";
+import { originLabel } from "./origin";
 
 const agentNames: Record<Session["agent"], string> = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
 const statusLabels = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
@@ -250,7 +251,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
       onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}
       onPointerDown={(event) => startDrag(event, session)}>
       <button className={`sidebar-chat-open ${parentActive ? "active" : ""}`} aria-current={parentActive ? "page" : undefined} title={`${session.title} · ${agentNames[session.agent]} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
-        {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}{session.steward && <UserCheck size={13} className="sidebar-steward" aria-label={t("steward.badge")} />}<span className="sidebar-session-title">{session.title}</span>
+        {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}{session.steward && <UserCheck size={13} className="sidebar-steward" aria-label={t("steward.badge")} />}{session.origin && <Plug size={12} className="sidebar-origin" aria-label={t("origin.openedBy", { name: originLabel(session.origin) })} />}<span className="sidebar-session-title">{session.title}</span>
         {(() => { const progress = goalProgress(session); return progress && <small className="sidebar-goal-progress" title={t("goal.progressTitle", progress)}>{progress.done}/{progress.total}</small>; })()}
       </button>
       <button className={`sidebar-chat-toggle${open ? " open" : ""}`} aria-label={t(open ? "side.collapseWorkers" : "side.expandWorkers", { title: session.title })} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={14} className={`folder-chevron ${open ? "open" : ""}`} /></button>

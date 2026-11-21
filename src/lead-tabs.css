@@ -1,0 +1,83 @@
+/* A lead's chats as tabs above the conversation (src/app/LeadTabs.tsx). */
+.lead-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-app);
+  font-size: calc(13px * var(--font-scale));
+}
+.lead-tabs-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; max-width: 160px; min-width: 0; padding-right: 6px; color: var(--text); }
+.lead-tabs-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.lead-tabs-avatar { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--avatar-text); font-size: 12px; font-weight: 700; }
+.lead-tabs-list {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+.lead-tabs-list::-webkit-scrollbar { display: none; }
+.lead-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.lead-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.lead-tab.active { border-color: var(--border); background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow-sm, none); }
+.lead-tab:focus-visible, .lead-tabs-new:focus-visible, .lead-tabs-settings:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.lead-tab.draft { font-style: italic; cursor: default; }
+.lead-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-tab-state { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-disabled); }
+.lead-tab-state.running { width: auto; height: auto; background: none; color: var(--accent-fg); }
+.lead-tab-state.error { background: var(--danger); }
+.lead-tab-state.stopped { background: var(--warn); }
+.lead-tab-origin { flex: none; color: var(--info-fg); }
+.lead-tab-progress { flex: none; color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+.lead-tab-rename { width: 180px; height: 30px; padding: 0 8px; border: 1px solid var(--border-focus); border-radius: 8px; background: var(--bg-surface); color: var(--text); font: inherit; }
+.lead-tabs-new, .lead-tabs-settings {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.lead-tabs-settings { width: 30px; justify-content: center; padding: 0; }
+.lead-tabs-new:hover:not(:disabled), .lead-tabs-settings:hover { border-color: var(--border-strong); color: var(--text); }
+.lead-tabs-new:disabled { opacity: 0.5; cursor: default; }
+
+/* Who sent a message when it was not the user in the app (src/origin.ts). */
+.message-origin { display: inline-flex; align-items: center; gap: 5px; align-self: flex-end; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; background: var(--info-tint); color: var(--info-fg); font-size: calc(11.5px * var(--font-scale)); }
+.message-origin.lead { background: var(--accent-tint); color: var(--accent-fg); }
+.sidebar-origin { flex: none; color: var(--info-fg); }
+
+@media (max-width: 720px) {
+  .lead-tabs { padding: 6px 8px; gap: 4px; }
+  .lead-tabs-name { max-width: 34px; padding-right: 0; }
+  .lead-tabs-name strong { display: none; }
+  .lead-tabs-new span { display: none; }
+  .lead-tabs-new { width: 30px; justify-content: center; padding: 0; }
+  .lead-tab { max-width: 150px; }
+}

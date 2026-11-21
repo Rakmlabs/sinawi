@@ -39,7 +39,8 @@ import { FileViewer } from "../FileViewer";
 import type { MediaRef } from "../viewer-model";
 import { ToolsPanel, toolsShortcut } from "../ToolsPanel";
 import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SessionDraft, SkillInfo as Skill, Bot as Preset, Steward } from "../../server/types";
-import { stewardDescription, stewardIdOf } from "../lead";
+import { leadName, stewardDescription, stewardIdOf } from "../lead";
+import { LeadTabs, threadTabs } from "./LeadTabs";
 import { accountScopeKey, scopedApi, workspaceApi, workspacePath, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
@@ -409,6 +410,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       setSelected((current) => current === message.sessionId ? undefined : current);
     }
     if (message.type === "session") setSessions((old) => upsertPushedSession(old, message.session as Session, Boolean(message.incremental)));
+    // An outside AI asked to show the user a chat (show_session): open it when it is in this workspace.
+    if (message.type === "show-session" && typeof message.sessionId === "string" && message.workspaceId === workspaceId) {
+      selectConversation(message.sessionId);
+    }
   };
   useEffect(() => { void load(); }, []);
   const connected = useAppSocket(onServerMessage, () => { draftStore.clear(); void load(); });
@@ -834,6 +839,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     }),
   });
   const manualTeam = useMemo(() => ({ agent, model, reasoningEffort, workers, workerConfigs }), [agent, model, reasoningEffort, workers, workerConfigs]);
+  // A lead's chats as tabs over the conversation: the open chat's lead, or the lead a new chat is being written for.
+  const tabStewardId = active ? stewardIdOf(active) : chosenSteward?.id;
+  const leadThreads = useMemo(() => tabStewardId ? threadTabs(sessions, tabStewardId) : [], [sessions, tabStewardId]);
+  const tabLeadName = tabStewardId ? stewards.find((item) => item.id === tabStewardId)?.name ?? (active ? leadName(active) : "") : "";
   const agentPolicy = useMemo(() => ({ workspaceId, allowedAgents }), [workspaceId, allowedAgents]);
   return (
     <WorkspacesContext.Provider value={scopedWorkspaces}>
@@ -891,6 +900,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     <span className="chat-actions-context" title={selectedWorker.label}>{t("ws.workerSession")} · {selectedWorker.label}</span>
                     {active.status === "running" && <button type="button" className="chat-action-text" disabled={busy} onClick={() => stopSession(active.id)}><Square size={11} fill="currentColor" aria-hidden="true" />{t("ws.stop")}</button>}
                   </div>}
+                  {tabStewardId && !selectedWorker && <LeadTabs stewardId={tabStewardId} name={tabLeadName} threads={leadThreads} activeId={active?.id} busy={busy}
+                    onSelect={sidebarHandlers.onSelect} onNew={() => sidebarHandlers.onNewStewardThread(tabStewardId)} onRename={sidebarHandlers.onRenameSession} />}
                   {active && active.status !== "running" && <QuotaReturnBanner active={active} threshold={quotaThreshold} allowedAgents={allowedAgents} busy={busy}
                     onReturn={(eventId) => void sessionAction(`/sessions/${active.id}/quota/return`, { eventId })} />}
                   <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} {...chatScrollHandlers}>

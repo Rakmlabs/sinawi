@@ -1,6 +1,8 @@
 import { memo, useMemo, type RefObject } from "react";
 import { currentActivity, runPhase } from "../run-activity";
-import { ArrowRight, CalendarClock, UserCheck, WandSparkles } from "lucide-react";
+import { ArrowRight, CalendarClock, Plug, UserCheck, WandSparkles } from "lucide-react";
+import { originLabel } from "../origin";
+import "../lead-tabs.css";
 import { isReportPrompt, leadMessage, schedulePrompt, scheduleWhen } from "../lead";
 import { Beat } from "../Beat";
 import { AgentMark } from "../AgentMark";
@@ -154,6 +156,10 @@ function MessageRowBody({ e, sessionId, continued, task, workerConfigs, undoable
           {time}
           {copy}
         </div>}
+        {isUser && e.metadata?.via && <span className={`message-origin ${e.metadata.via.kind}`} title={e.metadata.via.client}>
+          {e.metadata.via.kind === "lead" ? <UserCheck size={12} aria-hidden="true" /> : <Plug size={12} aria-hidden="true" />}
+          {e.metadata.via.kind === "lead" ? t("origin.sentByLead", { name: originLabel(e.metadata.via) }) : t("origin.sentBy", { name: originLabel(e.metadata.via) })}
+        </span>}
         {isUser && liveBadge && <em className={`live-status-badge${e.metadata?.live === "directive" ? " directive" : ""}`}>{liveBadge}</em>}
         <div className={`message-text ${e.type === "error" ? "error-banner" : e.type === "warning" ? "warning-banner" : ""}`} role={e.type === "error" || e.type === "warning" ? "alert" : undefined}>{isUser ? <UserMessageBody text={text} /> : <MessageFold text={text} streaming={streaming} keepOpen={isLatestAssistant}><Markdown text={text} /></MessageFold>}</div>
         {(isUser || continued) && <div className="message-actions">{time}{copy}</div>}

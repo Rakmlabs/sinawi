@@ -111,3 +111,9 @@ export function leadGroups(sessions: Session[], stewards: Steward[] = []): LeadG
   for (const steward of stewards) if (!byId.has(steward.id)) groups.push({ id: steward.id, name: steward.name, steward, others: [] });
   return groups;
 }
+
+/** A lead's chats as tabs, oldest first so a tab keeps its place (Orchestra.stewardThreads lists them newest first). */
+export function threadTabs(sessions: Session[], stewardId: string): Session[] {
+  return sessions.filter((session) => session.steward && (session.steward.id ?? session.id) === stewardId && !session.parentId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
