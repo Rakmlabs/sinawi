@@ -282,7 +282,8 @@ export function optionsAllowed(words: string[]): boolean {
     "git restore": { s: "SWqm", v: "s", l: "--source --staged --worktree --ours --theirs --quiet --merge --conflict --ignore-unmerged --overlay --no-overlay --progress --no-progress --recurse-submodules --no-recurse-submodules --ignore-skip-worktree-bits" },
     "git rm": { s: "rfnq", l: "--cached --dry-run --force --quiet --ignore-unmatch --sparse" },
     "git mv": { s: "fknv", l: "--force --dry-run --verbose" },
-    "git stash": { s: "uakqpS", v: "m", l: "--include-untracked --all --keep-index --no-keep-index --quiet --message --index --staged --patch --stat --name-only --name-status --no-include-untracked --only-untracked", ops: "list show push pop apply drop save" },
+    // Left out: -p/--patch (interactive: without a terminal it waits or fails, sixth review R6-5).
+    "git stash": { s: "uakqS", v: "m", l: "--include-untracked --all --keep-index --no-keep-index --quiet --message --index --staged --stat --name-only --name-status --no-include-untracked --only-untracked", ops: "list show push pop apply drop save" },
     // Left out: -s/--strategy, -X/--strategy-option (run `git-merge-NAME`), -e/--edit, -S/--gpg-sign.
     "git merge": { s: "nqv", v: "mF", l: "--no-ff --ff --ff-only --squash --no-squash --commit --no-commit --no-edit --abort --continue --quit --message --file --stat --no-stat --log --no-log --quiet --verbose --allow-unrelated-histories --no-verify --verify --signoff --no-signoff --progress --no-progress --autostash --no-autostash --no-gpg-sign --rerere-autoupdate --no-rerere-autoupdate --into-name" },
     // Left out: -s/-u/--sign/--local-user and -v/--verify (gpg), -e/--edit.
