@@ -209,6 +209,9 @@ function runExhausted(run: { exitCode: number; cliText: string; quotaErrorEviden
   return run.quotaErrorEvidence || run.exitCode !== 0 && isQuotaExhaustion(run.cliText);
 }
 
+/** Front-matter line a lead writes into the project skills it creates (writeLeadSkill). */
+const LEAD_SKILL_MARK = /^\s*created-by:\s*sinawi-lead\s*$/mu;
+
 export class Orchestra {
   private sessions = new Map<string, Session>();
   private controllers = new Map<string, AbortController>();
@@ -2489,6 +2492,9 @@ export class Orchestra {
     }
     if (update && existing === undefined) throw new Error(`스킬 ${name}이 없습니다. write_skill로 만드세요.`);
     if (!update && existing !== undefined) throw new Error(`스킬 ${name}이 이미 있습니다. update_skill로 고치세요.`);
+    // A project skill someone else wrote (the user, a teammate, another tool) is theirs: a lead only
+    // edits the project skills a lead made, marked in their front matter.
+    if (scope === "project" && existing !== undefined && !LEAD_SKILL_MARK.test(existing)) throw new Error(`프로젝트 스킬 ${name}은 담당이 만든 것이 아니라 고칠 수 없습니다. 다른 이름으로 write_skill 하세요.`);
     existing ??= "";
     const front = /^---\n([\s\S]*?)\n---\n?/u.exec(existing);
     const oldDescription = front?.[1].match(/^description:\s*(.*)$/mu)?.[1]?.trim() ?? "";
@@ -2497,7 +2503,7 @@ export class Orchestra {
     const content = (typeof args.content === "string" && args.content.trim() ? args.content : oldBody).trim().slice(0, 30_000);
     if (!description || !content) throw new Error("스킬에는 설명(description)과 본문(content)이 필요합니다.");
     await mkdir(directory, { recursive: true });
-    await writeFile(file, `---\nname: ${name}\ndescription: ${description}\n---\n\n${content}\n`);
+    await writeFile(file, `---\nname: ${name}\ndescription: ${description}\n${scope === "project" ? "metadata:\n  created-by: sinawi-lead\n" : ""}---\n\n${content}\n`);
     if (scope === "project") clearSkillsCache(session.cwd);
     const action = update ? "updated" : "created";
     this.event(session, session.agent, "status", `담당이 ${scope === "project" ? "프로젝트" : "담당"} 스킬 ${name}을 ${update ? "고쳤습니다" : "만들었습니다"}.`, { role: "orchestrator", metadata: { leadSkill: { name, scope, action } } });

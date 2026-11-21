@@ -244,7 +244,7 @@ const LEAD_ONLY: AppTool[] = [
     required: ["name", "description", "content"],
   }),
   leadTool({
-    name: "update_skill", risk: "write", description: "write_skill로 만든 스킬의 설명이나 본문을 고친다.",
+    name: "update_skill", risk: "write", description: "write_skill로 만든 스킬의 설명이나 본문을 고친다. 프로젝트 스킬은 담당이 만든 것만 고칠 수 있다(사용자가 쓴 스킬은 그대로 둔다).",
     properties: { name: str("스킬 이름."), description: str("새 설명(선택)."), content: str("새 본문(선택)."), scope: { type: "string", enum: ["lead", "project"] } },
     required: ["name"],
   }),

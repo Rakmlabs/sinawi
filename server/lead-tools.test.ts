@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -271,6 +271,12 @@ test("write_skill and update_skill keep reusable skills that delegate_task attac
     await assert.rejects(orchestra.leadToolCall(chatId, "write_skill", { name: "api-review", description: "d", content: "c" }), /이미 있습니다/u);
     await orchestra.leadToolCall(chatId, "update_skill", { name: "api-review", content: "1. 스키마부터 본다\n2. 테스트를 돌린다" });
     await orchestra.leadToolCall(chatId, "write_skill", { name: "shared", description: "모두 쓰는 규칙", content: "공용 규칙", scope: "project" });
+    await orchestra.leadToolCall(chatId, "update_skill", { name: "shared", content: "공용 규칙\n추가", scope: "project" });
+    // The user's own project skill is not the lead's to rewrite.
+    await mkdir(join(repo, ".claude", "skills", "mine"), { recursive: true });
+    await writeFile(join(repo, ".claude", "skills", "mine", "SKILL.md"), "---\nname: mine\ndescription: 내 규칙\n---\n\n내가 쓴 규칙\n");
+    await assert.rejects(orchestra.leadToolCall(chatId, "update_skill", { name: "mine", content: "바꿔치기", scope: "project" }), /담당이 만든 것이 아니라/u);
+    await assert.rejects(orchestra.leadToolCall(chatId, "update_skill", { name: "mine", content: "바꿔치기" }), /담당이 만든 것이 아니라/u, "nor through the project fallback");
     listed = await orchestra.leadToolCall(chatId, "list_skills", {});
     const task = await orchestra.leadToolCall(chatId, "delegate_task", { worker: "codex", brief: "API 검토", skills: ["api-review", "shared", "없는것"] }) as any;
     assert.deepEqual(task.missing_skills, ["없는것"]);
@@ -285,7 +291,10 @@ test("write_skill and update_skill keep reusable skills that delegate_task attac
   const file = await readFile(join(dataDir, "stewards", stewardId, "skills", "api-review", "SKILL.md"), "utf8");
   assert.match(file, /^---\nname: api-review\ndescription: API 검토 순서\n---/u);
   assert.match(file, /2\. 테스트를 돌린다/u);
-  assert.match(await readFile(join(repo, ".claude", "skills", "shared", "SKILL.md"), "utf8"), /공용 규칙/u);
+  const shared = await readFile(join(repo, ".claude", "skills", "shared", "SKILL.md"), "utf8");
+  assert.match(shared, /공용 규칙\n추가/u, "the lead edits a project skill it made");
+  assert.match(shared, /created-by: sinawi-lead/u);
+  assert.match(await readFile(join(repo, ".claude", "skills", "mine", "SKILL.md"), "utf8"), /내가 쓴 규칙/u);
   assert.ok(listed.lead.some((item: { name: string }) => item.name === "api-review"));
   assert.match(workerPrompt, /--- api-review \(담당\) ---[\s\S]*테스트를 돌린다/u);
   assert.match(workerPrompt, /공용 규칙/u);
