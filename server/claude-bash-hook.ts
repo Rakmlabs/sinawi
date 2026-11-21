@@ -2,8 +2,10 @@
  * Claude Code refuses some compound Bash commands in headless mode no matter what `--allowedTools`
  * says ("This command uses shell operators that require approval", `cd` + redirection), so a worker
  * cannot run `cd src && cat a.txt > b.txt` without a prompt nobody can answer. A PreToolUse hook
- * pre-approves such commands, and its only job is that: it must never approve something a single
- * command could not already do inside the worker folder.
+ * pre-approves such commands; it must never approve something a single command could not already do
+ * inside the worker folder. The same hook also asks (hookDecision): for risky forms always, and while
+ * the workspace does not pre-approve programs that run code, for every command that is not a simple
+ * pre-approved one — Claude's own auto mode would otherwise decide those by itself.
  *
  * What an "allow" decision guarantees (checked statically, before the command runs):
  * - every segment's program is one of a small fixed set (SAFE_PROGRAMS below), with per-program
@@ -22,12 +24,13 @@
  * Not guaranteed: what `npm test`/`npm run` scripts or git hooks do (they run project code, exactly
  * as the same single command would under the normal `Bash(npm:*)`/`Bash(git:*)` rules), a CDPATH set
  * only in the user's shell rc (invisible to the hook), and races with other processes changing the
- * folder between the check and the run. Everything not approved gets no decision and falls through
- * to Claude's normal permission rules.
+ * folder between the check and the run. What is neither approved nor asked for here gets no decision
+ * and falls through to Claude's normal permission rules.
  */
 import { lstatSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as nodePath from "node:path";
+import { DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
 import { shellQuote } from "./worktrees.js";
 
 /** Filesystem and path access the check needs; injected so the function stays self-contained. */
@@ -59,72 +62,175 @@ export function nodeHookHost(): HookHost {
 }
 
 /**
- * Whether a Bash command starts one of the programs that run code they are given (supervision.ts
- * RUNTIME_SHELL_PROGRAMS, plus their close kin). With the workspace switch off, the hook answers "ask"
- * for these, so Claude's own auto mode (which decides unlisted commands by itself) still brings them
- * to the user (third review N3). Best effort and on the cautious side: every segment between shell
- * operators, quotes and substitutions is looked at, after env assignments and wrapper commands
- * (env, command, exec, nohup, time, xargs, nice, timeout ...), so `bash -c "node -v"`, `FOO=1 npx x`,
- * `/usr/local/bin/node` and `cd a && node b` count; text that merely starts with such a word inside
- * quotes (`echo "node is"`) asks too. A program it does not know (a shell script, ruby, perl) is not
- * caught: that stays with Claude's own judgement, as the settings text says.
+ * The words of `command` when it is ONE simple command whose words are fixed text the hook reads
+ * exactly as the shell will, else undefined. Fourth review R4-2: matching dangerous shapes one by one
+ * lost to the shell (`"no""de"`, `n''ode`, `$(which node)`), so the hook works the other way round:
+ * only this narrow form can pass without a card while the workspace switch is off.
+ *
+ * A word is plain characters (letters, digits, `_-.,/:@%+=^`), one whole quoted string, or
+ * `--name="value"`. Anything else makes the command not fixed: a quote glued to other text, `$`
+ * (variables, `$(…)`), backticks, `\`, globs (`*?[`), `~`, `!`, `#`, braces, parentheses, `;&|<>`
+ * (chains, pipes, redirections), newlines.
  *
  * Self-contained on purpose (its source goes into the hook script).
  */
-export function runsCodeCommand(command: string): boolean {
-  const runtime = new Set(["node", "nodejs", "npx", "python", "python3", "npm", "pnpm", "pnpx", "yarn", "bun", "bunx", "deno", "tsx", "ts-node", "find"]);
-  const wrappers = new Set(["env", "command", "exec", "nohup", "time", "xargs", "nice", "timeout", "builtin", "caffeinate", "stdbuf", "sudo", "doas"]);
-  const segments = command.split(/[;&|\n()`'"{}]|\$\(/u);
-  for (const segment of segments) {
-    const words = segment.trim().split(/\s+/u).filter(Boolean);
-    let index = 0;
-    for (;;) {
-      const word = words[index];
-      if (word === undefined) break;
-      // FOO=1 node ..., env -i node ..., timeout 5 node ..., xargs -n1 node ...
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(word) || word.startsWith("-") || /^\d+[smhd]?$/u.test(word)) { index += 1; continue; }
-      const name = word.slice(word.lastIndexOf("/") + 1).replace(/\\/gu, "");
-      if (wrappers.has(name)) { index += 1; continue; }
-      if (runtime.has(name) || /^python3(?:\.\d+)?$/u.test(name)) return true;
-      if (name === "ao-serve" && words[index + 1] === "start") return true;
-      break;
+export function staticCommandWords(command: string): string[] | undefined {
+  const plain = /^[\p{L}\p{N}_\-.,/:@%+=^]$/u;
+  const words: string[] = [];
+  let index = 0;
+  while (index < command.length) {
+    const char = command[index];
+    if (char === " " || char === "\t") { index += 1; continue; }
+    let word = "";
+    // `~` mid-word (`HEAD~3`) is plain text; at a word start or after `=`/`:` the shell expands it.
+    while (index < command.length && (plain.test(command[index]!) || (command[index] === "~" && word !== "" && !/[=:]$/u.test(word)))) word += command[index++];
+    const quote = command[index];
+    if (quote === "'" || quote === '"') {
+      // `"no""de"`, `n''ode`, `"no"de`: a quote glued to other text. Only `--name="value"` may glue.
+      if (word !== "" && !word.endsWith("=")) return undefined;
+      const end = command.indexOf(quote, index + 1);
+      if (end < 0) return undefined;
+      const inner = command.slice(index + 1, end);
+      if (/[\n\r]/u.test(inner) || (quote === '"' && /[$`\\!]/u.test(inner))) return undefined;
+      word += inner;
+      index = end + 1;
+    }
+    const after = command[index];
+    if (after !== undefined && after !== " " && after !== "\t") return undefined;
+    words.push(word);
+  }
+  return words.length ? words : undefined;
+}
+
+/**
+ * Forms of pre-approved programs that reach outside the project (third review H2-b), on the words of
+ * one command: `gh api` with a method or fields (writes to GitHub), `git push` that forces, deletes
+ * or mirrors, `xcrun simctl spawn` (runs a program on the host), `curl -K` (a config file can set any
+ * option), `trash` of a path outside the folder. The prefix rules pre-approve the plain program; for
+ * these forms the hook answers "ask", whatever the workspace switch says. Grok denies the same forms
+ * by pattern (supervision.ts RISKY_SHELL_PATTERNS).
+ *
+ * Self-contained on purpose (its source goes into the hook script).
+ */
+export function riskyWords(words: string[]): boolean {
+  let index = 0;
+  while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[index]!) || ["env", "command", "exec", "nohup", "time"].includes(words[index]!))) index += 1;
+  const program = (words[index] ?? "").replace(/^.*\//u, "");
+  const rest = words.slice(index + 1);
+  if (program === "gh" && rest[0] === "api") {
+    for (let at = 1; at < rest.length; at++) {
+      const word = rest[at]!;
+      if (/^(?:-f|-F|--field|--raw-field|--input)(?:=|$)/u.test(word) || /^-[fF]./u.test(word)) return true;
+      const method = /^(?:-X|--method)(?:=(.*))?$/u.exec(word) ?? /^-X(.+)$/u.exec(word);
+      if (method) { const value = (method[1] ?? rest[at + 1] ?? "").toUpperCase(); if (value !== "GET") return true; }
     }
   }
+  if (program === "git") {
+    const push = rest.indexOf("push");
+    if (push >= 0 && rest.slice(push + 1).some((word) => /^(?:-f|-d|--force.*|--delete|--mirror|--prune|--all)$/u.test(word) || /^-[a-z]*[fd][a-z]*$/u.test(word) || /^[+:]/u.test(word))) return true;
+  }
+  if (program === "curl" && rest.some((word) => /^(?:-K|--config)/u.test(word) || /^-[a-zA-Z]*K/u.test(word))) return true;
+  if (program === "xcrun" && rest[0] === "simctl" && rest[1] === "spawn") return true;
+  if (program === "trash" && rest.some((word) => word.startsWith("/") || word.startsWith("~") || word.split("/").includes(".."))) return true;
   return false;
 }
 
 /**
- * Forms of pre-approved programs that reach outside the project (third review H2-b): `gh api` with a
- * method or fields (writes to GitHub), `git push` that forces, deletes or mirrors, `xcrun simctl
- * spawn` (runs a program on the host), `trash` of a path outside the folder. The prefix rules
- * pre-approve the plain program; for these forms the hook answers "ask", so the user decides.
- * Grok denies the same forms by pattern (supervision.ts RISKY_SHELL_PATTERNS).
+ * `riskyWords` over every segment of a command the hook cannot read as fixed words (used while the
+ * workspace switch is on, when such commands are otherwise left to Claude's own judgement).
+ *
+ * Uses only the other hook functions (its source goes into the hook script).
+ */
+export function riskyCommand(command: string): boolean {
+  return command.split(/[;&|\n()`]|\$\(/u).some((segment) => riskyWords(segment.trim().split(/\s+/u).filter(Boolean).map((word) => word.replace(/^['"]|['"]$/gu, ""))));
+}
+
+/**
+ * How many leading words of `words` are one of the pre-approved prefixes (`git status`, `ls`,
+ * `xcrun simctl list` …), or 0.
  *
  * Self-contained on purpose (its source goes into the hook script).
  */
-export function riskyCommand(command: string): boolean {
-  for (const segment of command.split(/[;&|\n()`]|\$\(/u)) {
-    const words = segment.trim().split(/\s+/u).filter(Boolean).map((word) => word.replace(/^['"]|['"]$/gu, ""));
-    let index = 0;
-    while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[index]!) || ["env", "command", "exec", "nohup", "time"].includes(words[index]!))) index += 1;
-    const program = (words[index] ?? "").replace(/^.*\//u, "");
-    const rest = words.slice(index + 1);
-    if (program === "gh" && rest[0] === "api") {
-      for (let at = 1; at < rest.length; at++) {
-        const word = rest[at]!;
-        if (/^(?:-f|-F|--field|--raw-field|--input)(?:=|$)/u.test(word) || /^-[fF]./u.test(word)) return true;
-        const method = /^(?:-X|--method)(?:=(.*))?$/u.exec(word) ?? /^-X(.+)$/u.exec(word);
-        if (method) { const value = (method[1] ?? rest[at + 1] ?? "").toUpperCase(); if (value !== "GET") return true; }
-      }
-    }
-    if (program === "git") {
-      const push = rest.indexOf("push");
-      if (push >= 0 && rest.slice(push + 1).some((word) => /^(?:-f|-d|--force.*|--delete|--mirror|--prune|--all)$/u.test(word) || /^-[a-z]*[fd][a-z]*$/u.test(word) || /^[+:]/u.test(word))) return true;
-    }
-    if (program === "xcrun" && rest[0] === "simctl" && rest[1] === "spawn") return true;
-    if (program === "trash" && rest.some((word) => word.startsWith("/") || word.startsWith("~") || word.split("/").includes(".."))) return true;
+export function preapprovedPrefix(words: string[], prefixes: readonly string[]): number {
+  let best = 0;
+  for (const prefix of prefixes) {
+    const parts = prefix.split(" ");
+    if (parts.length > best && parts.every((part, index) => words[index] === part)) best = parts.length;
   }
-  return false;
+  return best;
+}
+
+/**
+ * Whether every argument that names a file stays inside the worker folder: no `~`, no `..`, no
+ * `file:` URL, and absolute or relative paths (also `--opt=PATH`, `-oPATH`, `@PATH`) resolve, through
+ * symlinks, inside `root`. Words that are not paths (a URL, a commit message) resolve inside too.
+ *
+ * Self-contained on purpose (its source goes into the hook script).
+ */
+export function argumentsStayInside(args: string[], cwd: string, root: string, host: HookHost): boolean {
+  let rootReal: string;
+  try { rootReal = host.realpath(host.resolve(root)); } catch { return false; }
+  const within = (real: string) => {
+    const rel = host.relative(rootReal, real);
+    return rel === "" || (rel.split(host.sep)[0] !== ".." && !host.isAbsolute(rel));
+  };
+  const inside = (value: string): boolean => {
+    if (!value) return true;
+    if (value.startsWith("~") || /^file:/iu.test(value) || value.split(/[/=:]/u).includes("..")) return false;
+    let current = host.isAbsolute(value) ? host.resolve(value) : host.resolve(cwd, value);
+    const rest: string[] = [];
+    for (let depth = 0; depth < 4096; depth++) {
+      if (host.exists(current)) {
+        try { return within(host.join(host.realpath(current), ...rest.reverse())); } catch { return false; }
+      }
+      const parent = host.dirname(current);
+      if (parent === current) return false;
+      rest.push(host.basename(current));
+      current = parent;
+    }
+    return false;
+  };
+  for (const arg of args) {
+    const values = [arg];
+    if (arg.startsWith("-")) {
+      const eq = arg.indexOf("=");
+      if (eq > 0) values.push(arg.slice(eq + 1));
+      else if (arg.includes("/")) values.push(arg.slice(arg.indexOf("/")));
+    }
+    for (const value of [...values]) if (value.startsWith("@")) values.push(value.slice(1));
+    if (!values.every(inside)) return false;
+  }
+  return true;
+}
+
+/**
+ * The hook's answer for one Bash command: "allow" (the compound safe set, bashCommandAllowed),
+ * "ask" (the user decides on an approval card, even in Claude's own auto mode), or undefined
+ * (Claude's own rules decide).
+ *
+ * With the workspace switch for programs that run code OFF, only two kinds of command are left to
+ * Claude's rules: the compound safe set, and ONE simple command of fixed words that starts with a
+ * pre-approved program (`git status`, `rg`, `curl` …, supervision.ts DEVELOPMENT_SHELL_PROGRAMS)
+ * whose file arguments stay inside the folder. Everything else asks: node, python and every program
+ * not on the list (perl, a script `./x.sh`), quote fragments, `$(…)`, variables, chains, pipes,
+ * redirections, globs. With the switch ON, Claude's auto mode decides unlisted commands as before.
+ * Risky forms (riskyWords) ask either way.
+ *
+ * Uses only the other hook functions (its source goes into the hook script).
+ */
+export function hookDecision(command: string, cwd: string, root: string, host: HookHost, prefixes: readonly string[]): "allow" | "ask" | undefined {
+  if (!command) return undefined;
+  const words = staticCommandWords(command);
+  if (words ? riskyWords(words) : riskyCommand(command)) return "ask";
+  if (root && bashCommandAllowed(command, cwd, root, host)) return "allow";
+  if (host.runtimePrograms) return undefined;
+  if (!words) return "ask";
+  const length = preapprovedPrefix(words, prefixes);
+  if (!length) return "ask";
+  // gh names API paths (`/repos/x`), not files; its file reads are `@FILE` values.
+  const args = words.slice(length);
+  if (words[0] === "gh" ? !argumentsStayInside(args.filter((arg) => arg.includes("@")).map((arg) => arg.slice(arg.indexOf("@"))), cwd, root, host) : !argumentsStayInside(args, cwd, root, host)) return "ask";
+  return undefined;
 }
 
 /**
@@ -347,7 +453,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
 
 /** The PreToolUse hook as a standalone Node script (reads the hook JSON on stdin). */
 export function bashHookScript(): string {
-  return `// Generated by Sinawi: pre-approves compound Bash commands of safe programs confined to the worker folder.
+  return `// Generated by Sinawi: pre-approves safe Bash commands confined to the worker folder, and asks for the rest (claude-bash-hook.ts hookDecision).
 import * as path from "node:path";
 import * as fs from "node:fs";
 const host = {
@@ -360,9 +466,10 @@ const host = {
 const root = process.argv[2];
 // Transpilers with keepNames (tsx/esbuild) wrap inner functions in __name(); make it a no-op here.
 const __name = (fn) => fn;
-const bashCommandAllowed = ${bashCommandAllowed.toString()};
-const runsCodeCommand = ${runsCodeCommand.toString()};
-const riskyCommand = ${riskyCommand.toString()};
+// The pre-approved prefixes (supervision.ts DEVELOPMENT_SHELL_PROGRAMS): with the switch off, only a
+// simple command of fixed words starting with one of them is left to Claude's rules.
+const prefixes = ${JSON.stringify(DEVELOPMENT_SHELL_PROGRAMS)};
+${[bashCommandAllowed, staticCommandWords, riskyWords, riskyCommand, preapprovedPrefix, argumentsStayInside, hookDecision].map((fn) => fn.toString()).join("\n")}
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
@@ -371,19 +478,14 @@ process.stdin.on("end", () => {
     const data = JSON.parse(input);
     const command = data && data.tool_input && typeof data.tool_input.command === "string" ? data.tool_input.command : "";
     const cwd = typeof data.cwd === "string" && data.cwd ? data.cwd : root;
-    // The workspace has not pre-approved programs that run code: such a command goes to the user,
-    // even where Claude's auto mode would decide it by itself.
-    if (command && !host.runtimePrograms && runsCodeCommand(command)) {
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "Sinawi: this workspace does not pre-approve commands that run code (node, npx, python3, npm, find, ...)" } }));
-      return;
-    }
-    if (command && riskyCommand(command)) {
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "Sinawi: this command reaches outside the project (gh api write, forced or deleting git push, simctl spawn, trash outside the folder)" } }));
-      return;
-    }
-    if (root && command && bashCommandAllowed(command, cwd, root, host)) {
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "Sinawi: safe programs confined to the worker folder" } }));
-    }
+    const decision = ${hookDecision.name}(command, cwd, root || "", host, prefixes);
+    const reasons = {
+      allow: "Sinawi: safe programs confined to the worker folder",
+      ask: host.runtimePrograms
+        ? "Sinawi: this command reaches outside the project (gh api write, forced or deleting git push, simctl spawn, curl -K, trash outside the folder)"
+        : "Sinawi: this workspace pre-approves only simple commands of listed programs with files inside the project; this one runs code, is not on the list, or cannot be read in advance (quotes glued to text, $(...), variables, chains, pipes, redirections, globs, paths outside)",
+    };
+    if (decision) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: decision, permissionDecisionReason: reasons[decision] } }));
   } catch {}
 });
 `;
