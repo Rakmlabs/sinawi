@@ -221,9 +221,23 @@ fn app_exe() -> String {
     std::env::current_exe().ok().and_then(|path| fs::canonicalize(path).ok()).map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// Only an app bundle installs the LaunchAgent. A bare `cargo build` binary (src-tauri/target/…) is a
-/// production build too, and once replaced the user's installed server with a branch's when run.
-fn runs_from_app_bundle(exe: &str) -> bool { exe.contains(".app/Contents/MacOS/") }
+/// Only an installed app manages the LaunchAgent: a release build whose (canonical) executable sits
+/// directly in an app bundle in `/Applications` or `~/Applications`. A bare `cargo build` binary
+/// (src-tauri/target/…) is a production build too and once replaced the user's installed server with a
+/// branch's when run; a bundle opened where `npm run app:build` leaves it (target/release/bundle/…)
+/// would do the same (third review N4). Debug builds never touch it.
+fn installed_app(exe: &str, home: &str) -> bool {
+    if cfg!(debug_assertions) { return false; }
+    installed_app_path(exe, home)
+}
+
+fn installed_app_path(exe: &str, home: &str) -> bool {
+    let user_apps = format!("{}/Applications/", home.trim_end_matches('/'));
+    let Some(rest) = exe.strip_prefix("/Applications/").or_else(|| if home.is_empty() { None } else { exe.strip_prefix(user_apps.as_str()) }) else { return false };
+    // `<Name>.app/Contents/MacOS/<binary>`, the bundle directly in the Applications folder.
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.len() == 4 && parts[0].ends_with(".app") && parts[0].len() > 4 && parts[1] == "Contents" && parts[2] == "MacOS" && !parts[3].is_empty()
+}
 
 /// The node binary an installed plist launches (first ProgramArguments string).
 fn plist_node(contents: &str) -> Option<String> {
@@ -393,8 +407,8 @@ pub fn ensure(layout: Layout) -> Result<(), String> {
         return Err(format!("HOME ({home}) is not this account's home folder; not touching the {LABEL} LaunchAgent"));
     }
     let exe = app_exe();
-    if !runs_from_app_bundle(&exe) {
-        return Err(format!("{exe} is not inside an app bundle; not touching the {LABEL} LaunchAgent"));
+    if !installed_app(&exe, &home) {
+        return Err(format!("{exe} is not an installed release app (an app bundle in /Applications or ~/Applications); not touching the {LABEL} LaunchAgent"));
     }
     let version = bundled_version(&layout);
     if loaded(&legacy_target()) {
@@ -522,10 +536,19 @@ mod tests {
     }
 
     #[test]
-    fn only_an_app_bundle_installs_the_agent() {
-        assert!(runs_from_app_bundle("/Applications/Sinawi.app/Contents/MacOS/sinawi"));
-        assert!(!runs_from_app_bundle("/Users/me/sinawi/src-tauri/target/debug/sinawi"));
-        assert!(!runs_from_app_bundle(""));
+    fn only_an_installed_app_bundle_manages_the_agent() {
+        assert!(installed_app_path("/Applications/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"));
+        assert!(installed_app_path("/Users/me/Applications/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"));
+        assert!(!installed_app_path("/Users/me/sinawi/src-tauri/target/debug/sinawi", "/Users/me"));
+        // The bundle `npm run app:build` leaves behind, opened from there (third review N4).
+        assert!(!installed_app_path("/Users/me/sinawi/src-tauri/target/release/bundle/macos/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"));
+        assert!(!installed_app_path("/Applications/Tools/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"), "only directly in Applications");
+        assert!(!installed_app_path("/Applications/Sinawi.app/Contents/MacOS/helpers/x", "/Users/me"));
+        assert!(!installed_app_path("/Applications/.app/Contents/MacOS/sinawi", "/Users/me"));
+        assert!(!installed_app_path("/tmp/Applications/Sinawi.app/Contents/MacOS/sinawi", ""));
+        assert!(!installed_app_path("", "/Users/me"));
+        // This test binary is a debug build: it never manages the agent, wherever it runs from.
+        assert!(!installed_app("/Applications/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"));
     }
 
     #[test]
