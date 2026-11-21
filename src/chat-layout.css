@@ -1064,3 +1064,5 @@ body,
 }
 body.sidebar-resizing, body.sidebar-resizing * { cursor: col-resize !important; user-select: none; }
 body.sidebar-resizing .app-shell { transition: none; }
+/* No folder yet (a new lead): the button is the next step, so it keeps its whole label (third review). */
+.composer-bottom .directory-button.needs-folder { flex: none; max-width: none; color: var(--accent-fg); }
