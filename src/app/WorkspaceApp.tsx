@@ -875,7 +875,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     <ViewerContext.Provider value={viewerApi}>
     <MotionConfig reducedMotion="user">
       <div style={{ "--terminal-height": `${terminalHeight}px` } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
-        <WindowHeader title={tab === "workspace" ? active?.title : viewTitles[tab]} project={tab === "workspace" ? activeProject : undefined} runningSince={tab === "workspace" ? runningSince : undefined}
+        <WindowHeader title={tab === "workspace" ? active?.title : viewTitles[tab]} project={tab === "workspace" && !leadNeedsFolder ? activeProject : undefined} runningSince={tab === "workspace" ? runningSince : undefined}
           sidebar={{ open: sidebarOpen, controls: SIDEBAR_ID, onToggle: toggleSidebar, buttonRef: sidebarToggle }}
           workspace={<WorkspaceSwitcher onManage={openWorkspaceSettings} />}
           extra={desktopMode !== "none" && desktopMode !== "max" && tab === "workspace" ? <button type="button" className="header-icon-button" aria-label={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} title={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} aria-pressed={chatCollapsed} onClick={() => setChatCollapsed((value) => !value)}>{chatCollapsed ? <PanelRightOpen size={18} aria-hidden="true" /> : <PanelRightClose size={18} aria-hidden="true" />}</button> : undefined}
@@ -940,9 +940,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                           <h2><UserCheck size={20} aria-hidden="true" /> {chosenSteward ? t("steward.threadTitle", { name: chosenSteward.name }) : t("steward.newTitle")}</h2>
                           <p className="minimal-empty-note">{chosenSteward ? t("steward.pickHint") : t("steward.newBody")}</p>
                           {leadNeedsFolder && <button type="button" className="button primary lead-pick-folder" onClick={() => setModal("directory")}><Folder size={15} aria-hidden="true" />{t("steward.pickFolder")}</button>}
-                          {stewards.length > 0 && <div className="steward-picker" role="radiogroup" aria-label={t("steward.pickTitle")}>
+                          {stewards.length > 0 && <p className="steward-picker-title" id="steward-picker-title"><strong>{t("steward.pickTitle")}</strong> {t("steward.pickExplain")}</p>}
+                          {stewards.length > 0 && <div className="steward-picker" role="radiogroup" aria-labelledby="steward-picker-title">
                             <button type="button" role="radio" aria-checked={!chosenSteward} onClick={() => setStewardDraft({})}><strong>{t("steward.pickNew")}</strong><small>{t("steward.pickNewHint")}</small></button>
-                            {stewards.map((item) => <button type="button" role="radio" key={item.id} aria-checked={chosenSteward?.id === item.id} onClick={() => pickSteward(item.id)}><strong>{item.name}</strong><small>{stewardDescription(item) || "\u00a0"}</small></button>)}
+                            {stewards.map((item) => <button type="button" role="radio" key={item.id} aria-checked={chosenSteward?.id === item.id} onClick={() => pickSteward(item.id)}><strong>{item.name}</strong><small>{stewardDescription(item) || t("steward.pickExisting")}</small></button>)}
                           </div>}
                           <div className="prompt-chips">
                             {!chosenSteward && <button onClick={() => { setPrompt(t("steward.newChipText")); composerInput.current?.focus(); }}>{t("steward.newChip")}</button>}
@@ -981,7 +982,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     mode={mode} setMode={setMode} autoSwitch={active ? active.autoSwitch ?? autoSwitch : autoSwitch}
                     setAutoSwitch={(enabled) => { if (!active) setAutoSwitch(enabled); else void safe(async () => { replaceFromServer(await api<Session>(`/sessions/${active.id}/auto-switch`, { enabled }, "PATCH")); }); }}
                     permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed}
-                    setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
+                    setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={leadNeedsFolder ? "" : cwd} shownCwd={leadNeedsFolder ? "" : shownCwd} canSend={canSend} choiceOptions={choiceOptions}
                     send={send} runCommand={runCommand} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
                       manual={manualTeam} availableAgents={teamAgents}
