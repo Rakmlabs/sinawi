@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sessionNotifications, authNotification } from "./notification-sources.js";
+import { sessionNotifications, authNotification, plainText } from "./notification-sources.js";
 import { NotificationStore } from "./notifications.js";
 import type { Session } from "./types.js";
 test("unknown auth produces no notification; login commands stay agent-specific", () => {
@@ -101,7 +101,7 @@ test("a project lead's finished turn reads as a message from it", () => {
   assert.equal(note.body, "포트는 4000입니다.");
 });
 
-test("a lead's chats share one notification, and an empty chat or an old turn says nothing (M4)", () => {
+test("each chat of a lead keeps one notification its turns update; an empty chat or an old turn says nothing (M4, R5)", () => {
   const chat = (id: string, events: unknown[], endedAt = new Date().toISOString()) => ({
     id, title: id, workspaceId: "personal", status: "done", endedAt, agent: "claude", cwd: "/w/api",
     steward: { turns: 1, since: "", name: "api", id: "lead1" }, events,
@@ -109,8 +109,10 @@ test("a lead's chats share one notification, and an empty chat or an old turn sa
   const turn = [{ id: "u", time: "", type: "message", agent: "user", text: "일" }, { id: "a", time: "", type: "message", role: "orchestrator", agent: "claude", text: "끝" }];
   const [one] = sessionNotifications(chat("c1", turn));
   const [two] = sessionNotifications(chat("c2", turn));
-  assert.equal(one.key, two.key, "one notification per lead, updated");
-  assert.notEqual(one.once, two.once, "each finished turn still counts once");
+  const [again] = sessionNotifications(chat("c1", turn, new Date(Date.now() + 1_000).toISOString()));
+  assert.notEqual(one.key, two.key, "one chat's result does not replace another's (R5)");
+  assert.equal(one.key, again.key, "a chat's next turn updates its own notification, no pile-up (M4)");
+  assert.notEqual(one.once, again.once, "each finished turn still counts once");
   assert.deepEqual(sessionNotifications(chat("empty", [])), [], "an empty chat an outside AI just opened");
   assert.deepEqual(sessionNotifications(chat("old", turn, "2020-01-01T00:00:00.000Z")), [], "an old turn re-sent after a restart");
 });
@@ -152,4 +154,8 @@ test("a specialized terminal failure never resurfaces an older recovered error",
     ] } as unknown as Session;
     assert.equal(sessionNotifications(session).filter((note) => note.type === "error").length, 0, text);
   }
+});
+
+test("a lead's notification shows its words, not markdown", () => {
+  assert.equal(plainText("## 결과\n- **README** 첫 화면을 `고쳤습니다`. [PR](https://x/y)\n```\ncode\n```"), "결과 README 첫 화면을 고쳤습니다. PR");
 });
