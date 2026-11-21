@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { reviewPrompt } from "./supervision.js";
-import { buildInvocation, CLAUDE_AUTO_MODE, CLAUDE_READ_ONLY_BASH_DENY, CLAUDE_READ_ONLY_BASH_RULES, claudeHelpFlags, killSessionProcessGroups, parseHelpFlags, prepareCliInvocation, runCli, sessionProcessGroups } from "./cli.js";
+import { buildInvocation, STDIN_PROMPT_BYTES, CLAUDE_AUTO_MODE, CLAUDE_READ_ONLY_BASH_DENY, CLAUDE_READ_ONLY_BASH_RULES, claudeHelpFlags, killSessionProcessGroups, parseHelpFlags, prepareCliInvocation, runCli, sessionProcessGroups } from "./cli.js";
 
 const HELP = `Usage: claude [options] [command] [prompt]
 
@@ -161,5 +161,45 @@ test("workspace full access runs every CLI without approval prompts, but never a
     assert.doesNotMatch(review, /dangerously|bypassPermissions|always-approve/, agent);
     const normal = buildInvocation({ ...base, agent }).args.join(" ");
     assert.doesNotMatch(normal, /dangerously|bypassPermissions|always-approve/, agent);
+  }
+});
+
+test("a prompt starting with - is not read as an option, and a huge one goes through stdin (L1)", () => {
+  for (const agent of ["claude", "codex", "grok"] as const) {
+    const dash = buildInvocation({ agent, prompt: "--help me", cwd: "/w" });
+    assert.ok(dash.args.includes(" --help me"), `${agent}: ${dash.args.join(" ")}`);
+    assert.ok(!dash.args.includes("--help me"));
+  }
+  const huge = "x".repeat(STDIN_PROMPT_BYTES + 1);
+  const claude = buildInvocation({ agent: "claude", prompt: huge, cwd: "/w" });
+  assert.equal(claude.stdin, huge);
+  assert.ok(!claude.args.includes(huge));
+  assert.equal(claude.args[0], "-p");
+  assert.equal(claude.args[1], "--output-format");
+  const codex = buildInvocation({ agent: "codex", prompt: huge, cwd: "/w" });
+  assert.equal(codex.stdin, huge);
+  assert.equal(codex.args.at(-1), "-");
+  assert.equal(buildInvocation({ agent: "claude", prompt: "small", cwd: "/w" }).stdin, undefined);
+});
+
+test("runCli writes a stdin prompt to the CLI and closes it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sinawi-cli-stdin-"));
+  const executable = join(directory, "mock-claude.mjs");
+  await writeFile(executable, `#!/usr/bin/env node
+if (process.argv.includes("--help")) { process.stdout.write("  --output-format <format>\\n"); process.exit(0); }
+let input = "";
+process.stdin.on("data", (chunk) => input += chunk);
+process.stdin.on("end", () => process.stdout.write(JSON.stringify({ type: "result", result: "got " + input.length, usage: { input_tokens: 1, output_tokens: 1 } }) + "\\n"));
+`, { mode: 0o700 });
+  await chmod(executable, 0o700);
+  const previous = process.env.SINAWI_CLAUDE_BIN;
+  process.env.SINAWI_CLAUDE_BIN = executable;
+  try {
+    const prompt = "y".repeat(STDIN_PROMPT_BYTES + 5);
+    const result = await runCli({ agent: "claude", prompt, cwd: directory, onLine: () => undefined });
+    assert.equal(result.finalText, `got ${prompt.length}`);
+  } finally {
+    if (previous === undefined) delete process.env.SINAWI_CLAUDE_BIN; else process.env.SINAWI_CLAUDE_BIN = previous;
+    await rm(directory, { recursive: true, force: true });
   }
 });

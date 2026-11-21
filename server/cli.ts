@@ -19,7 +19,19 @@ export interface CliInvocation {
   command: string;
   args: string[];
   cwd: string;
+  /** Written to the CLI's stdin (then closed) instead of passing the prompt as an argument. */
+  stdin?: string;
 }
+
+/** Prompts this large go through stdin where the CLI reads it, far below macOS's 1 MB ARG_MAX (env included). */
+export const STDIN_PROMPT_BYTES = 100_000;
+
+/** A prompt as one argv value: a leading `-` would be read as an option, so it gets a space in front. */
+export function promptArg(prompt: string): string {
+  return prompt.startsWith("-") ? ` ${prompt}` : prompt;
+}
+
+const viaStdin = (prompt: string) => Buffer.byteLength(prompt) > STDIN_PROMPT_BYTES;
 
 export interface RunCliOptions {
   agent: AgentId;
@@ -145,15 +157,19 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     if (model) args.push("--model", model);
     if (reasoningEffort) args.push("-c", `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`);
     if (options.leadMcp && !readOnly) args.push(...codexLeadArgs(options.leadMcp));
-    if (resumeSessionId) args.push("resume", resumeSessionId, prompt);
-    else args.push(prompt);
+    // `codex exec -` reads the prompt from stdin; `exec resume` keeps it as an argument.
+    if (resumeSessionId) args.push("resume", resumeSessionId, promptArg(prompt));
+    else if (viaStdin(prompt)) return { command: cliName("codex"), args: [...args, "-"], cwd, stdin: prompt };
+    else args.push(promptArg(prompt));
     return { command: cliName("codex"), args, cwd };
   }
 
   if (agent === "claude") {
     const supports = (flag: string) => !options.claudeFlags || options.claudeFlags.has(flag);
     // Partial messages are only a liveness signal (long thinking is otherwise silent); normalizeCliLine drops them.
-    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", ...(supports("--include-partial-messages") ? ["--include-partial-messages"] : [])];
+    // `claude -p` with no prompt argument reads it from stdin.
+    const stdin = viaStdin(prompt) ? prompt : undefined;
+    const args = ["-p", ...(stdin === undefined ? [promptArg(prompt)] : []), "--output-format", "stream-json", "--verbose", ...(supports("--include-partial-messages") ? ["--include-partial-messages"] : [])];
     if (model) args.push("--model", model);
     if (reasoningEffort) args.push("--effort", reasoningEffort);
     if (readOnly && readTools) args.push("--tools", ...CLAUDE_READ_TOOLS, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan", "--allowedTools", ...CLAUDE_READ_ONLY_BASH_RULES, "--disallowedTools", ...CLAUDE_READ_ONLY_BASH_DENY);
@@ -182,10 +198,10 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
       if (lead && !full) args.push("--allowedTools", LEAD_MCP_RULE);
     }
     if (resumeSessionId) args.push("--resume", resumeSessionId);
-    return { command: cliName("claude"), args, cwd };
+    return { command: cliName("claude"), args, cwd, ...(stdin === undefined ? {} : { stdin }) };
   }
 
-  const args = ["-p", prompt, "--output-format", "streaming-json", "--cwd", cwd];
+  const args = ["-p", promptArg(prompt), "--output-format", "streaming-json", "--cwd", cwd];
   if (model) args.push("--model", model);
   // Grok rejects extra directories ("additionalDirectories is not supported"); its read tools take
   // absolute paths, so the worktree paths in the review note are enough.
@@ -628,9 +644,15 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       cwd: invocation.cwd,
       // A permission question waits for the user; Claude must not give up on that MCP call first.
       env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv, ...accountEnv(options.agent, options.accountDir), ...(options.permissionMcp || options.leadMcp ? { MCP_TOOL_TIMEOUT: String(Math.max(options.permissionMcp ? PROMPT_TIMEOUT_MS : 0, options.leadMcp ? LEAD_TOOL_TIMEOUT_MS : 0) + 60_000) } : {}) }),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    // The cast above only types stdout/stderr; stdin is a pipe exactly when there is a prompt for it.
+    const input = (child as unknown as { stdin: import("node:stream").Writable | null }).stdin;
+    if (invocation.stdin !== undefined && input) {
+      input.on("error", () => undefined); // the CLI may exit before reading it all
+      input.end(invocation.stdin);
+    }
 
     let finalText = "";
     let sessionId: string | undefined;
