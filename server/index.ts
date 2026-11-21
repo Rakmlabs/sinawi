@@ -10,7 +10,7 @@ import { installSimTooling } from "./sim-tool.js";
 import { killCliProcessGroups } from "./cli.js";
 import { reapStaleCliGroups, setCliGroupLedger } from "./cli-ledger.js";
 import { join } from "node:path";
-import { initAppKey } from "./app-key.js";
+import { appBinaryPeerCheck, appExecutable, appKeySocketPath, initAppKey, serveAppKey } from "./app-key.js";
 
 // First: the app window's key leaves process.env before anything (a CLI) could inherit it.
 initAppKey();
@@ -26,6 +26,12 @@ setCliGroupLedger(join(dataDirFor(options.dataDir), "cli-groups.json"));
 const reaped = reapStaleCliGroups();
 if (reaped.length) console.log(`이전 서버가 남긴 CLI ${reaped.length}개를 정리했습니다 / ended ${reaped.length} CLI group(s) a previous server left running`);
 const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: !isolated, worktrees: true, appMcp: true });
+// The installed app's window gets its key over a unix socket, from the app binary that checks who connected.
+const appBinary = appExecutable();
+if (appBinary) {
+  void serveAppKey(appKeySocketPath(dataDirFor(options.dataDir)), appBinaryPeerCheck(appBinary))
+    .catch((error) => console.error("앱 창 키 소켓을 열지 못했습니다 / app key socket failed:", error.message));
+}
 if (!isolated) {
   void installBrowserTooling().catch((error) => console.error("ao-browser 설치 실패:", error.message));
   void installComputerTooling().catch((error) => console.error("ao-computer 설치 실패:", error.message));

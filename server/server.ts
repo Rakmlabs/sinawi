@@ -35,7 +35,7 @@ import { authNotification, sessionNotifications } from "./notification-sources.j
 import type { NotificationInput, NotificationType } from "./notification-types.js";
 import { createTerminalService } from "./terminal.js";
 import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
-import { hasAppKey, isAppExecutable, peerExecutable, appKey } from "./app-key.js";
+import { hasAppKey } from "./app-key.js";
 import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from "./mcp-clients.js";
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
@@ -1859,15 +1859,6 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, ...(startError ? { error: startError } : {}), app: "sinawi", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: envVar("SERVER_VERSION") ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });
   app.get("/api/health", sendHealth);
-  // The installed app's binary (not its window, not any other program) collects the window's key.
-  app.get("/api/app-key", async (req, res) => {
-    if (req.headers.origin || !isAppExecutable(await peerExecutable(req.socket.remotePort))) {
-      res.status(403).json({ error: "Only the Sinawi app can ask for this." });
-      return;
-    }
-    res.setHeader("Cache-Control", "no-store");
-    res.json({ key: appKey() });
-  });
   app.get("/health", sendHealth);
   // Unknown API routes must never become a successful HTML response.
   app.use("/api", (_req, res) => res.status(404).json({ error: "API를 찾을 수 없습니다." }));

@@ -66,9 +66,9 @@ test("without the app key a local request is refused on user-only routes, forged
   assert.equal((await network("POST", "/api/app-mcp/connection", {}, { origin: "tauri://localhost", "x-sinawi-app": "x".repeat(43) })).status, 403);
   assert.equal((await network("POST", "/api/app-mcp/connection", {}, { "x-sinawi-app": appKey() })).status, 403);
   assert.equal((await network("POST", "/api/app-mcp/connection", {}, APP("http://127.0.0.1:61234"))).status, 403);
-  // Nobody but the installed app's binary collects the key.
-  assert.equal((await network("GET", "/api/app-key")).status, 403);
-  assert.equal((await network("GET", "/api/app-key", undefined, { origin: "tauri://localhost" })).status, 403);
+  // No HTTP route hands out the key (the installed app gets it over a checked unix socket, app-key.ts).
+  assert.equal((await network("GET", "/api/app-key")).status, 404);
+  assert.equal((await network("GET", "/api/app-key", undefined, { origin: "tauri://localhost" })).status, 404);
 
   // The app window.
   const fromApp = await network("POST", "/api/app-mcp/connection", {}, APP());

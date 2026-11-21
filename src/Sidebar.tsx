@@ -2,7 +2,7 @@ import { terminalOwnsKeyboardEvent } from "./terminal-events";
 import { AgentMark } from "./AgentMark";
 import { goalProgress } from "./goal-progress";
 import { leadGroups, leadHue, leadName, leadPreview, stewardDescription, stewardIdOf, type LeadGroup } from "./lead";
-import { memo, useEffect, useMemo, useReducer, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
 import { delegationWorkers } from "./conversation";
@@ -17,6 +17,7 @@ import { DeleteDialog } from "./DeleteDialog";
 import { t, translatedMap, useT } from "./i18n";
 import { originLabel } from "./origin";
 import { LeadChatList } from "./app/LeadChatList";
+import { appKeyStatus } from "./app-key";
 
 const agentNames: Record<Session["agent"], string> = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
 const statusLabels = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
@@ -98,6 +99,8 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
   useT();
   const { closed: railClosed, tab, onNavigate, onSkills, connected, sessions, groups, busy, selected, onNew, onSelect, onHelp } = props;
   const { workspaces } = useWorkspaces();
+  // Without the app key the server refuses this window's live feed: say that, not "reconnecting".
+  const keyMissing = useSyncExternalStore(appKeyStatus.subscribe, appKeyStatus.missing, () => false);
   const [footerMenu, setFooterMenu] = useState<{ x: number; y: number }>();
   const [workerTree, dispatchWorkerTree] = useReducer(workerTreeReducer, { expanded: new Set(selected ? [selected] : []) });
   const [closed, setClosed] = useState<Set<string>>(new Set());
@@ -382,8 +385,8 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
         onClick={(event) => { if (footerMenu) { setFooterMenu(undefined); return; } const box = event.currentTarget.getBoundingClientRect(); setFooterMenu({ x: box.left, y: box.top - 6 }); }}>
         <Settings2 size={16} aria-hidden="true" /><span>{t("side.settings")}</span>
       </button>
-      <span className="rail-connection" role="status" title={connected && typeof window !== "undefined" && window.location?.hostname ? `${t("side.connected")} · ${window.location.hostname}` : undefined}>
-        <span className={`rail-status ${connected ? "online" : "offline"}`} aria-hidden="true" /><span>{connected ? t("side.connected") : t("side.reconnecting")}</span>
+      <span className="rail-connection" role="status" title={keyMissing && !connected ? t("side.noAppKeyHint") : connected && typeof window !== "undefined" && window.location?.hostname ? `${t("side.connected")} · ${window.location.hostname}` : undefined}>
+        <span className={`rail-status ${connected ? "online" : "offline"}`} aria-hidden="true" /><span>{connected ? t("side.connected") : keyMissing ? t("side.noAppKey") : t("side.reconnecting")}</span>
       </span>
     </div>
     {footerMenu && <ContextMenu x={footerMenu.x} y={footerMenu.y} placement="above" className="sidebar-footer-menu" label={t("side.tools")} items={footerItems} onClose={() => setFooterMenu(undefined)} />}

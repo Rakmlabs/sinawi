@@ -7,6 +7,7 @@ use std::{
 
 mod computer;
 mod native_browser;
+mod peer_check;
 mod permissions;
 mod server_agent;
 
@@ -95,27 +96,37 @@ fn server_layout<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Result<server_age
     Ok(layout)
 }
 
-/// The main window's key for the app server (server/app-key.ts). The server hands it only to this
-/// binary (it checks the process on the other end of the connection), and this hands it only to the
-/// main window showing the app server, never to a browser tab or another page.
+/// The main window's key for the app server (server/app-key.ts). It comes over the server's unix socket
+/// in the data folder, where the server lets it go only after this binary, run as the peer checker,
+/// confirmed the connecting process is this signed app (peer_check.rs). This hands it only to the main
+/// window showing the app server, never to a browser tab or another page.
 #[tauri::command]
 fn app_key(webview: tauri::Webview) -> Result<String, String> {
-    if cfg!(dev) { return Err("dev runs take the key from the page".into()); }
+    use std::os::unix::net::UnixStream;
     let url = webview.url().map_err(|error| error.to_string())?;
-    let on_server = url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port_or_known_default() == Some(3001);
+    let local = url.scheme() == "http" && url.host_str() == Some("127.0.0.1");
+    // A dev window shows the Vite page (any port); the installed one, the app server itself.
+    let on_server = local && (cfg!(dev) || url.port_or_known_default() == Some(3001));
     if webview.label() != "main" || !on_server { return Err("only the app window".into()); }
-    let address = SERVER_ADDRESS.to_socket_addrs().ok().and_then(|mut a| a.next()).ok_or("server address")?;
-    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(500)).map_err(|e| e.to_string())?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-    let request = format!("GET /api/app-key HTTP/1.1\r\nHost: {SERVER_ADDRESS}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
-    let mut response = String::new();
-    stream.read_to_string(&mut response).map_err(|e| e.to_string())?;
-    let (headers, body) = response.split_once("\r\n\r\n").ok_or("bad response")?;
-    if !headers.starts_with("HTTP/1.1 200") { return Err("the server refused".into()); }
-    let value: serde_json::Value = serde_json::from_str(body.trim()).map_err(|e| e.to_string())?;
-    value.get("key").and_then(|key| key.as_str()).map(str::to_string).ok_or_else(|| "no key".into())
+    let socket = key_socket(&webview)?;
+    let mut stream = UnixStream::connect(&socket).map_err(|e| format!("{}: {e}", socket.display()))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+    let mut key = String::new();
+    stream.read_to_string(&mut key).map_err(|e| e.to_string())?;
+    let key = key.trim().to_string();
+    if key.is_empty() { Err("the server refused".into()) } else { Ok(key) }
+}
+
+/// `<data>/run/app-key.sock` (server/app-key.ts appKeySocketPath): the installed server's data folder,
+/// or in `npm run app:dev` the dev server's (SINAWI_DATA_DIR, else the repository's `.data`).
+fn key_socket(webview: &tauri::Webview) -> Result<std::path::PathBuf, String> {
+    let data = if cfg!(dev) {
+        std::env::var_os("SINAWI_DATA_DIR").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.data"))
+    } else {
+        server_layout(webview.app_handle()).map_err(|error| error.to_string())?.data_dir
+    };
+    Ok(data.join("run").join("app-key.sock"))
 }
 
 #[derive(serde::Serialize)]
@@ -207,6 +218,8 @@ fn open_devtools(app: tauri::AppHandle) {
 }
 
 fn main() {
+    // The key socket's peer check (server/app-key.ts): answer and exit before anything else starts.
+    if std::env::args().nth(1).as_deref() == Some(peer_check::FLAG) { std::process::exit(peer_check::run()); }
     if permissions::cli() { return; }
     // Pre-rename WebKit storage (the window's localStorage/IndexedDB) must move before any webview exists.
     if !cfg!(dev) {

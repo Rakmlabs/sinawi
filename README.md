@@ -296,7 +296,15 @@ Both servers bind to `127.0.0.1` only. `SINAWI_PORT` and `SINAWI_DATA_DIR` chang
 
 A port other than 3001 runs **isolated**: it does not watch the browser, computer and serve queues in `/tmp` that the installed app uses, and does not rewrite `~/.local/bin/ao-*` or the CLIs' skill folders (`SINAWI_ISOLATED=1` turns this on at 3001 too, `=0` turns it off).
 
-**App window key.** What only the user may do (changing settings, approvals, merges, `/ws`, the terminal) needs more than an Origin header: a key the server makes fresh on every start. The installed app's window asks the server for it directly (the server checks the connecting process is the app's executable); `npm run dev` has `scripts/dev.mjs` make the key and put it in a `<meta>` of the dev page. **Dev-mode weakness:** that key can be read from the dev page and the process environment (`ps -E`), so do not run untrusted pages or programs on the same Mac while a dev server is up.
+**App window key.** What only the user may do (changing settings, approvals, merges, `/ws`, the terminal) needs more than an Origin header: a key the server makes fresh on every start and keeps in memory. No HTTP route hands it out.
+
+- **Installed app:** the server offers the key on a unix socket, `<data>/run/app-key.sock`, in a folder only your user can enter. For each connection it runs the app binary with `--sinawi-check-peer`, which asks the kernel who connected (`LOCAL_PEERTOKEN`) and checks that process's running code against the app's own code signature (Security framework). argv[0], the process name or a claimed path do not count, and a modified app binary fails its signature.
+- **`npm run dev`:** `scripts/dev.mjs` hands the key to the server on an inherited pipe (not in its environment, so `ps -E` does not show it) and prints a link with the key in its `#fragment`. Open that link; the page keeps the key for that tab and removes it from the address bar. The page Vite serves does not contain it. `npm run app:dev` gets it like the installed app, from the debug binary.
+
+**What the key does not stop.** It keeps an ordinary local program (an agent running `curl`, another browser page) from acting as you. It does not stop a program that runs as your macOS user and sets out to get around it:
+- It can connect to the socket, keep a copy of the connection in a second process and then exec the real app binary; the check then sees the real app and passes. This gap is known and pinned by a test (`peer_check.rs`).
+- It can change the files the server runs from (the app bundle, the copied server in the app's data folder, the LaunchAgent plist) and restart it, or read the dev link from a terminal's scrollback.
+- Keeping an agent out of all of that needs the agent's process confined: a macOS sandbox profile or a separate user account for agent runs. Sinawi does not do that today, so treat agents in *auto* mode as programs running as you.
 
 | Path | What it holds |
 |---|---|

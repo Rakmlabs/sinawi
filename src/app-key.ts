@@ -1,7 +1,10 @@
 // The app window's key (server/app-key.ts): every request to the app's own /api carries it, and the
-// WebSockets send it as a subprotocol. It comes from the page Vite served (`npm run dev`) or, in the
-// installed app, from the Sinawi binary (`app_key` command). A page opened in an ordinary browser
-// has none, so the user's own decisions (approvals, full access, the MCP token) stay in the app.
+// WebSockets send it as a subprotocol. In the app (installed or `npm run app:dev`) it comes from the
+// Sinawi binary (`app_key` command), which gets it from the server's checked key socket. In a browser
+// on `npm run dev` it comes from the link dev.mjs prints (`#sinawi-app-key=…`): the fragment never
+// reaches a server, the page keeps it for this tab only and takes it out of the address bar. A page
+// opened any other way has none, so the user's own decisions (approvals, full access, the MCP token)
+// stay in the app.
 
 const HEADER = "x-sinawi-app";
 const PROTOCOL = "sinawi-app.";
@@ -9,29 +12,56 @@ const PROTOCOL = "sinawi-app.";
 const REQUIRED_HEADER = "x-sinawi-app-key";
 
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-type KeyWindow = { __TAURI_INTERNALS__?: { invoke: Invoke } };
+type KeyWindow = {
+  __TAURI_INTERNALS__?: { invoke: Invoke };
+  location?: Pick<Location, "hash" | "pathname" | "search">;
+  history?: Pick<History, "replaceState">;
+  sessionStorage?: Pick<Storage, "getItem" | "setItem">;
+};
+const LINK = /(?:^#|&)sinawi-app-key=([\w-]{32,200})/u;
+const STORED = "sinawi-app-key";
 
 let key: string | undefined;
 let loading: Promise<string | undefined> | undefined;
+let missing = false;
+const listeners = new Set<() => void>();
 
-function fromPage(doc: Pick<Document, "querySelector"> | undefined): string | undefined {
-  const value = doc?.querySelector<HTMLMetaElement>('meta[name="sinawi-app-key"]')?.content;
-  return value || undefined;
+/**
+ * Whether the last attempt left this window without a key: the server then refuses its live feed and
+ * the user's decisions, and the sidebar says so instead of just "reconnecting".
+ */
+export const appKeyStatus = {
+  subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  missing: (): boolean => missing,
+};
+
+function settle(value: string | undefined): string | undefined {
+  key = value;
+  if (missing !== !value) { missing = !value; for (const listener of listeners) listener(); }
+  return value;
+}
+
+/** The dev link's key: kept for this tab (a reload has no fragment any more) and taken out of the URL. */
+function fromLink(win: KeyWindow): string | undefined {
+  const found = win.location && LINK.exec(win.location.hash)?.[1];
+  if (found) {
+    try { win.sessionStorage?.setItem(STORED, found); } catch { /* storage blocked: this load only */ }
+    try { win.history?.replaceState(null, "", `${win.location!.pathname}${win.location!.search}`); } catch { /* keep going */ }
+    return found;
+  }
+  try { return win.sessionStorage?.getItem(STORED) || undefined; } catch { return undefined; }
 }
 
 /** The key, asking the app binary again when `refresh` (the server restarted with a new one). */
-export function loadAppKey(refresh = false, win: KeyWindow & { document?: Document } = typeof window === "undefined" ? {} : window): Promise<string | undefined> {
+export function loadAppKey(refresh = false, win: KeyWindow = typeof window === "undefined" ? {} : window): Promise<string | undefined> {
   if (loading && !refresh) return loading;
   loading = (async () => {
-    const page = fromPage(win.document);
-    if (page) return (key = page);
     const invoke = win.__TAURI_INTERNALS__?.invoke;
-    if (!invoke) return (key = undefined);
+    if (!invoke) return settle(fromLink(win));
     try {
       const value = await invoke("app_key");
-      key = typeof value === "string" && value ? value : undefined;
-    } catch { key = undefined; }
-    return key;
+      return settle(typeof value === "string" && value ? value : undefined);
+    } catch { return settle(undefined); }
   })();
   return loading;
 }
