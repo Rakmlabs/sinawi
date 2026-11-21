@@ -17,7 +17,7 @@ test("a CLI group left by a dead server is ended; a live server's and an unverif
   const orphan = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
   const foreign = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
   const live = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
-  t.after(async () => { for (const child of [orphan, foreign, live]) try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { for (const child of [orphan, foreign, live]) try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const dead = deadPid();
   const time = new Date().toISOString();
   await writeFile(file, JSON.stringify([
@@ -40,7 +40,7 @@ test("the default check recognises a group by its leader's command", { skip: pro
   const dir = await mkdtemp(join(tmpdir(), "sinawi-ledger-"));
   const file = join(dir, "cli-groups.json");
   const cli = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
-  t.after(async () => { try { process.kill(-cli.pid!, "SIGKILL"); } catch { /* gone */ } await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { try { process.kill(-cli.pid!, "SIGKILL"); } catch { /* gone */ } await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   await writeFile(file, JSON.stringify([{ pgid: cli.pid, command: "/opt/other/claude", serverPid: deadPid(), startedAt: "" }]));
   assert.deepEqual(reapStaleCliGroups(file, { graceMs: 50 }), [], "a sleep is not the claude we recorded");
   await writeFile(file, JSON.stringify([{ pgid: cli.pid, command: "/bin/sleep", serverPid: deadPid(), startedAt: "" }]));
@@ -51,7 +51,7 @@ test("a run records its group and the ledger drops it once it ends", { skip: pro
   const dir = await mkdtemp(join(tmpdir(), "sinawi-ledger-"));
   const file = join(dir, "cli-groups.json");
   setCliGroupLedger(file);
-  t.after(async () => { setCliGroupLedger(undefined); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { setCliGroupLedger(undefined); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const child = spawn("sleep", ["0.2"], { detached: true, stdio: "ignore" });
   recordCliGroup(child.pid, "sleep");
   assert.equal((JSON.parse(await readFile(file, "utf8")) as unknown[]).length, 1);

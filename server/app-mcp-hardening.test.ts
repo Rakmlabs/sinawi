@@ -12,7 +12,7 @@ import type { Session } from "./types.js";
 
 async function tempDir(t: test.TestContext, prefix: string) {
   const directory = await mkdtemp(join(tmpdir(), prefix));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   return directory;
 }
 
@@ -36,7 +36,7 @@ test("AI-made chats and bot conversations always name a mode, so a full-access w
 test("create_session over the external MCP in a full-access workspace stores auto, not the workspace's full", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "sinawi-mcp-hardening-"));
   const created = createServer({ dataDir: directory, modelHomeDir: directory, staticDir: directory, availableAgents: [], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [] });
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => injectRequest(created.app as never, method, path, body, headers) as Promise<{ status: number; body: any }>;
   const workspace = (await call("GET", "/api/workspaces")).body.currentWorkspaceId as string;
   assert.equal((await call("PATCH", "/api/workspaces", { workspaceId: workspace, settings: { fullAccess: true } })).status, 200);

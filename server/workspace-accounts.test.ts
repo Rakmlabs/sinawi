@@ -60,7 +60,7 @@ test("runCli hands the CLI its account folder, and leaves the default login alon
   process.env.SINAWI_CODEX_BIN = executable;
   t.after(async () => {
     if (previous.bin === undefined) delete process.env.SINAWI_CODEX_BIN; else process.env.SINAWI_CODEX_BIN = previous.bin;
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
   const usageContext = { workspaceId: "work", sessionId: "s", role: "worker" as const, dataDir: directory };
   const withAccount = await runCli({ agent: "codex", prompt: "x", cwd: directory, accountDir: "/accounts/work-codex", usageContext, onLine: () => undefined });
@@ -111,7 +111,7 @@ test("router and limit runs get the account of the workspace they run for", asyn
 
 test("limits are kept per account: a workspace sees its own login's, others the default's", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "sinawi-account-quota-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const window = (remainingPercent: number) => [{ key: "five_hour", label: "5시간", remainingPercent }];
   await saveProviderQuota({ agent: "claude", windows: window(90), updatedAt: "2026-11-01T00:00:00.000Z" }, directory);
   await saveProviderQuota({ agent: "claude", windows: window(5), updatedAt: "2026-11-01T00:00:00.000Z", account: "/acc/claude-work" }, directory);
@@ -125,7 +125,7 @@ test("limits are kept per account: a workspace sees its own login's, others the 
 
 test("skills are read from the workspace's account folders in place of the default ones", async (t) => {
   const account = await mkdtemp(join(tmpdir(), "sinawi-account-skills-"));
-  t.after(() => rm(account, { recursive: true, force: true }));
+  t.after(() => rm(account, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   await mkdir(join(account, "skills", "work-only"), { recursive: true });
   await writeFile(join(account, "skills", "work-only", "SKILL.md"), "---\nname: work-only-skill\ndescription: only in the work account\n---\nbody\n");
   const withAccount = await loadSkills(account, true, { claude: account });

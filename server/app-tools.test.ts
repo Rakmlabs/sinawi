@@ -20,7 +20,7 @@ async function fixture(t: test.TestContext, sessions: Session[] = []) {
   const directory = await mkdtemp(join(tmpdir(), "sinawi-app-tools-"));
   if (sessions.length) await saveSessions(sessions, directory);
   const created = createServer({ dataDir: directory, modelHomeDir: directory, staticDir: directory, availableAgents: [], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [] });
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => injectRequest(created.app as never, method, path, body, headers) as Promise<{ status: number; body: any }>;
   return { directory, ...created, call };
 }
@@ -205,7 +205,7 @@ test("app tools reuse the routes' validation and return what the AI needs", asyn
 
 test("a lead's run gets the lead tools and the app tools; its approvals land in its chat", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-app-tools-lead-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const lead: Session = {
     id: "lead-1", title: "담당", agent: "codex", workers: ["claude"], cwd, status: "done", createdAt: "2026-01-01T00:00:00.000Z",
     workspaceId: "default", skills: [], events: [], steward: { turns: 1, since: "2026-01-01T00:00:00.000Z", name: "api" },
@@ -238,7 +238,7 @@ test("a lead's run gets the lead tools and the app tools; its approvals land in 
 
 test("a lead MCP get_lead name resolves in the calling lead's workspace", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-app-tools-lead-name-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const lead = (id: string, workspaceId: string, prompt: string): Session => ({
     id, title: id, agent: "codex", workers: ["claude"], cwd, status: "done",
     createdAt: id === "home" ? "2026-01-01T00:00:00.000Z" : "2026-01-02T00:00:00.000Z",
@@ -390,7 +390,7 @@ test("the Node launcher outlives a removed Node: it falls back to the node on PA
   const { tmpdir } = await import("node:os");
   const { spawnSync } = await import("node:child_process");
   const dir = await mkdtemp(join(tmpdir(), "sinawi-launcher-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const launcher = await installAppMcpLauncher(dir, join(dir, "gone", "node"));
   const script = join(dir, "hello.mjs");
   await writeFile(script, "console.log('bridge ran', process.argv.length)");

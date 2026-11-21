@@ -77,7 +77,7 @@ test("Grok positive login output wins over stale negative diagnostics", async ()
 
 test("Claude structured login status wins over unrelated unauthenticated stderr", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   let claudeCalls = 0;
   const runner: ModelCommandRunner = async (command) => {
     if (command !== "claude") return { stdout: "" };
@@ -101,7 +101,7 @@ test("Claude structured login status wins over unrelated unauthenticated stderr"
 
 test("Claude plain-text login status wins over unrelated unauthenticated stderr", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   let claudeCalls = 0;
   const runner: ModelCommandRunner = async (command) => {
     if (command !== "claude") return { stdout: "" };
@@ -119,7 +119,7 @@ test("Claude plain-text login status wins over unrelated unauthenticated stderr"
 
 test("Claude retry uses structured status and unavailable account probes remain unknown", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   let claudeCalls = 0;
   const runner: ModelCommandRunner = async (command, _args, options) => {
     if (command !== "claude") return { stdout: "" };
@@ -144,7 +144,7 @@ test("Claude retry uses structured status and unavailable account probes remain 
 
 test("Codex and Grok positive command output wins over unrelated unauthenticated stderr", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const calls = { codex: 0, grok: 0 };
   const runner: ModelCommandRunner = async (command) => {
     if (command === "codex") {
@@ -169,7 +169,7 @@ test("Codex and Grok positive command output wins over unrelated unauthenticated
 
 test("Codex and Grok explicit negative stdout remains a confirmed logout", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const calls = { codex: 0, grok: 0 };
   const runner: ModelCommandRunner = async (command) => {
     if (command === "codex") calls.codex += 1;
@@ -188,7 +188,7 @@ test("Codex and Grok explicit negative stdout remains a confirmed logout", async
 
 test("MCP-only unauthenticated stderr remains unknown for every CLI", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const calls = { claude: 0, codex: 0, grok: 0 };
   const runner: ModelCommandRunner = async (command) => {
     calls[command as keyof typeof calls] += 1;
@@ -207,7 +207,7 @@ test("MCP-only unauthenticated stderr remains unknown for every CLI", async (t) 
 
 test("MCP-only unauthenticated stdout remains unknown for every CLI", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const calls = { claude: 0, codex: 0, grok: 0 };
   const runner: ModelCommandRunner = async (command) => {
     calls[command as keyof typeof calls] += 1;
@@ -312,7 +312,7 @@ test("workspace account folders drive local model and authentication discovery",
   const codexHome = await mkdtemp(join(tmpdir(), "orchestra-models-codex-"));
   const claudeHome = await mkdtemp(join(tmpdir(), "orchestra-models-claude-"));
   const grokHome = await mkdtemp(join(tmpdir(), "orchestra-models-grok-"));
-  t.after(() => Promise.all([fallbackHome, dataDir, codexHome, claudeHome, grokHome].map((directory) => rm(directory, { recursive: true, force: true }))));
+  t.after(() => Promise.all([fallbackHome, dataDir, codexHome, claudeHome, grokHome].map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))));
   await mkdir(join(fallbackHome, ".codex"));
   await writeFile(join(fallbackHome, ".codex", "config.toml"), 'model = "default-codex"\n');
   await writeFile(join(codexHome, "config.toml"), 'model = "workspace-codex"\n');
@@ -349,7 +349,7 @@ test("workspace account folders drive local model and authentication discovery",
 
 test("default CLI accounts are probed without forcing their conventional config directories", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-default-account-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   // The caller's own account folders (a Claude Code session sets CLAUDE_CONFIG_DIR) are not a default account.
   const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, CODEX_HOME: process.env.CODEX_HOME, GROK_HOME: process.env.GROK_HOME };
   for (const key of Object.keys(saved)) delete process.env[key];
@@ -378,7 +378,7 @@ test("RoutingService caches authentication separately for each workspace account
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
   const firstCodex = await mkdtemp(join(tmpdir(), "orchestra-models-codex-a-"));
   const secondCodex = await mkdtemp(join(tmpdir(), "orchestra-models-codex-b-"));
-  t.after(() => Promise.all([dataDir, homeDir, firstCodex, secondCodex].map((directory) => rm(directory, { recursive: true, force: true }))));
+  t.after(() => Promise.all([dataDir, homeDir, firstCodex, secondCodex].map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))));
   await saveRoutingSettings(structuredClone(defaultRoutingSettings), dataDir);
   const modelRunner: ModelCommandRunner = async (command, _args, options) => {
     if (command !== "codex") return { stdout: "Logged in authenticated" };
@@ -402,7 +402,7 @@ test("inherited CLI account roots drive model discovery and cache identity", asy
   t.after(async () => {
     if (previous === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previous;
-    await Promise.all([dataDir, homeDir, firstCodex, secondCodex].map((directory) => rm(directory, { recursive: true, force: true })));
+    await Promise.all([dataDir, homeDir, firstCodex, secondCodex].map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })));
   });
   await writeFile(join(firstCodex, "config.toml"), 'model = "inherited-first"\n');
   await writeFile(join(secondCodex, "config.toml"), 'model = "inherited-second"\n');
@@ -424,7 +424,7 @@ test("inherited CLI account roots drive model discovery and cache identity", asy
 
 test("Grok unauthenticated with model list in stdout is not treated as authenticated", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   // Real output of `grok models` when HOME has no credentials:
   // "You are not authenticated.\nDefault model: grok-4.6\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n"
   const runner: ModelCommandRunner = async (command) => {
@@ -443,7 +443,7 @@ test("Grok unauthenticated with model list in stdout is not treated as authentic
 
 test("Grok 'Not signed in' message with model list is treated as unauthenticated", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
-  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  t.after(() => rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const runner: ModelCommandRunner = async (command) => {
     if (command !== "grok") return { stdout: "" };
     return { stdout: "Not signed in.\n* grok-4.7 (default)\n- grok-4.5\n" };

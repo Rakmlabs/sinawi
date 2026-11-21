@@ -18,7 +18,7 @@ mkdirSync(path.join(base, "outside"), { recursive: true });
 writeFileSync(path.join(root, "a.txt"), "a\n");
 symlinkSync(path.join(base, "outside"), path.join(root, "link"));
 symlinkSync(path.join(base, "outside", "missing.txt"), path.join(root, "dangling"));
-process.on("exit", () => rmSync(base, { recursive: true, force: true }));
+process.on("exit", () => rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
 const host = { ...nodeHookHost(), cdpath: "" };
 const allowed = (command: string, cwd = root, options: Partial<HookHost> = {}) => bashCommandAllowed(command, cwd, root, { ...host, ...options });
 
@@ -116,7 +116,7 @@ test("leaving the folder, expanding, or unlisted programs and flags get no decis
 
 test("the generated hook script approves only safe commands when run by node", async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), "sinawi-hook-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const script = await ensureBashHookScript(dir);
   const run = (command: string) => spawnSync(process.execPath, [script, root], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: root }), encoding: "utf8" });
   const ok = run("cd src && printf 'note\\n' > note.txt && cat note.txt");
@@ -134,7 +134,7 @@ test("the generated hook script approves only safe commands when run by node", a
 
 test("writable Claude runs get the hook and partial messages; read-only runs never get the hook", async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), "sinawi-hook-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const usageContext = { workspaceId: "personal", sessionId: "s", role: "worker" as const, dataDir: dir };
   const writable = await prepareCliInvocation({ agent: "claude", prompt: "work", cwd: "/work/repo", usageContext }, undefined, async () => undefined);
   assert.ok(writable.args.includes("--include-partial-messages"));

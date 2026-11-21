@@ -78,7 +78,7 @@ test("tools API returns workspace-aware MCP and skill states and persists toggle
     const personalLocked = await request(app, "GET", "/api/tools?workspace=personal");
     assert.equal(personalLocked.body.mcp.find((item: any) => item.agent === "grok" && item.name === "bbanana").forcedOff, true);
     assert.equal(personalLocked.body.mcp.find((item: any) => item.agent === "codex" && item.name === "bbanana").forcedOff, undefined);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("disabled skills are excluded from workspace skill discovery", async () => {
@@ -93,7 +93,7 @@ test("disabled skills are excluded from workspace skill discovery", async () => 
     await request(app, "PUT", "/api/tools/skill", { name: "Workspace Review", enabled: false, workspace: "company" });
     assert.ok(!(await request(app, "GET", `/api/skills?cwd=${encodeURIComponent(cwd)}&workspace=company`)).body.some((skill: any) => skill.name === "Workspace Review"));
     assert.ok((await request(app, "GET", `/api/skills?cwd=${encodeURIComponent(cwd)}&workspace=personal`)).body.some((skill: any) => skill.name === "Workspace Review"));
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("tools API includes skills from the requested working folder", async () => {
@@ -112,7 +112,7 @@ test("tools API includes skills from the requested working folder", async () => 
     assert.equal(seen.at(-1), directory);
     await request(app, "PUT", "/api/tools/skill", { name: "Local", enabled: false, workspace: "personal", cwd: directory });
     assert.equal(seen.at(-1), directory);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 
@@ -136,7 +136,7 @@ test("workspace account startup and changes install skills and scope model auth 
     assert.equal((await request(app, "GET", "/api/settings?workspace=personal")).body.modelOptions.codex.authStatus, "authenticated");
     const old = await request(app, "GET", "/api/notifications?workspace=personal");
     assert.ok(!(Array.isArray(old.body) ? old.body : old.body.notifications).some((note: any) => note.key === "auth:codex" && !note.resolvedAt));
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("failed account skill installation leaves the stored workspace policy unchanged", async () => {
@@ -152,7 +152,7 @@ test("failed account skill installation leaves the stored workspace policy uncha
       const workspaces = await request(app, "GET", "/api/workspaces");
       assert.equal(workspaces.body.settings.personal?.accounts?.codex, undefined);
     }
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("an unavailable saved account folder reports installation failure without blocking startup", async () => {
@@ -167,5 +167,5 @@ test("an unavailable saved account folder reports installation failure without b
     assert.ok(notices.body.some((note: any) => note.key === "account-skills" && note.type === "error"));
     const recovered = await request(app, "PATCH", "/api/workspaces/default", { settings: { accounts: { codex: "" } } });
     assert.equal(recovered.status, 200);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });

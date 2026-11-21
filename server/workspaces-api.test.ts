@@ -94,7 +94,7 @@ test("workspaces can be created, renamed and validated", async () => {
     assert.equal((await request(app, "POST", "/api/groups", { name: "G", workspaceId: "side-project" })).status, 201);
     // Without a workspace, groups land in the current workspace.
     assert.equal((await request(app, "POST", "/api/groups", { name: "H" })).body.workspaceId, "side-project");
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("deleting a workspace moves its sessions and groups and refuses the last or a running one", async () => {
@@ -151,7 +151,7 @@ test("deleting a workspace moves its sessions and groups and refuses the last or
     const last = await request(app, "DELETE", "/api/workspaces/a");
     assert.equal(last.status, 409);
     assert.equal((await loadWorkspaceState(directory)).workspaces.length, 1);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("session and group move routes accept any existing workspace and reject unknown ids", async () => {
@@ -175,7 +175,7 @@ test("session and group move routes accept any existing workspace and reject unk
     const group = await request(app, "PATCH", "/api/groups/group-1/workspace", { workspaceId: "client-x" });
     assert.equal(group.status, 200);
     assert.equal((await loadSessions(directory)).find((item) => item.id === "grouped")?.workspaceId, "client-x");
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("workspace settings are validated, merged, cloned into new workspaces and enforced by the APIs", async () => {
@@ -225,7 +225,7 @@ test("workspace settings are validated, merged, cloned into new workspaces and e
     const removed = await request(app, "DELETE", "/api/workspaces/media?moveTo=default");
     assert.equal(removed.status, 200);
     assert.equal(removed.body.settings.media, undefined);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("computer requests need a run token even when the workspace allows computer use", async () => {
@@ -240,14 +240,14 @@ test("computer requests need a run token even when the workspace allows computer
     assert.equal((await request(app, "GET", "/api/computer/state")).body.busy, 0);
     // In-flight commands of a workspace that is turned off are failed by ComputerBridge.revokeWorkspace (computer-bridge.test.ts).
     assert.equal((await request(app, "PATCH", "/api/workspaces/default", { settings: { computerUse: false } })).status, 200);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 
 test("workspace login prepares isolated accounts, reuses saved folders and rejects invalid requests", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "sinawi-login-"));
   const { app, websocket } = server(directory);
-  t.after(async () => { websocket.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   assert.equal((await request(app, "POST", "/api/workspaces/default/accounts/codex/login", {}, null)).status, 403);
   assert.equal((await request(app, "POST", "/api/workspaces/default/accounts/codex/login", {}, "https://example.com")).status, 403);
   for (const [agent, env, login] of [
@@ -273,7 +273,7 @@ test("workspace login prepares isolated accounts, reuses saved folders and rejec
   }
   const custom = join(directory, "custom account's folder");
   await request(app, "PATCH", "/api/workspaces/default", { settings: { accounts: { codex: custom } } });
-  await rm(custom, { recursive: true, force: true });
+  await rm(custom, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   const reused = await request(app, "POST", "/api/workspaces/default/accounts/codex/login");
   assert.equal(reused.status, 200);
   assert.equal(reused.body.settings.default.accounts.codex, custom);
@@ -301,7 +301,7 @@ test("auth refresh after workspace login probes the new account and keeps defaul
     },
     authDiscovery: { sleep: async () => undefined },
   });
-  t.after(async () => { websocket.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   await request(app, "POST", "/api/workspaces", { name: "Other" });
   for (const agent of ["claude", "codex", "grok"]) {
     assert.equal((await request(app, "POST", `/api/workspaces/default/accounts/${agent}/login`)).status, 200);

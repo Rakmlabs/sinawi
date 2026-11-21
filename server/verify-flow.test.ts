@@ -81,7 +81,7 @@ test("a review the CLI cancels hands over the worker reports instead of ending s
 
 test("the review gets git facts from the app, and Grok's read-only runs lose MCP tools", async (t) => {
   const base = await realpath(await mkdtemp(join(tmpdir(), "sinawi-snap-")));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const git = (...args: string[]) => execFileSync("git", ["-C", base, ...args], { encoding: "utf8" });
   git("init", "-q", "-b", "main");
   git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "first commit");
@@ -131,7 +131,7 @@ for (const command of ["명령: ao-browser screenshot --out docs/evidence.png", 
 
 test("replans cannot keep shooting the same existing worktree evidence with reworded briefs", async (t) => {
   const base = await realpath(await mkdtemp(join(tmpdir(), "sinawi-verify-")));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const worktree = join(base, "worktree");
   await mkdir(join(worktree, "docs"), { recursive: true });
   await writeFile(join(worktree, "docs/evidence.png"), "image");
@@ -162,7 +162,7 @@ test("replans cannot keep shooting the same existing worktree evidence with rewo
 
 test("delegate_task reports a rejected verification as a warning and a failed collected task", async (t) => {
   const base = await realpath(await mkdtemp(join(tmpdir(), "sinawi-verify-tools-")));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   let sessionId = "";
   let workers = 0;
   const orchestra: Orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {

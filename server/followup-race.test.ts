@@ -9,7 +9,7 @@ import { Orchestra } from "./orchestra.js";
 
 test("concurrent follow-ups: the second is refused, the first reaches the CLI", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-race-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const prompts: string[] = [];
   const runner = async (options: any) => {
     prompts.push(options.prompt);
@@ -31,7 +31,7 @@ test("concurrent follow-ups: the second is refused, the first reaches the CLI", 
 
 test("a worker's worktree waits for the lead's end-of-turn merge to finish (L8)", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-settle-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const runner = async (options: any) => {
     options.onLine({ type: "message", text: "ok", finalText: "ok" });
     return { exitCode: 0, finalText: "ok" };

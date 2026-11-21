@@ -23,7 +23,7 @@ async function waitFor(predicate: () => boolean, ms = 5_000) {
 
 async function setup(t: test.TestContext) {
   const base = await realpath(await mkdtemp(join(tmpdir(), "sinawi-lead-tools-")));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const repo = join(base, "repo");
   git(base, "init", "-q", "-b", "main", repo);
   await writeFile(join(repo, "README.md"), "readme\n");

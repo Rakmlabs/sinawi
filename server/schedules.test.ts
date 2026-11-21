@@ -88,7 +88,7 @@ test("missed-fire rule: due within a day runs once, older is skipped; a one-off 
 
 test("schedules are saved to schedules.json and read back", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-schedules-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   assert.deepEqual(await loadSchedules(dir), []);
   const item = createSchedule("s1", { prompt: "p", cron: "0 9 * * *", timezone: SEOUL }, "user");
   await saveSchedules(dir, [item]);
@@ -98,7 +98,7 @@ test("schedules are saved to schedules.json and read back", async (t) => {
 
 test("a schedule fires into the lead's latest chat, shows cards, persists and survives a restart", async (t) => {
   const dataDir = await realpath(await mkdtemp(join(tmpdir(), "sinawi-schedule-fire-")));
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  t.after(() => rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const prompts: string[] = [];
   let chatId = "";
   let made: any;
@@ -168,7 +168,7 @@ test("a schedule fires into the lead's latest chat, shows cards, persists and su
 
 test("the minute tick reads the clock: with fake timers a schedule fires once its time comes", async (t) => {
   const dataDir = await realpath(await mkdtemp(join(tmpdir(), "sinawi-schedule-clock-")));
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  t.after(() => rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "네" }));
   orchestra.stewardDataDir = dataDir;
   const steward = orchestra.createSteward({ name: "clock", agent: "claude", workers: [{ agent: "codex" }], cwds: [dataDir] });

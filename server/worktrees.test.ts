@@ -15,7 +15,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, 
 
 async function tempRepo(t: test.TestContext) {
   const base = await realpath(await mkdtemp(join(tmpdir(), "sinawi-wt-")));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const repo = join(base, "repo");
   const dataDir = join(base, "data");
   await mkdir(join(repo, "app"), { recursive: true });
@@ -29,7 +29,7 @@ async function tempRepo(t: test.TestContext) {
 
 test("non-git folders get no worktree", async (t) => {
   const base = await mkdtemp(join(tmpdir(), "sinawi-nogit-"));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   assert.equal(await ensureWorkerWorktree({ dataDir: join(base, "data"), sessionId: "abcdef12-0000", workerId: "claude", cwd: base }), undefined);
 });
 

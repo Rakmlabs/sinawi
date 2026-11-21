@@ -101,7 +101,7 @@ test("the generated ao-sim script reaches the app with the run token", async () 
   } finally {
     http.close();
     clearComputerTokens();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

@@ -74,7 +74,7 @@ test("repeated stagnation stops dedupe in storage without merging other failures
     await store.add(sessionNotifications(ordinary).find((note) => note.type === "error")!);
     assert.equal((await store.list("personal")).filter((note) => note.key?.startsWith("failed:ordinary:")).length, 2, "ordinary failures from separate runs stay separate");
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

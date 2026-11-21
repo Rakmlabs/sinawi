@@ -134,7 +134,7 @@ test("file queue survives its directory vanishing before the response is written
   let stop = () => undefined as void;
   bridge = new BrowserBridge((c) => {
     stop();
-    void rm(dir, { recursive: true, force: true }).then(() => { bridge.resolve(c.id, { ok: true, result: {} }); answered(); });
+    void rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).then(() => { bridge.resolve(c.id, { ok: true, result: {} }); answered(); });
     return 1;
   });
   stop = watchQueue(bridge, dir, 10);

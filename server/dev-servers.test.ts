@@ -55,7 +55,7 @@ test("an app-owned dev server waits for its port, is reused by name, and stops w
     assert.equal(await loopbackOpen(port), false);
   } finally {
     devServers.stopAll("SIGKILL");
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -75,7 +75,7 @@ test("a dev server that exits at once reports its log; a busy port is refused", 
   } finally {
     busy.close();
     devServers.stopAll("SIGKILL");
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -90,7 +90,7 @@ test("removing a session stops its dev servers", async () => {
     assert.throws(() => process.kill(pid, 0));
   } finally {
     devServers.stopAll("SIGKILL");
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -137,7 +137,7 @@ test("the generated ao-serve script starts and lists a server through the app wi
     http.close();
     devServers.stopAll("SIGKILL");
     clearComputerTokens();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -150,7 +150,7 @@ test("dev servers do not inherit CI, so Metro keeps watching files", () => {
 test("a dev server's log is cut to its newest part when it grows past the cap, and keeps growing after", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-serve-log-"));
   const devServers = new DevServerManager({ logDir: join(dir, "logs"), env: () => process.env, settleMs: 300, logCap: 4096 });
-  t.after(async () => { devServers.stopAll("SIGKILL"); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { devServers.stopAll("SIGKILL"); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const started = await devServers.start("session-log", { name: "noisy", command: `node -e "let i=0; setInterval(() => process.stdout.write('line ' + (i++) + ' ' + 'x'.repeat(100) + '\\n'), 2)"`, cwd: dir });
   assert.equal(started.ok, true, JSON.stringify(started));
   const { statSync, readFileSync } = await import("node:fs");

@@ -52,7 +52,7 @@ async function bridge(env: Record<string, string>, messages: object[], expected 
       await Promise.race([done, new Promise((_, reject) => setTimeout(() => reject(new Error("no answer from sinawi-mcp")), 5_000))]);
     } finally { child.kill(); }
     return lines.sort((a, b) => a.id - b.id);
-  } finally { await rm(home, { recursive: true, force: true }); }
+  } finally { await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 }
 
 const rpc = (id: number, method: string) => ({ jsonrpc: "2.0", id, method });
@@ -89,7 +89,7 @@ test("`sinawi mcp` skips notifications, reports the app's refusals, and finds th
   assert.equal(app.seen.length, 1, "a notification (no id) is not forwarded");
 
   const data = await mkdtemp(join(tmpdir(), "sinawi-mcp-data-"));
-  t.after(() => rm(data, { recursive: true, force: true }));
+  t.after(() => rm(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   await writeFile(join(data, "app-mcp-token"), "good-token\n");
   const [fromDir] = await bridge({ SINAWI_URL: url, SINAWI_DATA_DIR: data }, [rpc(1, "tools/list")]);
   assert.equal(fromDir.result.echoed, "tools/list", "$SINAWI_DATA_DIR/app-mcp-token");
@@ -101,7 +101,7 @@ test("`sinawi mcp` skips notifications, reports the app's refusals, and finds th
 test("`sinawi mcp` says how to get a token when there is none, and when the app is not running", async (t) => {
   const app = await stubApp(t);
   const empty = await mkdtemp(join(tmpdir(), "sinawi-mcp-empty-"));
-  t.after(() => rm(empty, { recursive: true, force: true }));
+  t.after(() => rm(empty, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const [missing] = await bridge({ SINAWI_PORT: String(app.port), SINAWI_DATA_DIR: empty }, [rpc(3, "tools/list")]);
   assert.equal(missing.id, 3);
   assert.equal(missing.error.code, -32603);
@@ -169,7 +169,7 @@ test("pickAsset prefers the universal dmg and says so when a release has none", 
 /** The installer with every outside effect faked: a fake GitHub, disk image, codesign/spctl and /Applications in a temp folder. */
 async function fakeMac(t: test.TestContext, { codesign = 0, spctl = 0, running = false, answer = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "sinawi-install-test-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const apps = join(root, "Applications");
   await mkdir(apps);
   const calls: string[][] = [];
@@ -299,7 +299,7 @@ test("the sinawi package is publishable: bin, libs, README and LICENSE are packe
     const files = pack.files as Array<{ path: string; mode: number }>;
     assert.deepEqual(files.map((file) => file.path).sort(), ["LICENSE", "README.md", "bin/sinawi.mjs", "lib/install.mjs", "lib/mcp.mjs", "package.json"]);
     assert.ok(files.find((file) => file.path === "bin/sinawi.mjs")!.mode & 0o111, "packed as executable");
-  } finally { await rm(cache, { recursive: true, force: true }); }
+  } finally { await rm(cache, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("one bridge: the repository script, the app bundle and the server's hooks copy all use packages/sinawi/lib/mcp.mjs", async () => {

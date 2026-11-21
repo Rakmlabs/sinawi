@@ -46,7 +46,7 @@ async function harness(t: test.TestContext) {
     await created.flushSessions().catch(() => undefined);
     if (saved === undefined) delete process.env.SINAWI_CLAUDE_BIN; else process.env.SINAWI_CLAUDE_BIN = saved;
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => injectRequest(created.app as never, method, path, body, headers, 60_000) as Promise<{ status: number; body: any }>;
   const token = (await call("GET", "/api/app-mcp/connection")).body.token as string;

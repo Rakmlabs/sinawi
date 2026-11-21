@@ -43,7 +43,7 @@ test("the help parser lists long flags, including aliases, and rejects unrelated
 
 test("an older Claude Code without the optional flags gets neither --include-partial-messages nor --settings", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-probe-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const usageContext = { workspaceId: "personal", sessionId: "s", role: "worker" as const, dataDir: dir };
   const old = await prepareCliInvocation({ agent: "claude", prompt: "work", cwd: "/work/repo", usageContext }, undefined, async () => parseHelpFlags(OLD_HELP));
   assert.equal(old.args.includes("--include-partial-messages"), false);
@@ -58,7 +58,7 @@ test("an older Claude Code without the optional flags gets neither --include-par
 
 test("claudeHelpFlags runs --help once per binary and caches the parsed result", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-probe-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const counter = join(dir, "count");
   const executable = join(dir, "fake-claude.mjs");
   await writeFile(executable, `#!/usr/bin/env node
@@ -89,7 +89,7 @@ test("the Claude review profile only reads: no test runners, and writing/exec fl
 
 async function fakeCodex(t: test.TestContext, body: string) {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-cli-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const executable = join(dir, "mock-codex.mjs");
   await writeFile(executable, `#!/usr/bin/env node\n${body}`);
   await chmod(executable, 0o700);
@@ -200,6 +200,6 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify({ type: "resul
     assert.equal(result.finalText, `got ${prompt.length}`);
   } finally {
     if (previous === undefined) delete process.env.SINAWI_CLAUDE_BIN; else process.env.SINAWI_CLAUDE_BIN = previous;
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });

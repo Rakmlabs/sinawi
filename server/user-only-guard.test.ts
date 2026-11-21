@@ -32,7 +32,7 @@ test("user-only routes match their own paths and nothing else", () => {
 test("without the app key a local request is refused on user-only routes, forged Origin or not; the app and in-process runs pass", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "sinawi-user-only-"));
   const created = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: ["claude"], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [], appMcp: true });
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await created.flushSessions().catch(() => undefined); await new Promise((resolve) => setTimeout(resolve, 200)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await created.flushSessions().catch(() => undefined); await new Promise((resolve) => setTimeout(resolve, 200)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const network = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
     injectRequest(created.app as never, method, path, body, headers, 10_000, false) as Promise<{ status: number; body: any }>;
 
@@ -93,7 +93,7 @@ test("/ws only opens for the app's window (its key), not for a local program, fo
   const directory = await mkdtemp(join(tmpdir(), "sinawi-ws-origin-"));
   const created = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: ["claude"], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [] });
   await new Promise<void>((resolve) => created.httpServer.listen(0, "127.0.0.1", resolve));
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await created.flushSessions().catch(() => undefined); await new Promise((resolve) => setTimeout(resolve, 200)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await created.flushSessions().catch(() => undefined); await new Promise((resolve) => setTimeout(resolve, 200)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const port = (created.httpServer.address() as { port: number }).port;
   const open = (headers: Record<string, string>, protocols: string[] = []) => new Promise<string>((resolve) => {
     const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, protocols, { headers });

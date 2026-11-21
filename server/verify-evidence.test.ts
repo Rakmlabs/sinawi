@@ -14,7 +14,7 @@ test("VerifyEvidenceGuard leaves ordinary implementation retries to the goal and
 
 test("existingEvidence resolves local evidence across session roots and removes duplicates", async (t) => {
   const base = await realpath(await mkdtemp(join(tmpdir(), "sinawi-evidence-")));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const cwd = join(base, "session");
   const worktree = join(base, "worktree");
   await mkdir(cwd, { recursive: true });
@@ -46,7 +46,7 @@ test("VerifyEvidenceGuard normalizes whitespace before counting repeated briefs"
 
 test("VerifyEvidenceGuard stops reworded screenshot briefs that reuse the same file", async (t) => {
   const cwd = await realpath(await mkdtemp(join(tmpdir(), "sinawi-screenshot-")));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const screenshot = join(cwd, "evidence.png");
   await writeFile(screenshot, "image");
   const guard = new VerifyEvidenceGuard();

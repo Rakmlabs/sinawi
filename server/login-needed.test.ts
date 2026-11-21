@@ -18,7 +18,7 @@ test("sign-in errors from each CLI are recognised, other failures are not", () =
 
 test("a not-signed-in run ends with one error that carries the login command", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-login-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const runner = async (options: any) => {
     options.onLine({ type: "error", text: "Not signed in. To authenticate without a browser, run: grok login --device-code" });
     return { exitCode: 1, finalText: "" };

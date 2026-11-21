@@ -72,5 +72,5 @@ test("a burst of run events reaches disk in a few coalesced writes", async () =>
     await flushSessions();
     const stored = JSON.parse(await readFile(join(directory, "sessions", "s1.json"), "utf8")) as Session;
     assert.equal(stored.title, "제목 299");
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });

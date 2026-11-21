@@ -48,7 +48,7 @@ async function fixture(t: test.TestContext, sessions: Session[] = [], legacyMerg
   if (sessions.length) await saveSessions(sessions, directory);
   if (legacyMergePolicy) await saveWorkspaceState({ currentWorkspaceId: "default", workspaces: [{ id: "default", name: "기본" }], defaults: {}, stewardSettings: { legacyMergePolicy } }, directory);
   const created = server(directory);
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   return { directory, ...created };
 }
 
@@ -332,7 +332,7 @@ test("a lead's schedules can be listed, created, edited, paused and deleted over
 
 test("the lead tool endpoint takes only a lead run's own token", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-lead-mcp-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const { app } = await fixture(t, [legacyLead(cwd)]);
   await request(app, "GET", "/api/stewards");
   const list = { jsonrpc: "2.0", id: 1, method: "tools/list" };
@@ -382,7 +382,7 @@ async function spacesFixture(t: test.TestContext, sessions: Session[] = [], stew
   if (sessions.length) await saveSessions(sessions, directory);
   if (stewards.length) await saveStewards(stewards, directory);
   const created = server(directory);
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   return { directory, ...created };
 }
 
@@ -457,7 +457,7 @@ test("a rejected combined lead rename and move leaves the lead unchanged", async
 
 test("leads saved before workspaces had leads go to their chats' workspace, else the first one", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const chat = { ...legacyLead(cwd), workspaceId: "side", steward: { ...legacyLead(cwd).steward!, id: "with-chat" } };
   const old = (id: string, name: string) => ({ id, name, agent: "claude" as const, skills: [], systemPrompt: "", workers: [], mergePolicy: "ask" as const, cwds: [cwd], createdAt: "2026-01-01T00:00:00.000Z" });
   const { app, directory } = await spacesFixture(t, [chat], [old("with-chat", "api"), old("no-chat", "빈 담당")]);
@@ -471,7 +471,7 @@ test("leads saved before workspaces had leads go to their chats' workspace, else
 
 test("a lead's chats follow the lead between workspaces, and a new thread opens in the lead's workspace", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const { app, directory } = await spacesFixture(t);
   const lead = (await request(app, "POST", "/api/stewards", { name: "이동", cwds: [cwd], workspaceId: "side" })).body;
   // Asked for from the default workspace (an MCP call, say): the thread still goes to the lead's.
@@ -501,7 +501,7 @@ test("a lead's chats follow the lead between workspaces, and a new thread opens 
 
 test("re-enabling a lead chat moved elsewhere returns the chat to its lead's workspace", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const chat = legacyLead(cwd);
   const { app, directory } = await spacesFixture(t, [chat]);
   assert.equal((await request(app, "PATCH", "/api/sessions/lead-1/steward", { enabled: false })).status, 200);
@@ -514,7 +514,7 @@ test("re-enabling a lead chat moved elsewhere returns the chat to its lead's wor
 
 test("a disabled entity thread remembers its lead across a move and server restart", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const { app, directory } = await spacesFixture(t);
   const lead = (await request(app, "POST", "/api/stewards", { name: "기억", cwds: [cwd], workspaceId: "side" })).body;
   const thread = (await request(app, "POST", "/api/sessions", { steward: { id: lead.id }, workspaceId: "default" })).body;
@@ -536,7 +536,7 @@ test("a disabled entity thread remembers its lead across a move and server resta
 
 test("a disabled thread whose old lead was deleted safely becomes a new lead", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const { app } = await spacesFixture(t);
   const lead = (await request(app, "POST", "/api/stewards", { name: "삭제 전", cwds: [cwd], workspaceId: "side" })).body;
   const thread = (await request(app, "POST", "/api/sessions", { steward: { id: lead.id } })).body;
@@ -550,7 +550,7 @@ test("a disabled thread whose old lead was deleted safely becomes a new lead", a
 
 test("a lead's peers are the leads of its own workspace", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-spaces-cwd-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const chat = (id: string, name: string, workspaceId: string): Session => ({ ...legacyLead(cwd), id, workspaceId, events: [], steward: { turns: 0, since: "2026-01-01T00:00:00.000Z", name } });
   const { app } = await spacesFixture(t, [chat("a", "가", "default"), chat("b", "나", "default"), chat("c", "다", "side")]);
   const peers = (await request(app, "GET", "/api/sessions/a/steward")).body.peers.map((item: any) => item.name);

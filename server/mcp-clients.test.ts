@@ -25,7 +25,7 @@ async function fixture(t: test.TestContext) {
     if (saved.claude === undefined) delete process.env.SINAWI_CLAUDE_DESKTOP_CONFIG;
     if (saved.cursor === undefined) delete process.env.SINAWI_CURSOR_MCP_CONFIG;
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => injectRequest(created.app as never, method, path, body, headers) as Promise<{ status: number; body: any }>;
   const fromApp = { origin: "http://127.0.0.1:5198", "x-sinawi-app": appKey() };

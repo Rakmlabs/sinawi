@@ -15,7 +15,7 @@ const ORIGIN = `http://127.0.0.1:${process.env.SINAWI_PORT ?? 3001}`;
 async function start(t: test.TestContext, directory: string) {
   const created = createServer({ dataDir: directory, modelHomeDir: directory, availableAgents: ["claude"], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [], wsPingMs: 150 });
   await new Promise<void>((resolve) => created.httpServer.listen(0, "127.0.0.1", resolve));
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await created.flushSessions().catch(() => undefined); await new Promise((resolve) => setTimeout(resolve, 200)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await created.flushSessions().catch(() => undefined); await new Promise((resolve) => setTimeout(resolve, 200)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   return { created, port: (created.httpServer.address() as { port: number }).port };
 }
 
@@ -42,7 +42,7 @@ test("unreadable data keeps the server up: /api/health says why and a window is 
   const parent = await mkdtemp(join(tmpdir(), "sinawi-start-error-"));
   const blocker = join(parent, "not-a-folder");
   await writeFile(blocker, "");
-  t.after(() => rm(parent, { recursive: true, force: true }));
+  t.after(() => rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   // The data folder sits under a file: every read fails with ENOTDIR, so loading the data rejects.
   const { created, port } = await start(t, join(blocker, "data"));
   await new Promise((resolve) => setTimeout(resolve, 300));
@@ -59,7 +59,7 @@ test("a window that fell behind gets an edited event again once it drains, not o
   const options = { dataDir: directory, modelHomeDir: directory, availableAgents: ["claude" as const], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [], wsPingMs: 150, wsBufferLimit: 8 * 1024 * 1024 };
   const created = createServer(options);
   await new Promise<void>((resolve) => created.httpServer.listen(0, "127.0.0.1", resolve));
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await created.flushSessions().catch(() => undefined); await new Promise((resolve) => setTimeout(resolve, 200)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await created.flushSessions().catch(() => undefined); await new Promise((resolve) => setTimeout(resolve, 200)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const port = (created.httpServer.address() as { port: number }).port;
   const window = await connect(port, true);
   try {

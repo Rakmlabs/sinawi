@@ -12,7 +12,7 @@ const event = (n: number, type: SessionEvent["type"] = "tool"): SessionEvent => 
 
 test("trimmed events are archived, and a reader resumes from a trimmed id or pages back into the archive", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-archive-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const events = Array.from({ length: 12 }, (_, n) => event(n, n % 3 === 0 ? "message" : "tool"));
   const dropped: SessionEvent[] = [];
   trimEvents(events, 8, dropped);

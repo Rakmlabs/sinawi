@@ -79,7 +79,7 @@ test("production serves the built frontend alongside guarded API and identifies 
   } finally {
     production.websocket.close();
     development.websocket.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -128,7 +128,7 @@ test("workspace API filters sessions and groups and persists workspace defaults"
     assert.equal(snapshot.status, 200);
     assert.equal(snapshot.body.defaults.personal.cwd, "/new-personal");
     assert.equal(snapshot.body.defaults.company.cwd, "/new-company");
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("moving a session detaches it while moving a group carries its sessions", async () => {
@@ -153,7 +153,7 @@ test("moving a session detaches it while moving a group carries its sessions", a
     const sessions = await loadSessions(directory);
     assert.equal(sessions.find((item) => item.id === "grouped")?.workspaceId, "company");
     assert.equal(sessions.find((item) => item.id === "grouped")?.groupId, "group-1");
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("group mutations broadcast a complete groups snapshot", async () => {
@@ -179,7 +179,7 @@ test("group mutations broadcast a complete groups snapshot", async () => {
     assert.deepEqual(messages.at(-1), { type: "groups", groups: [] });
   } finally {
     (websocket.clients as Set<any>).delete(client); websocket.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -205,7 +205,7 @@ test("failed group session persistence rolls ownership back", async () => {
     assert.equal((await loadGroups(directory))[0].workspaceId, "personal");
     assert.equal(orchestra.get("grouped")?.workspaceId, "personal");
     assert.equal(orchestra.get("grouped")?.groupId, "group-1");
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("session API renames completed sessions and deletes them from persistence", async () => {
@@ -262,7 +262,7 @@ test("session API renames completed sessions and deletes them from persistence",
     assert.equal((await request(app, "DELETE", "/api/sessions/session-1")).status, 404);
   } finally {
     websocket.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -294,7 +294,7 @@ test("routing API persists settings and returns an editable recommendation witho
     assert.equal((await request(app, "GET", "/api/settings")).status, 500);
     assert.equal((await request(app, "POST", "/api/route", { prompt: "구현", cwd: directory })).status, 400);
     assert.equal(await readFile(join(directory, "routing-settings.json"), "utf8"), "{invalid json");
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("limits API reads provider state and refreshes Claude with a minimal Haiku probe", async () => {
@@ -335,7 +335,7 @@ test("limits API reads provider state and refreshes Claude with a minimal Haiku 
     assert.equal(alsoRefreshed.status, 200);
     assert.equal(probes, 1);
     assert.equal(refreshed.body.providers.find((provider: any) => provider.agent === "claude").windows[0].remainingPercent, 27);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("settings API discovers at startup and refreshes catalogs and auth without changing saved rules", async () => {
@@ -366,7 +366,7 @@ test("settings API discovers at startup and refreshes catalogs and auth without 
     assert.deepEqual(JSON.parse(await readFile(join(directory, "routing-settings.json"), "utf8")), settings);
     assert.equal((await request(app, "POST", "/api/settings/models/refresh", {}, "https://example.com")).status, 403);
     assert.equal(grokCalls, 3);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("worker readiness refreshes authentication after a terminal login", async () => {
@@ -389,7 +389,7 @@ test("worker readiness refreshes authentication after a terminal login", async (
     assert.equal((await orchestra.workerReadiness!(session, "claude")).authenticated, true);
   } finally {
     websocket.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -419,7 +419,7 @@ test("auto handoff undo API restores the persisted team and rejects stale undo o
     assert.equal(saved.lastAutoSwitchTurn, 4);
     assert.equal(saved.events[0].metadata?.undone, true);
     assert.equal((await request(app, "POST", "/api/sessions/auto-session/handoff/undo", { eventId: "auto-event" })).status, 400);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("skills API isolates selected project folders and refresh bypasses cached discovery", async () => {
@@ -444,7 +444,7 @@ test("skills API isolates selected project folders and refresh bypasses cached d
     const otherSkills = await request(app, "GET", `/api/skills?cwd=${encodeURIComponent(other)}`);
     assert.ok(!otherSkills.body.some((item: any) => item.name === "next14-fixture"));
     assert.equal((await request(app, "POST", "/api/skills/refresh", { cwd: join(directory, "missing") })).status, 400);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("workspace allowed agents persist and company routing excludes Codex in every role", async () => {
@@ -478,7 +478,7 @@ test("workspace allowed agents persist and company routing excludes Codex in eve
     const usage = await request(app, "GET", "/api/usage");
     assert.equal(usage.status, 200);
     assert.deepEqual(usage.body, { runs: [] });
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test('workspace quota fallback settings persist and reject invalid policies', async () => {
@@ -493,7 +493,7 @@ test('workspace quota fallback settings persist and reject invalid policies', as
     for (const invalid of [{ quotaThreshold: -1 }, { quotaThreshold: 101 }, { quotaThreshold: '3' }, { quotaFallback: 'yes' }, { fallbackOrder: { codex: ['bad'] } }, { fallbackOrder: { bad: ['claude'] } }]) {
       assert.equal((await request(app, 'PATCH', '/api/workspaces', { workspaceId: 'personal', defaults: invalid })).status, 400);
     }
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test('router respects workspace fallback threshold instead of the old ten-percent filter', async () => {
@@ -507,7 +507,7 @@ test('router respects workspace fallback threshold instead of the old ten-percen
     const response = await request(app, 'POST', '/api/route', { prompt: '검토해 주세요', cwd: directory });
     assert.equal(response.status, 200);
     assert.equal(calls[0], 'codex');
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("Claude defaults and media capability constraints survive quota and workspace filtering", async () => {
@@ -546,7 +546,7 @@ test("Claude defaults and media capability constraints survive quota and workspa
     assert.equal(restricted.status, 200);
     assert.equal(restricted.body.orchestrator.agent, "claude");
     assert.ok(restricted.body.workers.every((worker: any) => worker.agent === "claude"));
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("media prompts start and continue sessions with the team when Grok is unavailable", async () => {
@@ -570,7 +570,7 @@ test("media prompts start and continue sessions with the team when Grok is unava
     const followup = await request(app, "POST", "/api/sessions/media-fixture/messages", { prompt: "썸네일 이미지도 만들어줘" });
     assert.equal(followup.status, 200, JSON.stringify(followup.body));
     assert.deepEqual(reached, [prompt, "광고 영상을 만들어줘", "썸네일 이미지도 만들어줘"]);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("migrated company settings with media off still start and continue sessions for media-looking requests", async () => {
@@ -612,7 +612,7 @@ test("migrated company settings with media off still start and continue sessions
     assert.equal(continued.status, 200, JSON.stringify(continued.body));
     assert.deepEqual(reached, ["광고 영상을 만들어줘", "render asset"]);
     assert.equal(launches, 0, "no planner launches for the media policy");
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("notifications API isolates workspaces, validates reports and supports read and clear", async () => {
@@ -631,7 +631,7 @@ test("notifications API isolates workspaces, validates reports and supports read
     assert.equal((await request(app, "DELETE", "/api/notifications?workspace=personal")).status, 204);
     assert.equal((await request(app, "GET", "/api/notifications?workspace=personal")).body.length, 0);
     assert.equal((await request(app, "GET", "/api/notifications?workspace=company")).body.length, 1);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("auth notifications resolve after login and focus refresh is throttled", async () => {
@@ -653,5 +653,5 @@ test("auth notifications resolve after login and focus refresh is throttled", as
     await request(app, "POST", "/api/settings/models/refresh", { reason: "focus" });
     assert.equal(calls, 3);
     assert.deepEqual((await request(app, "GET", "/api/notifications?workspace=personal")).body, []);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
