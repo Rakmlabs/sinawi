@@ -37,8 +37,14 @@ test("npm run dev hands the server its environment, SINAWI_DATA_DIR and SINAWI_P
   const source = await readFile(new URL("../scripts/dev.mjs", import.meta.url), "utf8");
   const server = /spawn\(process\.execPath, \["--import", "tsx", "server\/index\.ts"\], \{([^}]*)\}/u.exec(source);
   assert.ok(server, "dev.mjs starts server/index.ts");
-  // No `env:` option means the child inherits process.env as it is.
-  assert.doesNotMatch(server[1], /\benv\s*:/u);
+  // The child gets process.env as it is, plus the key pipe's fd (the key itself never goes in the environment).
+  const env = /\benv\s*:\s*(\w+)/u.exec(server[1]);
+  if (env) {
+    const built = new RegExp(`const ${env[1]} = \\{ \\.\\.\\.process\\.env,([^\\n]*)`, "u").exec(source);
+    assert.ok(built, "the server's environment starts from process.env");
+    assert.doesNotMatch(built[1], /SINAWI_(DATA_DIR|PORT)\b/u, "SINAWI_DATA_DIR and SINAWI_PORT pass through untouched");
+    assert.doesNotMatch(source, /delete \w+\.SINAWI_(DATA_DIR|PORT)\b/u);
+  }
 });
 
 test("a copy on another port (or SINAWI_ISOLATED=1) stays off the shared queues and the home folder (review L6)", async () => {
