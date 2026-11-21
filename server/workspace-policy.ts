@@ -149,6 +149,14 @@ export function accountLoginCommand(agent: AgentId, dir?: string): string {
   return `mkdir -p ${shellQuote(dir)} && ${ACCOUNT_ENV[agent]}=${shellQuote(dir)} ${login}`;
 }
 
+/**
+ * A CLI's own words for "you are not signed in" (first-run #4): the chat shows one error with a login
+ * button instead of the CLI's text followed by a bare exit code.
+ */
+export function loginNeededText(text: string): boolean {
+  return /\bnot (?:signed|logged) in\b|\bnot authenticated\b|\bunauthenticated\b|\b(?:authentication|login) required\b|\bplease (?:run \S+ )?(?:\/)?log ?in\b|\brun [`'"]?(?:claude|codex|grok)(?: auth)? login\b|invalid api key|로그인(?:이)? 필요|인증(?:이)? 필요/iu.test(text);
+}
+
 /** The account folder this workspace gives `agent`'s CLI runs; undefined is the default login. */
 export function accountDirFor(policy: WorkspacePolicy | undefined, agent: AgentId): string | undefined {
   return policy?.accounts?.[agent];

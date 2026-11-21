@@ -18,7 +18,7 @@ import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
 import type { AutoSwitchRecommendation } from "./auto-routing.js";
-import { accountDirFor, allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, fullAccessBlockedMessage, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
+import { accountDirFor, accountLoginCommand, loginNeededText, allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, fullAccessBlockedMessage, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
@@ -41,6 +41,8 @@ const stallCheckMs = 15_000;
 const STOPPED = Symbol("stopped");
 /** A failed CLI run whose feature diagnostic should still reach tag-based leads. */
 class WorkerFeatureError extends Error {}
+/** A failure the chat already shows in its own words (a sign-in error): the turn ends without repeating it. */
+class AlreadyShownError extends Error {}
 const guardKey = (sessionId: string, workerId: string) => `${sessionId}:${workerId}`;
 
 /** What a lead's tools need from the turn that is running (Orchestra.leadTurns). */
@@ -706,7 +708,7 @@ export class Orchestra {
     const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, leadResume, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     this.rememberLeadSession(session, first);
-    if (first.exitCode !== 0) throw new Error(first.resumeRetryFailed ? resumeRetryFailed(first.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
+    if (first.exitCode !== 0) throw first.loginNeeded ? new AlreadyShownError(first.lastError) : new Error(first.resumeRetryFailed ? resumeRetryFailed(first.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
     this.noteChecklist(session, first.finalText);
     delete session.handoffContext;
     // Plan mode: the lead's read-only answer is the plan; nothing is handed to workers.
@@ -1239,6 +1241,7 @@ export class Orchestra {
     // The CLI said the resumed conversation does not exist: runAgentOnce retries fresh, so the line is not shown.
     let resumeMissing = false;
     let lastError = "";
+    let loginNeeded = false;
     const disabledMcp = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledMcp;
     this.requireCurrentRun(session, signal);
     const blockedMcp = disabledMcp.filter((key) => key.startsWith(`${agent}:`))
@@ -1304,7 +1307,10 @@ export class Orchestra {
           if (line.text === lastCompleteMessage) return;
           lastCompleteMessage = line.text;
         }
-        this.event(session, agent, line.type, line.text, { role, workerId, workerLabel: workerName, delegationId, model, reasoningEffort });
+        // Not signed in: the CLI's own words, with the login command for this workspace's account.
+        const login = line.type === "error" && loginNeededText(line.text) ? { agent, command: accountLoginCommand(agent, accountDirFor(policy, agent)) } : undefined;
+        if (login) loginNeeded = true;
+        this.event(session, agent, line.type, line.text, { role, workerId, workerLabel: workerName, delegationId, model, reasoningEffort, ...(login ? { metadata: { loginNeeded: login } } : {}) });
       },
     });
     const inflight = this.inflightRuns.get(session.id) ?? new Set<Promise<unknown>>();
@@ -1319,7 +1325,7 @@ export class Orchestra {
     if (leadStall) throw new Error(`총괄 검증 반복을 멈췄습니다: ${leadStall.reason} 확인된 증거와 남은 문제를 사용자에게 보고하고, 다른 진단·방법으로 이어가거나 병합 여부를 물어보세요.`);
     // A run the stall guard stopped ended because the app killed it, not because a quota ran out.
     const stoppedByApp = Boolean(guard?.kill.signal.aborted);
-    return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false, resumeMissing, lastError, resumeRetried: false, resumeRetryFailed: false };
+    return { ...result, agent, model, reasoningEffort, loginNeeded, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false, resumeMissing, lastError, resumeRetried: false, resumeRetryFailed: false };
   }
 
   /** The account config dir a run of `agent` uses in this session's workspace, with the agent: where its resume ids live. */
@@ -1948,7 +1954,8 @@ export class Orchestra {
     session.status = "error"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     const message = error instanceof Error ? error.message : String(error);
-    this.event(session, session.agent, "error", message);
+    // The chat already shows why (a sign-in error with its login button): no second, vaguer line.
+    if (!(error instanceof AlreadyShownError)) this.event(session, session.agent, "error", message);
     if (session.steward) void this.stewardTurnEnded(session, "error").catch(() => undefined);
     this.afterTurn(session, "error", false);
     this.stewardIdle(session, "error");
@@ -3216,7 +3223,7 @@ export class Orchestra {
     const result = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, resume, controller.signal, true, true, "orchestrator");
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     this.rememberLeadSession(session, result);
-    if (result.exitCode !== 0) throw new Error(result.resumeRetryFailed ? resumeRetryFailed(result.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`);
+    if (result.exitCode !== 0) throw result.loginNeeded ? new AlreadyShownError(result.lastError) : new Error(result.resumeRetryFailed ? resumeRetryFailed(result.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`);
     delete session.handoffContext;
     state.reporting = false;
     this.addGoals(session, result.finalText);
