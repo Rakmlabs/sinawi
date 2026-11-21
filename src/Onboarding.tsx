@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Bell, Check, ExternalLink, FolderOpen, Keyboard, Layers, Monitor, MousePointerClick, Plug, RefreshCw, Sparkles, SquareTerminal, TriangleAlert, Wrench, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bell, Check, ExternalLink, FolderOpen, Keyboard, Layers, Monitor, MousePointerClick, Plug, RefreshCw, Sparkles, SquareTerminal, TriangleAlert, UserPlus, Wrench, X } from "lucide-react";
 import type { SetupTool, PermissionId, PermissionState } from "../server/setup";
 import type { WorkspaceId } from "../server/types";
 import { accountScopeKey } from "./app/api";
 import { CopyButton } from "./CopyButton";
 import { openTerminal } from "./terminal-events";
-import { environmentLoginCommand, environmentSettingsPath, permissionView, tauriInvoke, type PermState, loginStatus, saveProgress, SHORTCUTS, STEPS, toolsStatus, type AuthStatus, type OnboardingProgress, type StepStatus } from "./onboarding-state";
+import { openSettings } from "./settings/settings-nav";
+import { environmentLoginCommand, NEW_LEAD_EVENT, environmentSettingsPath, permissionView, tauriInvoke, type PermState, loginStatus, saveProgress, SHORTCUTS, STEPS, toolsStatus, type AuthStatus, type OnboardingProgress, type StepStatus } from "./onboarding-state";
 import "./onboarding.css";
 import { t, tx } from "./i18n";
 import { WebLink } from "./WebLink";
@@ -128,6 +129,10 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
   const body = () => {
     switch (step.id) {
       case "tools": return <>
+        <div className="ob-intro">
+          <strong>{t("ob.intro.title")}</strong>
+          <p>{t("ob.intro.body")}</p>
+        </div>
         <p className="ob-lead">{tx("ob.tools.lead")}</p>
         <div className="ob-list">{tools ? tools.map((tool) => {
           const warn = tool.installed && tool.warning === "unsupported-version" ? t("set.env.node.warnUnsupported")
@@ -194,6 +199,14 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
       </>;
       case "done": return <>
         <div className="ob-done"><Sparkles size={28} /><h3>{t("ob.done.title")}</h3><p>{t("ob.done.body", { agents: agents.filter((tool) => tool.installed).map((tool) => tool.name).join(" · ") || t("ob.done.agentFallback") })}</p></div>
+        <div className="ob-next">
+          <button type="button" className="ob-next-card" onClick={() => { set({ completed: true, skipped: false }); onClose(true); window.setTimeout(() => window.dispatchEvent(new CustomEvent(NEW_LEAD_EVENT)), 0); }}>
+            <UserPlus size={18} aria-hidden="true" /><span><strong>{t("ob.next.lead")}</strong><small>{t("ob.next.leadWhy")}</small></span>
+          </button>
+          <button type="button" className="ob-next-card" onClick={() => { set({ completed: true, skipped: false }); onClose(true); window.setTimeout(() => openSettings("connect"), 0); }}>
+            <Plug size={18} aria-hidden="true" /><span><strong>{t("ob.next.connect")}</strong><small>{t("ob.next.connectWhy")}</small></span>
+          </button>
+        </div>
         <div className="ob-shortcuts">{SHORTCUTS.map(([key, label]) => <div key={key}><kbd>{key}</kbd><span>{t(label)}</span></div>)}</div>
         <p className="ob-muted">{tx("ob.done.reopen")}</p>
       </>;
@@ -219,6 +232,7 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
         <footer>
           <button className="ob-btn" disabled={progress.step === 0} onClick={() => { setNotice(""); go(progress.step - 1); }}><ArrowLeft size={15} />{t("ob.prev")}</button>
           <button className="ob-btn" disabled={checking} onClick={() => void check(step.id === "login")}><RefreshCw size={15} />{t("ob.checkAgain")}</button>
+          <button className="ob-skip ob-skip-inline" onClick={() => { set({ skipped: true }); onClose(false); }}>{t("ob.later")}</button>
           <span className="ob-spacer" />
           {step.id === "done" ? <button className="ob-btn primary" onClick={() => { set({ completed: true, skipped: false }); onClose(true); }}><Keyboard size={15} />{t("ob.start")}</button>
             : <button className="ob-btn primary" onClick={() => { setNotice(""); go(progress.step + 1); }}>{t("ob.next")}<ArrowRight size={15} /></button>}

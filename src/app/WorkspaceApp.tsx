@@ -60,6 +60,7 @@ import { SessionPopover } from "./SessionPopover";
 import { SETTINGS_REOPEN_KEY, SettingsWindow } from "../settings/SettingsWindow";
 import { GeneralPage, NotificationsPage, ShortcutsPage, UpdatesPage } from "../settings/AppPages";
 import { ConnectPage } from "../settings/ConnectPage";
+import { NEW_LEAD_EVENT } from "../onboarding-state";
 import { EnvironmentPage } from "../settings/EnvironmentPage";
 import { AgentsPage, ProjectsPage, RoutingPage } from "../settings/WorkspacePages";
 import { SettingsPage } from "../settings/controls";
@@ -827,6 +828,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       if (cleanup?.kept.length) setError(t("wt.deleteKept", { branches: cleanup.kept.map((item) => item.branch).join(", ") }));
     }),
   });
+  useEffect(() => {
+    const onNewLead = () => sidebarHandlers.onNewSteward();
+    window.addEventListener(NEW_LEAD_EVENT, onNewLead);
+    return () => window.removeEventListener(NEW_LEAD_EVENT, onNewLead);
+  }, [sidebarHandlers]);
   const teamHandlers = useStableHandlers({
     onAdvanced: () => setSessionOptions(true),
     onSave: (next: AgentSelection, crew: AgentSelection[]) => safe(async () => {

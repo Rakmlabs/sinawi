@@ -20,6 +20,9 @@ const step = <I extends string>(id: I) => ({
   get title() { return t(`onboarding.step.${id}` as MessageKey); },
   get short() { return t(`onboarding.short.${id}` as MessageKey); },
 });
+/** Starts a new lead from anywhere (the setup assistant's last step); WorkspaceApp listens. */
+export const NEW_LEAD_EVENT = "orchestra:new-lead";
+
 export const STEPS = [step("tools"), step("login"), step("permissions"), step("workspaces"), step("connections"), step("done")] as const;
 export type StepId = typeof STEPS[number]["id"];
 
@@ -65,7 +68,7 @@ export const SHORTCUTS: ReadonlyArray<[string, MessageKey]> = [
   ["⌘,", "shortcut.settings"],
   ["⌘B", "shortcut.sidebar"],
   ["F1 / F2", "shortcut.workspace"],
-  ["⌘⇧T · F3", "shortcut.tools"],
+  ["F3", "shortcut.tools"],
   ["⌃`", "shortcut.terminal"],
   ["⌘⇧B", "shortcut.browser"],
   ["⌃⌥← / → / ↑", "shortcut.snap"],
