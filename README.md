@@ -287,7 +287,11 @@ Data lives in `~/Library/Application Support/dev.sinawi.app/` and logs in `~/Lib
 No. It uses each CLI's own login. Your prompts, selected skills and files the agents read go to that CLI's model provider, as they would if you ran the CLI yourself.
 
 **Is it a sandbox?**
-No. *Plan* is read-only, *Auto* keeps writes inside the project folder, and *Full access* turns off the CLIs' own sandboxes, so it is off unless a workspace allows it. Approval cards guard the MCP tools only; an agent with a shell can still call Sinawi's local HTTP API directly.
+No. *Plan* is read-only, and *Full access* turns off the CLIs' own sandboxes, so it is off unless a workspace allows it.
+
+What *Auto* actually allows: file edits and ordinary commands run without asking. Claude and Grok get `git`, `npm`, `node`, `npx`, `python3`, `curl`, `ao-serve` and others pre-approved, so a command run through one of them (`node -e "..."`) is not asked about and can reach files outside the project folder. `ao-serve` is meant for dev servers but starts shell commands with the app server's rights; even inside Codex's `workspace-write` sandbox, a command sent through the `ao-serve` queue runs outside it. Use *Plan* for repositories or prompts you do not trust.
+
+Approval cards guard the MCP tools. An agent with a shell can still call most of Sinawi's local HTTP API (reading, opening chats), but the user's own requests (approving, answering a permission, changing settings, the MCP token) only work from the app window.
 
 **Can a Grok Build agent be the lead?**
 Yes, but without the MCP tools for now (see the note above). Claude or Codex leads get the full toolset.
