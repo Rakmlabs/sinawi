@@ -303,7 +303,10 @@ A port other than 3001 runs **isolated**: it does not watch the browser, compute
 
 **What the key does not stop.** It keeps an ordinary local program (an agent running `curl`, another browser page) from acting as you. It does not stop a program that runs as your macOS user and sets out to get around it:
 - It can connect to the socket, keep a copy of the connection in a second process and then exec the real app binary; the check then sees the real app and passes. This gap is known and pinned by a test (`peer_check.rs`).
-- It can change the files the server runs from (the app bundle, the copied server in the app's data folder, the LaunchAgent plist) and restart it, or read the dev link from a terminal's scrollback.
+- It can change the files the server runs from (the app bundle, the copied server in the app's data folder, the LaunchAgent plist) and restart it.
+- On a build without the hardened runtime (a local bundle made without a Developer ID, a fork) it can start the real app binary with `DYLD_INSERT_LIBRARIES` or attach a debugger as the same user, and read the key inside a process that passes the check. The released app is signed with the hardened runtime, which closes this path.
+- In dev mode it can read the key from the dev link in a terminal's scrollback, and from the history of the browser that first opened that link (the address bar drops it; the history keeps it).
+- The key socket starts the app binary for each connection, so it runs at most four checks at once and closes further connections unanswered.
 - Keeping an agent out of all of that needs the agent's process confined: a macOS sandbox profile or a separate user account for agent runs. Sinawi does not do that today, so treat agents in *auto* mode as programs running as you.
 
 | Path | What it holds |

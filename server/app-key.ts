@@ -8,15 +8,19 @@
 //   who connected (LOCAL_PEERTOKEN, the audit token recorded at connect time) and lets the key go only
 //   when that process's code satisfies the binary's own designated code requirement (its signature),
 //   checked with the Security framework (src-tauri/src/peer_check.rs). A process name, a path or
-//   argv[0] play no part, so `exec -a <app path> curl …` gets nothing; a process that connects and then
-//   execs the real app no longer matches the recorded token; a replaced binary fails its signature.
+//   argv[0] play no part, so `exec -a <app path> curl …` gets nothing, and a replaced binary fails its
+//   signature. A process that connects and then execs the real app DOES pass (the token then names the
+//   real app; a copy of the socket kept elsewhere reads the key): a known gap, pinned by a test in
+//   peer_check.rs and written up in README "App window key".
 // - `npm run dev`: scripts/dev.mjs makes a key per run and hands it to this server over an inherited
 //   pipe (SINAWI_APP_KEY_FD), never in the environment (`ps -E` shows that), and to the developer as a
 //   link whose #fragment carries it; the page served by Vite does not contain it.
 //
 // What this does not stop, honestly: anything running as the same macOS user can change the files this
-// server runs from (the app bundle, the copied server, the LaunchAgent plist) and restart it, or read
-// the key out of a dev terminal's scrollback. Keeping a same-user agent out of that needs the agent's
+// server runs from (the app bundle, the copied server, the LaunchAgent plist) and restart it; on a build
+// without the hardened runtime (an ad-hoc local bundle, a fork) it can start the real binary with an
+// injected library or attach a debugger and read the key inside a process that passes the check; and
+// in dev it can read the key out of the terminal's scrollback or the browser's history (the first URL). Keeping a same-user agent out of that needs the agent's
 // process sandboxed (macOS sandbox or a separate user); see README "App window key".
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -32,6 +36,9 @@ export const APP_KEY_PROTOCOL = "sinawi-app.";
 export const PEER_CHECK_FLAG = "--sinawi-check-peer";
 
 let key: string | undefined;
+let warnedNoFd = false;
+/** Peer checks running at once; more connections are closed unanswered (each check starts the app binary). */
+export const MAX_PEER_CHECKS = 4;
 let appExe: string | undefined;
 
 function readAndClose(fd: number): string {
@@ -90,8 +97,14 @@ export function appBinaryPeerCheck(executable: string, timeoutMs = 10_000): Peer
   return (connection) => new Promise((resolve) => {
     // The raw descriptor, not the Socket: handing node the Socket object as stdio trips a libuv
     // assertion (kqueue) when the connection closes afterwards.
+    // Node has no public API for a socket's descriptor. If a Node update drops `_handle.fd`, every check
+    // fails closed (the window gets no key and the sidebar says so); the log says why, and the test
+    // "the app binary checks the connection itself" fails in CI first.
     const fd = (connection as unknown as { _handle?: { fd?: number } })._handle?.fd;
-    if (typeof fd !== "number" || fd < 0) { resolve(false); return; }
+    if (typeof fd !== "number" || fd < 0) {
+      if (!warnedNoFd) { warnedNoFd = true; console.error("[sinawi] app key: this Node gives no socket descriptor (_handle.fd); the app window cannot get its key"); }
+      resolve(false); return;
+    }
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(executable, [PEER_CHECK_FLAG], { stdio: ["ignore", "ignore", "ignore", fd], timeout: timeoutMs, env: { PATH: "/usr/bin:/bin" } });
@@ -108,7 +121,7 @@ export function appKeySocketPath(dataDir: string): string { return join(dataDir,
  * Serves the key on a unix socket to connections `check` accepts; others are closed with nothing sent.
  * Resolves to a function that stops serving and removes the socket.
  */
-export async function serveAppKey(socketPath: string, check: PeerCheck): Promise<() => Promise<void>> {
+export async function serveAppKey(socketPath: string, check: PeerCheck, maxChecks = MAX_PEER_CHECKS): Promise<() => Promise<void>> {
   // A unix socket path longer than this cannot be bound on macOS.
   if (Buffer.byteLength(socketPath) > 103) throw new Error(`app key socket path is too long: ${socketPath}`);
   const dir = dirname(socketPath);
@@ -116,14 +129,19 @@ export async function serveAppKey(socketPath: string, check: PeerCheck): Promise
   chmodSync(dir, 0o700);
   rmSync(socketPath, { force: true });
   const open = new Set<Socket>();
+  // Each check starts the app binary: a program opening connections in a loop must not start it
+  // without end (third review K4). The window asks once at start, so a few at a time is plenty.
+  let checking = 0;
   const server: Server = createServer((connection) => {
     open.add(connection);
     connection.on("close", () => open.delete(connection));
     connection.on("error", () => undefined);
+    if (checking >= maxChecks) { connection.destroy(); return; }
+    checking += 1;
     void check(connection).then(
       (ok) => { if (ok && !connection.destroyed) connection.end(`${appKey()}\n`); else connection.destroy(); },
       () => connection.destroy(),
-    );
+    ).finally(() => { checking -= 1; });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

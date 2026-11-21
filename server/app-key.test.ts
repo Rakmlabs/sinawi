@@ -101,6 +101,25 @@ test("the key socket answers only connections the peer check accepts, from a fol
   await assert.rejects(stat(path), "stopping removes the socket");
 });
 
+test("a program opening key-socket connections in a loop starts at most a few checks at once", async (t) => {
+  const dir = await folder(t, "limit");
+  initAppKey({});
+  const path = appKeySocketPath(dir);
+  let started = 0;
+  const pending: Array<() => void> = [];
+  t.after(await serveAppKey(path, () => { started += 1; return new Promise<boolean>((resolve) => pending.push(() => resolve(false))); }, 2));
+  const sockets = Array.from({ length: 6 }, () => connect(path));
+  t.after(() => { for (const socket of sockets) socket.destroy(); });
+  const closed = await Promise.all(sockets.map((socket) => new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), 300);
+    socket.on("error", () => undefined);
+    socket.on("close", () => { clearTimeout(timer); resolve(true); });
+  })));
+  assert.equal(started, 2, "only two checks ran");
+  assert.equal(closed.filter(Boolean).length, 4, "the rest were closed unanswered");
+  for (const finish of pending) finish();
+});
+
 test("the app binary checks the connection itself: it runs with the connection as fd 3, and only exit 0 lets the key go", async (t) => {
   const dir = await folder(t, "check");
   initAppKey({});
