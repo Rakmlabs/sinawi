@@ -163,6 +163,9 @@ test("a dev server's log is cut to its newest part when it grows past the cap, a
   assert.match(trimmed, /older log lines dropped/u);
   await new Promise((resolve) => setTimeout(resolve, 300));
   const after = readFileSync(file, "utf8");
-  assert.ok(after.startsWith("[sinawi:"), "new lines are appended after the kept part, not written over it");
+  // A line the server writes between the cut and the rewrite may land first; the marker stays near the top.
+  const marker = after.indexOf("[sinawi:");
+  assert.ok(marker >= 0 && marker < 1024, "new lines are appended after the kept part, not written over it");
+  assert.ok(after.length > trimmed.length, "the log keeps growing after the cut");
   assert.ok(!after.includes("\u0000"), "no hole of zero bytes");
 });

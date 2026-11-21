@@ -77,7 +77,8 @@ export class DevServerManager {
         const buffer = Buffer.alloc(keep);
         const fd = openSync(server.log, "r");
         try { readSync(fd, buffer, 0, keep, size - keep); } finally { closeSync(fd); }
-        // The server writes in append mode, so its next line lands after what is kept here.
+        // The server writes in append mode, so its next line lands after what is kept here. A line it
+        // writes between the cut and this rewrite can land first or be lost: acceptable for a log.
         truncateSync(server.log, 0);
         appendFileSync(server.log, Buffer.concat([Buffer.from(`[sinawi: 로그가 커서 앞부분을 지웠습니다 / older log lines dropped]\n`), buffer]));
       } catch { /* the log is gone or unreadable: nothing to trim */ }
