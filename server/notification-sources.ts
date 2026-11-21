@@ -14,9 +14,14 @@ export function authNotification(workspaceId: WorkspaceId, agent: AgentId, statu
   return { workspaceId, key: `auth:${agent}`, type: "auth", title: `${agent === "grok" ? "Grok" : agent === "claude" ? "Claude" : "Codex"} 로그인 필요`, body: detail || "CLI에서 로그인한 뒤 인증 상태를 다시 확인합니다.", action: { label: "터미널에서 로그인", command: accountDir ? accountLoginCommand(agent, accountDir) : agent === "grok" ? "grok" : agent === "claude" ? "claude auth login" : "codex login" } };
 }
 
-/** A notification shows text, not markdown: no `**`, backticks, heading or list marks, link targets. */
+/**
+ * A notification shows text, not markdown: no `**`, backticks, heading or list marks, link targets.
+ * A full chat or run ID (a UUID) is cut to its first 8 characters, as the app shows IDs elsewhere
+ * (fourth review R4-6: a two-line toast spent most of its room on one).
+ */
 export function plainText(markdown: string): string {
   return markdown
+    .replace(/\b([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu, "$1")
     .replace(/```[\s\S]*?(?:```|$)/gu, " ")
     .replace(/^\s*(?:#{1,6}|>|[-*+]|\d+[.)])\s+/gmu, "")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")

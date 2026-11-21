@@ -158,4 +158,5 @@ test("a specialized terminal failure never resurfaces an older recovered error",
 
 test("a lead's notification shows its words, not markdown", () => {
   assert.equal(plainText("## 결과\n- **README** 첫 화면을 `고쳤습니다`. [PR](https://x/y)\n```\ncode\n```"), "결과 README 첫 화면을 고쳤습니다. PR");
+  assert.equal(plainText("'빈 채팅 1'(ID 1d1dc231-2998-44d4-b369-629e3aa509df, 상태 done) 삭제"), "'빈 채팅 1'(ID 1d1dc231, 상태 done) 삭제");
 });
