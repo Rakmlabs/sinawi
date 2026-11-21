@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { bashCommandAllowed, bashHookSettings, ensureBashHookScript, nodeHookHost, type HookHost } from "./claude-bash-hook.js";
+import { bashCommandAllowed, bashHookSettings, ensureBashHookScript, nodeHookHost, riskyCommand, runsCodeCommand, type HookHost } from "./claude-bash-hook.js";
 import { buildInvocation, prepareCliInvocation } from "./cli.js";
 
 // A real folder: the hook resolves targets with realpath, so symlinks are checked for real.
@@ -161,4 +161,34 @@ test("a worktree worker can read the main checkout but every edit tool is denied
   for (const tool of ["Edit", "Write", "NotebookEdit"]) assert.ok(denied.includes(`${tool}(//work/repo/**)`), tool);
   const grok = buildInvocation({ agent: "grok", prompt: "work", cwd: "/work/repo/.wt/w1", readOnlyDirs: ["/work/repo"] });
   assert.ok(!grok.args.includes("--add-dir"));
+});
+
+// Third review N3: with the runtime switch off, Claude's auto mode ran `node -v` without a card,
+// because auto mode decides unlisted commands by itself. The hook now asks for them.
+test("commands that run code are recognised behind shells, wrappers, env assignments and paths", () => {
+  for (const command of ["node -v", "bash -c \"node -v\"", "FOO=1 npx x", "/usr/local/bin/node a.js", "cd a && node b", "env -i node x", "timeout 5 python3.12 x", "xargs -n1 node", "ao-serve start dev", "npm test", "find . -name x", "sh -c 'cd x; yarn build'", "bun run x", "deno run x"]) {
+    assert.equal(runsCodeCommand(command), true, command);
+  }
+  for (const command of ["ao-serve list", "git status", "ls node", "rg node", "echo hi", "cat package.json"]) assert.equal(runsCodeCommand(command), false, command);
+});
+
+test("forms that reach outside the project are recognised: gh api writes, forced or deleting pushes, simctl spawn, trash outside", () => {
+  for (const command of ["gh api -X DELETE repos/a/b", "gh api repos/a/b --method=POST", "gh api repos/a/b -f x=1", "gh api graphql -F q=@f", "git push -f", "git push origin --force-with-lease", "git push origin +main", "git push origin :old", "git push --delete origin x", "xcrun simctl spawn booted /bin/ls", "trash /etc/x", "trash ../x", "trash ~/x", "cd x && git push --force"]) {
+    assert.equal(riskyCommand(command), true, command);
+  }
+  for (const command of ["gh api repos/a/b", "gh api -XGET repos", "gh api --method GET x", "git push", "git push -u origin feature-fix", "xcrun simctl list", "trash a.txt"]) assert.equal(riskyCommand(command), false, command);
+});
+
+test("the hook script asks for code runs unless the workspace pre-approves them, and always for risky forms", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sinawi-hook-ask-"));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const script = await ensureBashHookScript(dir);
+  const run = (command: string, runtime = false) => spawnSync(process.execPath, [script, root, ...(runtime ? ["runtime"] : [])], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: root }), encoding: "utf8" });
+  const decision = (out: ReturnType<typeof run>) => out.stdout ? JSON.parse(out.stdout).hookSpecificOutput.permissionDecision : undefined;
+  assert.equal(decision(run("node -v")), "ask");
+  assert.equal(decision(run("bash -c 'node -v'")), "ask");
+  assert.equal(decision(run("node -v", true)), undefined, "pre-approved by the workspace: Claude's rules decide");
+  assert.equal(decision(run("git push --force origin main")), "ask");
+  assert.equal(decision(run("git push --force origin main", true)), "ask", "risky forms ask even with the switch on");
+  assert.equal(decision(run("git status")), "allow");
 });

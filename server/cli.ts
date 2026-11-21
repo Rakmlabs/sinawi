@@ -1,6 +1,6 @@
 import { ensurePermissionServerScript, PERMISSION_TOOL, PROMPT_TIMEOUT_MS, permissionMcpConfig, registerRunActivity, unregisterRunActivity } from "./permission-prompts.js";
 import { claudeLeadServer, codexLeadArgs, ensureLeadServerScript, LEAD_MCP_RULE, LEAD_MCP_SERVER, LEAD_TOOL_TIMEOUT_MS, leadMcpLaunch, type LeadMcpLaunch } from "./lead-tools.js";
-import { cliChildEnv, preapprovedPrograms } from "./supervision.js";
+import { cliChildEnv, preapprovedPrograms, RISKY_SHELL_PATTERNS } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
 import { forgetEndedCliGroups, recordCliGroup } from "./cli-ledger.js";
 import { envVar } from "./runtime.js";
@@ -127,6 +127,16 @@ export const GROK_MCP_TOOLS = "search_tool,use_tool";
 export const CLAUDE_READ_ONLY_BASH_RULES = ["git diff", "git status", "git log", "git show", "ls", "cat", "rg", "wc", "head", "tail"].map((command) => `Bash(${command}:*)`);
 export const CLAUDE_READ_ONLY_BASH_DENY = ["--output", "--ext-diff", "--textconv", "--pre"].map((flag) => `Bash(*${flag}*)`);
 /** Nobody can approve a prompt in headless mode: a non-pre-approved shell command cancels the whole run. */
+/**
+ * What a Grok run is denied while the workspace does not pre-approve programs that run code: the
+ * runtime programs and their kin, plus the shells and wrappers that would start one of them
+ * (`bash -c "node …"`, `env node …`). Grok is told not to chain or wrap commands anyway.
+ */
+export const GROK_RUNTIME_DENIED = [
+  "node", "nodejs", "npx", "python", "python3", "npm", "pnpm", "pnpx", "yarn", "bun", "bunx", "deno", "tsx", "ts-node", "find", "ao-serve start",
+  "bash", "sh", "zsh", "dash", "env", "xargs", "exec", "command", "nohup", "timeout", "time", "nice", "perl", "ruby", "osascript",
+] as const;
+
 export function grokHeadlessRules(runtimePrograms?: boolean): string {
   return [
     "You run headless; nobody can approve permission prompts. A shell command that is not pre-approved CANCELS YOUR WHOLE RUN.",
@@ -219,6 +229,11 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     // "auto" lets its safety classifier approve routine commands while deny rules still apply.
     args.push("--permission-mode", "auto");
     for (const rule of developmentBashRules(options.runtimePrograms)) args.push("--allow", rule);
+    // Grok's auto mode decides unlisted commands with its own classifier, so "not pre-approved" alone
+    // does not keep it from running code (third review N3, H2-c): with the switch off, those programs
+    // and the shells and wrappers that would start them are denied outright.
+    if (!options.runtimePrograms) for (const program of GROK_RUNTIME_DENIED) args.push("--deny", `Bash(${program}:*)`);
+    for (const pattern of RISKY_SHELL_PATTERNS) args.push("--deny", `Bash(${pattern})`);
     args.push("--rules", grokHeadlessRules(options.runtimePrograms));
   }
   for (const pattern of blockedMcp ?? []) args.push("--deny", pattern);

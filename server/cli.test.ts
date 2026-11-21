@@ -43,6 +43,15 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
   const grokOn = buildInvocation({ agent: "grok", prompt: "fix", cwd: "/tmp/project", runtimePrograms: true });
   assert.deepEqual(grokOn.args.filter((_value, index) => grokOn.args[index - 1] === "--allow"), runtime);
   assert.match(grokOn.args[grokOn.args.indexOf("--rules") + 1], /python3/u);
+
+  // Third review: Grok's auto mode ran what its classifier liked (N3) and `rg --pre ./x`, `curl -o <outside>`
+  // under the plain prefix rules (H2-c). Off, code runners and their wrappers are denied; risky forms always.
+  const denied = (args: string[]) => args.filter((_value, index) => args[index - 1] === "--deny");
+  for (const rule of ["Bash(node:*)", "Bash(bash:*)", "Bash(env:*)", "Bash(python3:*)", "Bash(rg *--pre*)", "Bash(curl * -o*)", "Bash(gh api * -X*)", "Bash(git push *--force*)", "Bash(xcrun simctl spawn*)"]) assert.ok(denied(grok.args).includes(rule), rule);
+  assert.ok(!denied(grokOn.args).includes("Bash(node:*)"), "the workspace's opt-in lifts the code-runner denials");
+  assert.ok(denied(grokOn.args).includes("Bash(rg *--pre*)"), "risky forms stay denied");
+  assert.ok(!rules.includes("Bash(xcrun simctl:*)") && rules.includes("Bash(xcrun simctl list:*)"), "simctl by subcommand, never spawn");
+  assert.equal(denied(buildInvocation({ agent: "grok", prompt: "fix", cwd: "/tmp/project", fullAccess: true }).args).length, 0, "full access denies nothing extra");
 });
 
 test("buildInvocation enforces a tool-free read-only profile for every planner CLI", () => {

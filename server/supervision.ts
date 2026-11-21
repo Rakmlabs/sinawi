@@ -184,17 +184,34 @@ export const DEVELOPMENT_SHELL_PROGRAMS = [
   "git checkout", "git switch", "git restore", "git rm", "git mv", "git stash", "git merge", "git fetch", "git pull", "git push", "git worktree", "git tag", "git remote",
   "gh pr", "gh issue", "gh repo view", "gh run", "gh api", "gh auth status", "gh search",
   "ls", "cat", "rg", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq",
-  "ao-computer", "xcrun simctl", "ao-serve list", "ao-serve logs", "ao-serve stop", "ao-sim", "curl", "lsof", "trash",
+  "ao-computer", "xcrun simctl list", "xcrun simctl boot", "xcrun simctl shutdown", "xcrun simctl io", "xcrun simctl install", "xcrun simctl uninstall", "xcrun simctl launch", "xcrun simctl terminate", "xcrun simctl get_app_container", "xcrun simctl status_bar", "xcrun simctl ui", "ao-serve list", "ao-serve logs", "ao-serve stop", "ao-sim", "curl", "lsof", "trash",
 ] as const;
 
 /**
  * Programs that run any code, outside the project too (H2): interpreters, package managers (their
  * `run`/`exec`/`dlx` and every script or install hook), `find` (`-exec`) and `ao-serve start` (any
  * command, outside a CLI's sandbox). Pre-approved only where the workspace turns it on
- * (WorkspacePolicy.runtimePrograms). Off, Claude asks for each, Grok does not use them, and the server
+ * (WorkspacePolicy.runtimePrograms). Off, Claude's Bash hook answers "ask" for them even in Claude's
+ * own auto mode (claude-bash-hook.ts runsCodeCommand), Grok is denied them and the shells that would
+ * wrap them (cli.ts GROK_RUNTIME_DENIED), Codex runs them only inside its sandbox, and the server
  * refuses `ao-serve start` from a run that cannot ask (serve-tool.ts).
  */
 export const RUNTIME_SHELL_PROGRAMS = ["node", "npx", "python3", "npm", "pnpm", "yarn", "find", "ao-serve start"] as const;
+
+/**
+ * Forms of pre-approved programs that act outside the project or run code (third review H2-b, H2-c),
+ * as permission patterns (`*` anywhere). Grok denies them outright: unlike Claude Code it ran
+ * `rg --pre ./x` and `curl -o <outside>` under the plain prefix rules. Claude asks for the same
+ * forms through the Bash hook (claude-bash-hook.ts riskyCommand). Patterns only see the text, so a
+ * path written outside the project in an ordinary argument (ffmpeg's output file) is not caught.
+ */
+export const RISKY_SHELL_PATTERNS = [
+  "rg *--pre*", "git -c*", "git --config-env*", "git *--output*", "git *--ext-diff*", "git *--exec*", "git *--upload-pack*", "git *--receive-pack*",
+  "git push -f*", "git push * -f*", "git push *--force*", "git push -d*", "git push * -d*", "git push *--delete*", "git push *--mirror*", "git push *--prune*", "git push * +*", "git push * :*",
+  "gh api * -X*", "gh api *--method*", "gh api * -f *", "gh api * -F *", "gh api *--field*", "gh api *--raw-field*", "gh api *--input*",
+  "curl * -o*", "curl * -O*", "curl *--output*", "curl *--remote-name*", "curl * -K*", "curl *--config*", "curl * -T*", "curl *--upload-file*", "curl *@*",
+  "xcrun simctl spawn*", "trash *..*", "trash /*", "trash * /*", "trash ~*", "trash * ~*", "sort * -o*", "sort *--output*", "tsc *--outDir*", "tsc *--outFile*",
+] as const;
 
 /** The programs an "auto" run may start without asking. */
 export function preapprovedPrograms(runtimePrograms = false): string[] {
