@@ -298,9 +298,10 @@ export function optionsAllowed(words: string[]): boolean {
     // sends a file the path check cannot see).
     "curl": { s: "sSfLIivkGgO46JRN", v: "oHXdAmuebcxrCyY", l: "--silent --show-error --fail --fail-with-body --location --head --include --verbose --insecure --output --remote-name --header --request --data --data-raw --data-binary --json --user-agent --max-time --connect-timeout --retry --retry-delay --retry-max-time --user --referer --cookie --cookie-jar --compressed --http1.1 --http2 --get --globoff --proxy --noproxy --url --range --max-filesize --create-dirs --output-dir --no-progress-meter --progress-bar --ipv4 --ipv6 --remote-header-name --oauth2-bearer --speed-limit --speed-time --limit-rate --resolve --cacert --max-redirs" },
     // ladspa, frei0r and lv2 filters load a shared library; an absolute or home path inside a filter
-    // value (`ametadata=…:file=/x`, `vidstabdetect=result=/x`, sixth review R6-3) is not checked as a
-    // path, so it asks (a URL's `://` does not count).
-    "ffmpeg": { any: true, deny: /ladspa|frei0r|lv2|[=,]['"]?[/~]|:[/~](?!\/)/iu }, "ffprobe": { any: true, deny: /ladspa|frei0r|lv2|[=,]['"]?[/~]|:[/~](?!\/)/iu },
+    // value (`ametadata=…:file=/x`, `vidstabdetect=result=/x`, sixth review R6-3) or a tee output
+    // (`[f=wav]/x.wav|/y`, seventh review R7-3) is not checked as a path, so it asks, as does any `../`
+    // (a URL's `://` does not count).
+    "ffmpeg": { any: true, deny: /ladspa|frei0r|lv2|[=,\]|;]['"]?[/~]|:[/~](?!\/)|\.\.[/\\]/iu }, "ffprobe": { any: true, deny: /ladspa|frei0r|lv2|[=,\]|;]['"]?[/~]|:[/~](?!\/)|\.\.[/\\]/iu },
     // `--js` runs JavaScript.
     "sips": { any: true, deny: /^-(?:j|-js)/u },
     "ao-browser": { any: true }, "ao-computer": { any: true }, "ao-sim": { any: true }, "ao-serve list": { any: true }, "ao-serve logs": { any: true }, "ao-serve stop": { any: true },
@@ -418,7 +419,7 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
   if (!length || !optionsAllowed(words)) return "ask";
   const args = words.slice(length);
   // gh names API paths (`/repos/x`), not files: its files are `@FILE` values and download folders.
-  const ghFiles = () => args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : []);
+  const ghFiles = () => args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : /^-D./u.test(arg) ? [arg.slice(2)] : []);
   if (!argumentsStayInside(words[0] === "gh" ? ghFiles() : args, cwd, root, host)) return "ask";
   // R6-1: writes into a git directory, and git in a folder that only looks like a repository.
   const readers = ["git", "cat", "head", "tail", "ls", "rg", "wc", "jq", "file", "stat", "du", "lsof", "echo", "pwd", "ffprobe"];

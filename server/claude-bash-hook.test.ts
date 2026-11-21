@@ -247,10 +247,10 @@ test("writes into a git directory and git in a look-alike bare repository ask wh
 // R6-2: tsconfig's outDir wrote JS outside the folder under the plain `tsc` rule. R6-3: paths inside
 // ffmpeg filter values and gh's download folder were not checked.
 test("tsc passes only with --noEmit; ffmpeg filter paths and gh download folders outside ask", () => {
-  for (const command of ["tsc", "tsc -p tsconfig.json", "tsc -p . --noEmit", "tsc --build", "ffmpeg -i a.mp4 -af ametadata=mode=print:file=/tmp/m.txt -f null -", "ffmpeg -i a.mp4 -vf vidstabdetect=result=/tmp/t.trf -f null -", "ffmpeg -i a.mp4 -vf \"movie=~/x.png\" out.mp4", "gh run download 1 -D /tmp/x", "gh run download 1 --dir=/tmp/x", "gh run download 1 --dir ../x"]) {
+  for (const command of ["tsc", "tsc -p tsconfig.json", "tsc -p . --noEmit", "tsc --build", "ffmpeg -i a.mp4 -af ametadata=mode=print:file=/tmp/m.txt -f null -", "ffmpeg -i a.mp4 -vf vidstabdetect=result=/tmp/t.trf -f null -", "ffmpeg -i a.mp4 -vf \"movie=~/x.png\" out.mp4", "gh run download 1 -D /tmp/x", "gh run download 1 -D/tmp/x", "gh run download 1 --dir=/tmp/x", "gh run download 1 --dir ../x", "ffmpeg -i a.wav -f tee \"[f=wav]/tmp/x.wav|[f=mp3]y.mp3\"", "ffmpeg -i a.wav -f tee \"[f=wav]y.wav|/tmp/z.wav\"", "ffmpeg -i a.wav -f tee \"[f=wav]../x.wav\"", "ffmpeg -i a.wav \"tee:/tmp/a.wav\""]) {
     assert.equal(decide(command), "ask", command);
   }
-  for (const command of ["tsc --noEmit", "tsc --noEmit -p tsconfig.json", "ffmpeg -i https://e.com/a.mp4 out.mp4", "ffmpeg -i a.mp4 -vf scale=640:-1 out.mp4", "gh run download 1 -D out"]) assert.notEqual(decide(command), "ask", command);
+  for (const command of ["tsc --noEmit", "tsc --noEmit -p tsconfig.json", "ffmpeg -i https://e.com/a.mp4 out.mp4", "ffmpeg -i a.mp4 -vf scale=640:-1 out.mp4", "gh run download 1 -D out", "gh run download 1 -Dout", "ffmpeg -i a.wav -f tee \"[f=wav]y.wav|[f=mp3]y.mp3\""]) assert.notEqual(decide(command), "ask", command);
 });
 
 test("simple commands of pre-approved programs inside the folder are left to Claude's rules, or allowed", () => {
