@@ -17,6 +17,8 @@ mkdirSync(path.join(root, "sub"), { recursive: true });
 mkdirSync(path.join(root, "with space"), { recursive: true });
 mkdirSync(path.join(base, "outside"), { recursive: true });
 writeFileSync(path.join(root, "a.txt"), "a\n");
+// A real repository: the hook asks git which git directory and config files it would use.
+spawnSync("git", ["init", "-q", root]);
 symlinkSync(path.join(base, "outside"), path.join(root, "link"));
 symlinkSync(path.join(base, "outside", "missing.txt"), path.join(root, "dangling"));
 process.on("exit", () => rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
@@ -242,6 +244,60 @@ test("writes into a git directory and git in a look-alike bare repository ask wh
   assert.equal(decide("git status", false, bare), "ask", "git started in the look-alike repository");
   for (const command of ["cat .git/config", "ls .git", "git status", "echo x > notes/git.txt"]) assert.notEqual(decide(command), "ask", command);
   assert.notEqual(decide("echo x > .git/config", true), "allow", "switch on: no pre-approval either");
+});
+
+// Seventh review R7-1: `ev/HEAD` + `ev/commondir` pointing at `ev2` (objects, refs and a config with
+// diff.external) passed the look-alike check and `cd ev && git diff …` ran diff.external. The hook
+// now asks git which git directory, common directory and config files it would use.
+test("git asks unless its git directory, common directory and config files are outside the folder or in .git", () => {
+  const git = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" });
+  const make = (name: string) => { const dir = path.join(root, name); mkdirSync(dir, { recursive: true }); return dir; };
+  // The verifier's repro.
+  const ev = make("ev");
+  mkdirSync(path.join(root, "ev2", "objects", "info"), { recursive: true });
+  mkdirSync(path.join(root, "ev2", "refs", "heads"), { recursive: true });
+  writeFileSync(path.join(ev, "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(path.join(ev, "commondir"), "../ev2\n");
+  writeFileSync(path.join(root, "ev2", "config"), "[diff]\n\texternal = touch MARK10\n");
+  assert.equal(decide("cd ev && git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD"), "ask");
+  assert.equal(decide("git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD", false, ev), "ask");
+  // A `gitdir:` file pointing at a git directory that is not in a .git folder.
+  git(root, "init", "-q", "--bare", path.join(root, "plain-gitdir"));
+  const linked = make("linked");
+  writeFileSync(path.join(linked, ".git"), `gitdir: ${path.join(root, "plain-gitdir")}\n`);
+  assert.equal(decide("git status", false, linked), "ask");
+  // Config files: include.path into the folder, core.hooksPath inside the folder (husky).
+  const included = make("included");
+  git(included, "init", "-q");
+  git(included, "config", "include.path", "../inc.cfg"); // relative to .git/config: included/inc.cfg
+  writeFileSync(path.join(included, "inc.cfg"), "[diff]\n\texternal = touch M\n");
+  writeFileSync(path.join(root, "inc.cfg"), "[diff]\n\texternal = touch M\n");
+  assert.equal(decide("git status", false, included), "ask");
+  const husky = make("husky");
+  git(husky, "init", "-q");
+  git(husky, "config", "core.hooksPath", ".husky");
+  assert.equal(decide("git commit -m x", false, husky), "ask");
+  git(husky, "config", "core.hooksPath", path.join(base, "outside"));
+  assert.notEqual(decide("git commit -m x", false, husky), "ask", "a hooks folder outside the project is the user's own");
+  // The environment: GIT_DIR, GIT_CONFIG_GLOBAL into the folder, GIT_CONFIG_PARAMETERS.
+  const withEnv = (env: Record<string, string>) => ({ ...host, git: (cwd: string, args: string[]) => { const r = spawnSync("git", ["--no-pager", ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } }); return r.status === 0 ? r.stdout.replace(/\n$/u, "") : undefined; } });
+  const envDecide = (env: Record<string, string>) => hookDecision("git status", root, root, withEnv(env), DEVELOPMENT_SHELL_PROGRAMS);
+  assert.equal(envDecide({ GIT_DIR: path.join(root, "plain-gitdir") }), "ask");
+  assert.equal(envDecide({ GIT_COMMON_DIR: path.join(root, "ev2") }), "ask");
+  assert.equal(envDecide({ GIT_CONFIG_GLOBAL: path.join(root, "inc.cfg") }), "ask");
+  assert.equal(envDecide({ GIT_CONFIG_PARAMETERS: "'diff.external'='touch M'" }), "ask");
+  assert.equal(envDecide({}), "allow");
+  // No git to ask, or no repository: not confirmed.
+  assert.equal(hookDecision("git status", root, root, { ...host, git: undefined }, DEVELOPMENT_SHELL_PROGRAMS), "ask");
+  assert.equal(decide("git status", false, path.join(base, "outside")), "ask");
+  // Ordinary repositories and worktrees stay as they were.
+  writeFileSync(path.join(root, "tracked.txt"), "x\n");
+  git(root, "add", "tracked.txt");
+  git(root, "commit", "-q", "-m", "init");
+  git(root, "worktree", "add", "-q", path.join(root, "wt"));
+  for (const cwd of [root, path.join(root, "src"), path.join(root, "wt")]) {
+    for (const command of ["git status", "git log --oneline -3", "git diff --stat", "git add -A", "git commit -m x", "git checkout -b x", "git status && git diff"]) assert.notEqual(decide(command, false, cwd), "ask", `${command} in ${cwd}`);
+  }
 });
 
 // R6-2: tsconfig's outDir wrote JS outside the folder under the plain `tsc` rule. R6-3: paths inside

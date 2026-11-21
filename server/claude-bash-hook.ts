@@ -30,6 +30,7 @@
  * folder between the check and the run. What is neither approved nor asked for here gets no decision
  * and falls through to Claude's normal permission rules.
  */
+import { spawnSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as nodePath from "node:path";
@@ -53,6 +54,8 @@ export interface HookHost {
   cdpath?: string;
   /** The workspace pre-approves programs that run code (npm/pnpm/yarn scripts): WorkspacePolicy.runtimePrograms. */
   runtimePrograms?: boolean;
+  /** Runs `git ARGS` in `cwd` (no pager, no prompts) and returns stdout, or undefined when it fails. */
+  git?(cwd: string, args: string[]): string | undefined;
 }
 
 export function nodeHookHost(): HookHost {
@@ -61,6 +64,10 @@ export function nodeHookHost(): HookHost {
     realpath: (path) => realpathSync(path),
     exists: (path) => { try { lstatSync(path); return true; } catch { return false; } },
     cdpath: process.env.CDPATH ?? "",
+    git: (cwd, args) => {
+      const result = spawnSync("git", ["--no-pager", ...args], { cwd, encoding: "utf8", timeout: 4000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } });
+      return result.status === 0 ? result.stdout.replace(/\n$/u, "") : undefined;
+    },
   };
 }
 
@@ -373,21 +380,70 @@ export function inGitDir(target: string, cwd: string, root: string, host: HookHo
 }
 
 /**
- * Whether git started in `dir` finds its repository through a `.git` entry, not through a folder
- * that only looks like a bare repository (`HEAD`, `objects/`, `refs/`, and a `config` that git
- * obeys). Such a folder can be written without touching `.git` (R6-1), so git asks there.
+ * Whether git started in `dir` uses only a repository and config the agent could not have changed
+ * without a card (sixth review R6-1, seventh review R7-1). Trusted only when all of these hold:
+ *
+ * - no folder from `dir` up to the one holding `.git` has a `HEAD` entry: git takes any folder with a
+ *   `HEAD` file as a git directory, and finds `objects`, `refs` and `config` through its `commondir`
+ *   file (R7-1: `ev/HEAD` + `ev/commondir` → `ev2/config` with `diff.external`);
+ * - git itself (`git rev-parse`) names a git directory and common directory that are outside `root`
+ *   or inside a `.git` folder below it (writes there ask, inGitDir): this covers `gitdir:` files,
+ *   worktrees, `commondir`, GIT_DIR and GIT_COMMON_DIR;
+ * - every config file git reads (`git config --list --show-origin`: includes, includeIf,
+ *   GIT_CONFIG_GLOBAL/SYSTEM) is outside `root` or inside a `.git` folder, none comes from the
+ *   command line or environment (GIT_CONFIG_PARAMETERS/COUNT), and `core.hooksPath` is not a folder
+ *   inside `root` outside `.git` (husky's `.husky`: its scripts are ordinary project files).
+ *
+ * Anything git cannot answer (no repository, safe.directory refusal, no git) is not trusted.
+ * Not covered: config that names a program inside the folder (`filter.x.clean = ./clean.sh`, an alias
+ * running `./x`), hooks that are symlinks into the folder, and config already in place.
  *
  * Self-contained on purpose (its source goes into the hook script).
  */
-export function gitRepositoryTrusted(dir: string, host: HookHost): boolean {
+export function gitRepositoryTrusted(dir: string, root: string, host: HookHost): boolean {
+  if (!host.git) return false;
   let current = dir;
-  try { current = host.realpath(host.resolve(dir)); } catch { /* walk the path as given */ }
+  try { current = host.realpath(host.resolve(dir)); } catch { return false; }
   for (let depth = 0; depth < 4096; depth++) {
-    if (host.exists(host.join(current, ".git")) || host.basename(current).toLowerCase() === ".git") return true;
-    if (host.exists(host.join(current, "HEAD")) && host.exists(host.join(current, "objects")) && host.exists(host.join(current, "refs"))) return false;
+    if (host.exists(host.join(current, ".git"))) break;
+    if (host.exists(host.join(current, "HEAD"))) return false;
     const parent = host.dirname(current);
-    if (parent === current) return true;
+    if (parent === current) return false;
     current = parent;
+  }
+  let rootReal: string;
+  try { rootReal = host.realpath(host.resolve(root)); } catch { return false; }
+  const safe = (path: string, base: string): boolean => {
+    if (!path) return false;
+    let target = host.resolve(base, path);
+    const rest: string[] = [];
+    for (let depth = 0; depth < 4096; depth++) {
+      if (host.exists(target)) {
+        try { target = host.join(host.realpath(target), ...rest.reverse()); } catch { return false; }
+        break;
+      }
+      const parent = host.dirname(target);
+      if (parent === target) break;
+      rest.push(host.basename(target));
+      target = parent;
+    }
+    const rel = host.relative(rootReal, target);
+    if (rel.split(host.sep)[0] === ".." || host.isAbsolute(rel)) return true;
+    return rel.split(host.sep).some((part) => part.toLowerCase() === ".git");
+  };
+  const located = host.git(current, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel"]);
+  if (located === undefined) return false;
+  const [gitDir, commonDir, topLevel] = located.split("\n");
+  if (!gitDir || !commonDir || !safe(gitDir, current) || !safe(commonDir, current)) return false;
+  const config = host.git(current, ["config", "--list", "--show-origin", "-z"]);
+  if (config === undefined) return false;
+  const fields = config.split("\0");
+  for (let at = 0; at + 1 < fields.length; at += 2) {
+    const origin = fields[at]!;
+    const entry = fields[at + 1]!;
+    if (!origin.startsWith("file:") || !safe(origin.slice(5), current)) return false;
+    const newline = entry.indexOf("\n");
+    if (newline > 0 && entry.slice(0, newline).toLowerCase() === "core.hookspath" && !safe(entry.slice(newline + 1), topLevel || current)) return false;
   }
   return true;
 }
@@ -424,7 +480,7 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
   // R6-1: writes into a git directory, and git in a folder that only looks like a repository.
   const readers = ["git", "cat", "head", "tail", "ls", "rg", "wc", "jq", "file", "stat", "du", "lsof", "echo", "pwd", "ffprobe"];
   if (!readers.includes(words[0]!) && args.some((arg) => [arg, arg.slice(arg.indexOf("=") + 1), arg.replace(/^@/u, "")].some((value) => inGitDir(value, cwd, root, host)))) return "ask";
-  if (words[0] === "git" && !gitRepositoryTrusted(cwd, host)) return "ask";
+  if (words[0] === "git" && !gitRepositoryTrusted(cwd, root, host)) return "ask";
   return undefined;
 }
 
@@ -560,7 +616,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
       if ((program === "mkdir" || program === "touch" || program === "sort") && args.some((arg) => [...dirs].some((dir) => inGitDir(arg.slice(arg.indexOf("=") + 1), dir, rootReal, host)))) return false;
       return optionsAllowed(segment) && pathArgsOk(args, dirs);
     }
-    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, host));
+    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, rootReal, host));
     if (program === "find") return findAllowed(args, dirs);
     if (packageManagers.has(program)) {
       if (!host.runtimePrograms) return false;
@@ -672,12 +728,17 @@ export function bashHookScript(): string {
   return `// Generated by Sinawi: pre-approves safe Bash commands confined to the worker folder, and asks for the rest (claude-bash-hook.ts hookDecision).
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { spawnSync } from "node:child_process";
 const host = {
   resolve: path.resolve, relative: path.relative, isAbsolute: path.isAbsolute, dirname: path.dirname, basename: path.basename, join: path.join, sep: path.sep,
   realpath: (p) => fs.realpathSync(p),
   exists: (p) => { try { fs.lstatSync(p); return true; } catch { return false; } },
   cdpath: process.env.CDPATH || "",
   runtimePrograms: process.argv[3] === "runtime",
+  git: (cwd, args) => {
+    const result = spawnSync("git", ["--no-pager", ...args], { cwd, encoding: "utf8", timeout: 4000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } });
+    return result.status === 0 ? result.stdout.slice(0, result.stdout.endsWith(String.fromCharCode(10)) ? -1 : undefined) : undefined;
+  },
 };
 const root = process.argv[2];
 // Transpilers with keepNames (tsx/esbuild) wrap inner functions in __name(); make it a no-op here.
