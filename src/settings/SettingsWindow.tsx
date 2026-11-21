@@ -84,6 +84,14 @@ export function SettingsWindow({ section, focus, onSection, onClose, renderPage,
     return () => window.clearTimeout(timer);
   }, [highlight, section, searching]);
   useEffect(() => { if (!highlight) contentRef.current?.scrollTo({ top: 0 }); }, [section]);
+  // The page changed from outside (opened at "작업 공간", a link in a card) while focus sat on another
+  // menu item: move focus along, so one item does not look selected and another focused.
+  useEffect(() => {
+    const nav = navRef.current;
+    const active = document.activeElement as HTMLElement | null;
+    if (!nav || !active || !nav.contains(active) || active.getAttribute("aria-current") === "page") return;
+    nav.querySelector<HTMLElement>("[aria-current=page]")?.focus();
+  }, [section]);
 
   const go = (id: SettingsCategory, focusNav = false) => {
     onSection(id);

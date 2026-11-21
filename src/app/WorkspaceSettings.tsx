@@ -195,7 +195,7 @@ function WorkspaceRules({ workspaceId, policy, open, locked, save, login }: { lo
   const key = workspaceId;
   const draftPrompt = prompt ?? policy.mediaPrompt ?? "";
   return <details className="workspace-rules" open={open}>
-    <summary><span>{t("wsset.rules")}</span><span className={`workspace-tag${count ? " restricted" : ""}`}>{count ? t("wsset.rulesSummary", { count }) : t("wsset.rulesNone")}</span>{policy.computerUse && <span className="workspace-tag">{t("wsset.computerUse")}</span>}{policy.fullAccess && <span className="workspace-tag restricted">{t("wsset.fullAccess")}</span>}</summary>
+    <summary><span>{t("wsset.rules")}</span><span className={`workspace-tag${count ? " restricted" : ""}`}>{count ? t("wsset.rulesSummary", { count }) : t("wsset.rulesNone")}</span>{policy.computerUse && <span className="workspace-tag">{t("wsset.computerUse")}</span>}{policy.runtimePrograms && <span className="workspace-tag restricted">{t("wsset.runtimeTag")}</span>}{policy.fullAccess && <span className="workspace-tag restricted">{t("wsset.fullAccess")}</span>}</summary>
     <div className="workspace-rules-body">
     <p className="muted">{t("wsset.rulesBody")}</p>
     <RuleToggle id={`ws-${key}-media`} label={t("wsset.media")} hint={t("wsset.mediaHint")} checked={policy.mediaGeneration} disabled={locked} onChange={(value) => void save({ mediaGeneration: value })} />
