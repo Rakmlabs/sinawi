@@ -350,6 +350,10 @@ test("workspace account folders drive local model and authentication discovery",
 test("default CLI accounts are probed without forcing their conventional config directories", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-default-account-"));
   t.after(() => rm(homeDir, { recursive: true, force: true }));
+  // The caller's own account folders (a Claude Code session sets CLAUDE_CONFIG_DIR) are not a default account.
+  const saved = { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, CODEX_HOME: process.env.CODEX_HOME, GROK_HOME: process.env.GROK_HOME };
+  for (const key of Object.keys(saved)) delete process.env[key];
+  t.after(() => { for (const [key, value] of Object.entries(saved)) if (value !== undefined) process.env[key] = value; });
   const environments = new Map<string, Record<string, string> | undefined>();
   const runner: ModelCommandRunner = async (command, _args, options) => {
     environments.set(command, options?.env);
@@ -416,4 +420,39 @@ test("inherited CLI account roots drive model discovery and cache identity", asy
   assert.equal(second.modelOptions.codex.models[0], "inherited-second");
   process.env.CODEX_HOME = firstCodex;
   assert.equal((await service.loadSettings()).modelOptions.codex.authStatus, "authenticated");
+});
+
+test("Grok unauthenticated with model list in stdout is not treated as authenticated", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  // Real output of `grok models` when HOME has no credentials:
+  // "You are not authenticated.\nDefault model: grok-4.6\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n"
+  const runner: ModelCommandRunner = async (command) => {
+    if (command !== "grok") return { stdout: "" };
+    return { stdout: "You are not authenticated.\nDefault model: grok-4.6\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n" };
+  };
+  const settings = await discoverCliModels(
+    structuredClone(defaultRoutingSettings),
+    homeDir,
+    runner,
+    { sleep: async () => undefined },
+  );
+  assert.equal(settings.modelOptions.grok.authStatus, "unauthenticated");
+  assert.match(settings.modelOptions.grok.authDetail ?? "", /grok login/);
+});
+
+test("Grok 'Not signed in' message with model list is treated as unauthenticated", async (t) => {
+  const homeDir = await mkdtemp(join(tmpdir(), "orchestra-models-home-"));
+  t.after(() => rm(homeDir, { recursive: true, force: true }));
+  const runner: ModelCommandRunner = async (command) => {
+    if (command !== "grok") return { stdout: "" };
+    return { stdout: "Not signed in.\n* grok-4.7 (default)\n- grok-4.5\n" };
+  };
+  const settings = await discoverCliModels(
+    structuredClone(defaultRoutingSettings),
+    homeDir,
+    runner,
+    { sleep: async () => undefined },
+  );
+  assert.equal(settings.modelOptions.grok.authStatus, "unauthenticated");
 });
