@@ -8,7 +8,6 @@ import { t, useT } from "../i18n";
 import { chatRows, shortAgo, type ChatRow } from "../lead-tree";
 import { useNow } from "./clock";
 import { statusLabels } from "./labels";
-import "../lead-chat-list.css";
 
 type Props = {
   chats: Session[];

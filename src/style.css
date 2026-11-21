@@ -1099,7 +1099,7 @@ textarea::placeholder {
   color: var(--text-secondary, inherit);
 }
 .login-needed-body code {
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(12px * var(--font-scale));
   opacity: 0.8;
   overflow-wrap: anywhere;
   white-space: pre-wrap;

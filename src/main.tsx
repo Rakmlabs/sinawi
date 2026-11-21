@@ -11,6 +11,7 @@ import "./GlassSelect";
 import "./FolderPicker";
 import "./chat-layout.css";
 import "./sidebar.css";
+import "./lead-chat-list.css";
 import "./team-chat.css";
 import "./agent-mark.css";
 import "./readability.css";

@@ -12,7 +12,7 @@
 .lcl-row.active .lcl-open { color: var(--text); font-weight: 600; }
 .lcl-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lcl-time { flex: none; color: var(--text-subtle); font-size: calc(12px * var(--font-scale)); font-variant-numeric: tabular-nums; }
-.lcl-count { flex: none; padding: 0 6px; border-radius: 999px; background: var(--accent-tint); color: var(--accent-fg); font-size: calc(11px * var(--font-scale)); font-weight: 600; white-space: nowrap; }
+.lcl-count { flex: none; padding: 0 6px; border-radius: 999px; background: var(--accent-tint); color: var(--accent-fg); font-size: calc(12px * var(--font-scale)); font-weight: 600; white-space: nowrap; }
 .lcl-origin { flex: none; color: var(--info-fg); }
 .lcl-state { flex: none; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-disabled); }
 .lcl-state.done { background: var(--accent); }
