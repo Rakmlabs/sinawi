@@ -9,7 +9,7 @@ import type { RunCliOptions } from "./cli.js";
 import { SHOT_DIR } from "./computer-bridge.js";
 import { Orchestra } from "./orchestra.js";
 import type { Session } from "./types.js";
-import { cleanupSessionWorktrees, ensureWorkerWorktree, pruneEmptyWorktrees, removeWorktree, userWorktrees, worktreeReviewNote, worktreesRoot, worktreeStatus, WorktreeDirtyError } from "./worktrees.js";
+import { cleanupSessionWorktrees, ensureWorkerWorktree, mergeWorktree, pruneEmptyWorktrees, removeWorktree, userWorktrees, worktreeReviewNote, worktreesRoot, worktreeStatus, WorktreeDirtyError } from "./worktrees.js";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
 
@@ -320,4 +320,79 @@ test("the user's own worktrees are listed for the lead; Sinawi's are not", async
 test("worktrees go outside a data folder whose path has a space", () => {
   assert.equal(worktreesRoot("/Users/a/Library/Application Support/dev.sinawi.app/.data", "/Users/a"), "/Users/a/.sinawi/worktrees");
   assert.equal(worktreesRoot("/tmp/data", "/Users/a"), "/tmp/data/worktrees");
+});
+
+test("mergeWorktree refuses when the user's own merge is in progress and leaves MERGE_HEAD and resolved content intact", async (t) => {
+  const { repo, dataDir } = await tempRepo(t);
+
+  // Worker does work on a file main does not touch.
+  const info = (await ensureWorkerWorktree({ dataDir, sessionId: "merge-guard-01", workerId: "claude", cwd: repo }))!;
+  await writeFile(join(info.path, "worker.txt"), "worker work\n");
+  git(info.path, "add", "-A");
+  git(info.path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "worker work");
+
+  // User creates a conflict in main between two branches and starts merging.
+  git(repo, "checkout", "-qb", "feature");
+  await writeFile(join(repo, "README.md"), "feature version\n");
+  git(repo, "commit", "-qam", "feature change");
+  git(repo, "checkout", "-q", "main");
+  await writeFile(join(repo, "README.md"), "main version\n");
+  git(repo, "commit", "-qam", "main change");
+  // This merge conflicts; the helper throws on non-zero exit, so we catch it.
+  try { git(repo, "merge", "feature"); } catch { /* expected conflict */ }
+
+  // Confirm MERGE_HEAD exists before our call.
+  const hasMergeHead = (r: string) => { try { git(r, "rev-parse", "-q", "--verify", "MERGE_HEAD"); return true; } catch { return false; } };
+  assert.ok(hasMergeHead(repo), "MERGE_HEAD must exist for the test to be meaningful");
+
+  // User resolves the conflict and stages the resolution.
+  await writeFile(join(repo, "README.md"), "USER RESOLUTION\n");
+  git(repo, "add", "README.md");
+
+  // mergeWorktree must refuse.
+  const result = await mergeWorktree(info, "test merge");
+  assert.equal(result.ok, false);
+  assert.match(result.text, /진행 중/u, "message explains an operation is in progress");
+
+  // MERGE_HEAD still present — the user's merge was not aborted.
+  assert.ok(hasMergeHead(repo), "MERGE_HEAD was left untouched");
+  // The user's resolved content is intact.
+  assert.equal(await readFile(join(repo, "README.md"), "utf8"), "USER RESOLUTION\n");
+});
+
+test("mergeWorktree conflict caught by merge-tree leaves the main tree clean with no MERGE_HEAD", async (t) => {
+  const { repo, dataDir } = await tempRepo(t);
+
+  // Worker edits the same file main edits (conflict).
+  const info = (await ensureWorkerWorktree({ dataDir, sessionId: "merge-guard-02", workerId: "claude", cwd: repo }))!;
+  await writeFile(join(info.path, "app", "index.txt"), "worker version\n");
+  git(info.path, "add", "-A");
+  git(info.path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "worker edit");
+
+  // Main also edits that file and commits, creating a merge conflict.
+  await writeFile(join(repo, "app", "index.txt"), "main version\n");
+  git(repo, "commit", "-qam", "main edit");
+
+  const result = await mergeWorktree(info, "conflict test");
+  assert.equal(result.ok, false);
+  assert.match(result.text, /충돌/u, "message mentions a conflict");
+
+  // No MERGE_HEAD was created: merge-tree returned early before git merge was attempted.
+  const noMergeHead = () => { try { git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD"); return false; } catch { return true; } };
+  assert.ok(noMergeHead(), "MERGE_HEAD was not created by this call");
+  // Main file unchanged.
+  assert.equal(await readFile(join(repo, "app", "index.txt"), "utf8"), "main version\n");
+});
+
+test("mergeWorktree still merges next to the user's unrelated uncommitted edits, and keeps them", async (t) => {
+  const { repo, dataDir } = await tempRepo(t);
+  const info = (await ensureWorkerWorktree({ dataDir, sessionId: "merge-guard-03", workerId: "claude", cwd: repo }))!;
+  await writeFile(join(info.path, "worker.txt"), "worker work\n");
+  git(info.path, "add", "-A");
+  git(info.path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "worker work");
+  await writeFile(join(repo, "README.md"), "the user is still typing\n");
+  const result = await mergeWorktree(info, "merge next to edits");
+  assert.equal(result.ok, true, result.text);
+  assert.equal(await readFile(join(repo, "README.md"), "utf8"), "the user is still typing\n");
+  assert.equal(await readFile(join(repo, "worker.txt"), "utf8"), "worker work\n");
 });
