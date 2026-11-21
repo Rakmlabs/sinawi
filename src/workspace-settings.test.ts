@@ -25,7 +25,7 @@ test("workspace settings render every rule per workspace with its current value"
   }
   // The open workspace's rules start expanded; the restricted one shows its summary.
   assert.match(html, /<details class="workspace-rules" open="">/);
-  assert.match(html, /3개 제한/);
+  assert.match(html, /도구·미디어 3개 막음/);
   assert.match(html, /image-tool/);
   assert.match(html, /search · Grok Build/);
   assert.match(html, /id="ws-team-computer"[^>]*aria-checked="true"/);
