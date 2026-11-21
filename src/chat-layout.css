@@ -1047,3 +1047,20 @@ body,
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px);
   mask-image: linear-gradient(to bottom, transparent 0, black 40px);
 }
+
+/* The docked sidebar's right edge: drag (or arrow keys) to change --sidebar-width (SidebarResizer.tsx). */
+.app-shell > .sidebar-resizer {
+  grid-area: sidebar;
+  justify-self: end;
+  z-index: 3;
+  width: 7px;
+  margin-right: -4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.app-shell > .sidebar-resizer:hover, .app-shell > .sidebar-resizer:focus-visible, body.sidebar-resizing .app-shell > .sidebar-resizer {
+  background: linear-gradient(to right, transparent 3px, var(--border-focus) 3px, var(--border-focus) 4px, transparent 4px);
+  outline: none;
+}
+body.sidebar-resizing, body.sidebar-resizing * { cursor: col-resize !important; user-select: none; }
+body.sidebar-resizing .app-shell { transition: none; }

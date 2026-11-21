@@ -41,3 +41,10 @@
 .lead-chat-list.sidebar .lcl-count { display: none; }
 .lead-chat-list.sidebar .lcl-fold { width: 22px; padding: 0; justify-content: center; }
 .lead-chat-list.sidebar .lcl-fold span { display: none; }
+/* Title on the first line with the time; chips on their own line below, so the title is never squeezed. */
+.lcl-main { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.lcl-title-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.lcl-meta { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
+.lcl-meta .lcl-origin { max-width: 100%; }
+.lcl-open:has(.lcl-meta) { align-items: flex-start; }
+.lcl-open:has(.lcl-meta) > .lcl-state, .lcl-open:has(.lcl-meta) > .agent-mark { margin-top: 3px; }

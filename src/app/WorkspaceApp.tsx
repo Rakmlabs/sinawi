@@ -52,6 +52,7 @@ import { useStableHandlers } from "./stable-callbacks";
 import { draftKey, draftStore } from "./draft-store";
 import { useAttachments } from "./useAttachments";
 import { useChatScroll } from "./useChatScroll";
+import { SidebarResizer, useSidebarWidth } from "./SidebarResizer";
 import { useComposerCompletion } from "./useComposerCompletion";
 import { useModalFocusTrap } from "./useModalFocusTrap";
 import { ActivityPanel } from "./ActivityPanel";
@@ -444,6 +445,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     connected,
   );
   const canSend = Boolean((prompt.trim() || attachments.some((item) => item.kind === "element" || item.screenshotPath)) && canSendBase && attachmentsReady);
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   const { bottom, chatBody, showChatBottom, hasAbove, scrollToChatBottom, chatScrollHandlers } = useChatScroll({
     resetKey: [selected, workerSelection?.taskId],
     followKey: [active?.events.at(-1)?.id, active?.events.at(-1)?.text, pendingRecommendation, editingRecommendation],
@@ -874,7 +876,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     <MarkdownSessionContext.Provider value={active?.id}>
     <ViewerContext.Provider value={viewerApi}>
     <MotionConfig reducedMotion="user">
-      <div style={{ "--terminal-height": `${terminalHeight}px` } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
+      <div style={{ "--terminal-height": `${terminalHeight}px`, "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
         <WindowHeader title={tab === "workspace" ? active?.title : viewTitles[tab]} project={tab === "workspace" && !leadNeedsFolder ? activeProject : undefined} runningSince={tab === "workspace" ? runningSince : undefined}
           sidebar={{ open: sidebarOpen, controls: SIDEBAR_ID, onToggle: toggleSidebar, buttonRef: sidebarToggle }}
           workspace={<WorkspaceSwitcher onManage={openWorkspaceSettings} />}
@@ -888,6 +890,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} tab={tab}
           connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
           stewards={stewards} selectedWorker={selectedWorker?.id} {...sidebarHandlers} />
+        {sidebarOpen && !sidebarOverlay && <SidebarResizer width={sidebarWidth} onChange={setSidebarWidth} />}
         <div
           className="sr-only"
           role="status"

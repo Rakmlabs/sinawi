@@ -66,11 +66,15 @@ export function LeadChatList({ chats, query = "", selectedId, selectedWorker, on
             title={[session.title, statusLabels[session.status], row.openedBy && t("origin.openedBy", { name: row.openedBy })].filter(Boolean).join(" · ")}>
             <State status={session.status} empty={!session.events.some((event) => event.type === "message")} />
             <AgentMark agent={session.agent} size="small" />
-            <span className="lcl-title">{session.title}</span>
-            {needsYou && <small className="lcl-needs" title={t("lcl.needsYouTitle")}>{t("lcl.needsYou")}</small>}
-            {row.openedBy && <small className="lcl-origin" title={t("origin.openedBy", { name: row.openedBy })}><Plug size={11} aria-hidden="true" /><span>{row.openedBy}</span></small>}
-            {row.runningWorkers > 0 && <small className="lcl-count running">{t("lcl.workersRunning", { n: row.runningWorkers })}</small>}
-            <time className="lcl-time">{time}</time>
+            {/* The title keeps the first line; who opened it and what waits go on a line below (third review U1). */}
+            <span className="lcl-main">
+              <span className="lcl-title-line"><span className="lcl-title">{session.title}</span><time className="lcl-time">{time}</time></span>
+              {(needsYou || row.openedBy || row.runningWorkers > 0) && <span className="lcl-meta">
+                {needsYou && <small className="lcl-needs" title={t("lcl.needsYouTitle")}>{t("lcl.needsYou")}</small>}
+                {row.openedBy && <small className="lcl-origin" title={t("origin.openedBy", { name: row.openedBy })}><Plug size={11} aria-hidden="true" /><span>{row.openedBy}</span></small>}
+                {row.runningWorkers > 0 && <small className="lcl-count running">{t("lcl.workersRunning", { n: row.runningWorkers })}</small>}
+              </span>}
+            </span>
           </button>
           {row.workers.length > 0 && !expanded && <button type="button" className="lcl-fold" aria-expanded={false} aria-label={t("lcl.showWorkers", { n: row.workers.length, title: session.title })} onClick={toggle}>
             <ChevronRight size={13} aria-hidden="true" /><span>{row.workers.length}</span>
