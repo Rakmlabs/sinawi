@@ -37,6 +37,7 @@ import { createTerminalService } from "./terminal.js";
 import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
 import { hasAppKey } from "./app-key.js";
 import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from "./mcp-clients.js";
+import { mcpClientsSeen, noteMcpClient } from "./mcp-seen.js";
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
 import { mediaRouteRequired } from "./media-routing.js";
@@ -1560,7 +1561,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       // The MCP client hanging up ends what it waits on (wait_for_session), not only at its deadline.
       const hungUp = new AbortController();
       res.on("close", () => { if (!res.writableFinished) hungUp.abort(); });
-      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace(), origin: { kind: "mcp", client: mcpClientName(req.headers["x-sinawi-client"], req.body) }, signal: hungUp.signal };
+      const client = mcpClientName(req.headers["x-sinawi-client"], req.body);
+      noteMcpClient(client);
+      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace(), origin: { kind: "mcp", client }, signal: hungUp.signal };
       const answer = await handleToolMcp(req.body ?? {}, "external", APP_MCP_SERVER, (name, args) => callTool(caller, name, args));
       if (!answer) { res.status(202).end(); return; }
       res.json(answer);
@@ -1573,7 +1576,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     // published; `scriptConfig` is the same entry as `clients` with the token written in.
     const tokenFile = appMcpTokenPath(mcpDataDir);
     const node = script ? await installAppMcpLauncher(mcpDataDir) : undefined;
-    return { token, tokenFile, script: script ?? null, server: APP_MCP_SERVER, clients: script ? clientSetups(script, tokenFile, node) : [], config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token, node) : null };
+    return { token, tokenFile, script: script ?? null, server: APP_MCP_SERVER, clients: script ? clientSetups(script, tokenFile, node) : [], config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token, node) : null, seen: mcpClientsSeen() };
   };
   // For the settings page: how to connect Claude Desktop (shows the token, so not a tool).
   // POST from the app (a browser sends its Origin on POST, not on a same-origin GET); GET stays for in-process callers.

@@ -811,3 +811,8 @@ textarea.session-prompt {
 .connect-details .connect-code { margin-top: 8px; }
 .connect-body { display: grid; gap: 10px; min-width: 0; }
 .connect-body > .settings-advanced-actions { justify-content: flex-start; }
+/* Which outside AIs reached the server: the answer to "is it connected?". */
+.connect-seen { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; color: var(--text-secondary); font-size: calc(13px * var(--font-scale)); }
+.connect-seen li { display: flex; align-items: center; gap: 6px; }
+.connect-seen-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success, var(--accent)); }
+.connect-seen.none { color: var(--text-muted); }

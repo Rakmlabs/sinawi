@@ -7,6 +7,7 @@ import { t, useT } from "../i18n";
 import { workspaceApi } from "../app/api";
 import { CopyButton } from "../CopyButton";
 import { WebLink } from "../WebLink";
+import { agoLabel } from "../lead-tree";
 import { ConfirmDialog, SettingRow, SettingsPage, SettingsSection } from "./controls";
 
 type ClientSetup = { id: "claude-code" | "codex" | "grok" | "claude-desktop" | "cursor" | "other" | "grok-bot" | "codex-dots"; name: string; command?: string; config?: string; configFile?: string; check?: string; cloud?: true };
@@ -19,7 +20,17 @@ const CLOUD_AGENTS: ClientSetup[] = [
   { id: "grok-bot", name: "Grok Bot", cloud: true },
   { id: "codex-dots", name: "Codex dots", cloud: true },
 ];
-type McpConnection = { token: string; tokenFile: string; script: string | null; clients?: ClientSetup[]; scriptConfig?: unknown };
+type McpSeen = { client: string; at: string; calls: number };
+type McpConnection = { token: string; tokenFile: string; script: string | null; clients?: ClientSetup[]; scriptConfig?: unknown; seen?: McpSeen[] };
+
+/** Which outside AIs reached this server since it started (server/mcp-seen.ts): "is it connected?" */
+export function SeenClients({ seen }: { seen: McpSeen[] | undefined }) {
+  if (!seen) return null;
+  if (!seen.length) return <p className="connect-seen none" role="status">{t("set.connect.seenNone")}</p>;
+  return <ul className="connect-seen" aria-label={t("set.connect.seenLabel")}>
+    {seen.map((item) => <li key={item.client}><span className="connect-seen-dot" aria-hidden="true" /><strong>{item.client}</strong> {t("set.connect.seenAt", { ago: agoLabel(item.at), n: item.calls })}</li>)}
+  </ul>;
+}
 type OneClick = "claude" | "cursor";
 type McpClientPlan = { client: OneClick; name: string; path: string; exists: boolean; replaces: boolean; upToDate: boolean; merge: string };
 
@@ -128,8 +139,11 @@ export function ConnectPage() {
   const fail = (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason));
   useEffect(() => {
     let live = true;
-    workspaceApi<McpConnection>("/app-mcp/connection", {}).then((next) => { if (live) setConnection(next); }, (reason) => { if (live) fail(reason); });
-    return () => { live = false; };
+    const load = () => workspaceApi<McpConnection>("/app-mcp/connection", {}).then((next) => { if (live) setConnection(next); }, (reason) => { if (live) fail(reason); });
+    void load();
+    // A client connecting while this page is open shows up without leaving it.
+    const timer = setInterval(() => { void load(); }, 15_000);
+    return () => { live = false; clearInterval(timer); };
   }, []);
   const rotate = () => {
     setConfirm(false); setError("");
@@ -148,6 +162,7 @@ export function ConnectPage() {
             <li>{t("set.connect.step3")}</li>
           </ol>
           <p className="connect-hint">{t("set.connect.appOn")}</p>
+          <SeenClients seen={connection?.seen} />
         </div>
       </div>
     </SettingsSection>
