@@ -88,7 +88,8 @@ test("workspace MCP blocks override Codex native state and reach Grok deny flags
   const index = codex.args.indexOf("-c");
   assert.equal(codex.args[index + 1], 'mcp_servers."docs.local".enabled=false');
   const grok = await prepareCliInvocation({ agent: "grok", cwd: "/tmp", prompt: "work", blockedMcp: ["mcp__docs__*"] });
-  assert.equal(grok.args[grok.args.indexOf("--deny") + 1], "mcp__docs__*");
+  const denied = grok.args.flatMap((arg, i) => (arg === "--deny" ? [grok.args[i + 1]] : []));
+  assert.ok(denied.includes("mcp__docs__*"), denied.join(" "));
 });
 
 test("workspace-locked tools and the Grok MCP switch reach orchestra and planner runs", async () => {
