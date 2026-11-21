@@ -9,6 +9,9 @@
  *   path outside that folder, gets them too.
  * - A child without SINAWI_PORT gets a closed port (its CLIs would dial 3001), and one with 3001 throws.
  * - A connection to port 3001 (the installed app's) throws.
+ * - Starting a real agent CLI, gh or `security` (keychain) throws: with a fake HOME the real `claude`
+ *   may open keychain prompts on the owner's screen (PR #8 second review P8-6, `claude --help`). A
+ *   test's own stand-in inside the guarded folder runs as usual.
  * - If any of these still resolves to the owner's real folders, loading fails and no test runs.
  */
 import childProcess from "node:child_process";
@@ -35,7 +38,8 @@ const owned = [
 ];
 const inside = (path: string, folder: string) => { const rel = relative(folder, path); return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)); };
 
-// The test runner's own process loads this first; the test files it starts inherit its folder.
+// Each test file gets a folder of its own, removed when it exits; a process started with a live
+// guard folder in SINAWI_TEST_GUARD (a guarded test's child that loads this too) reuses that one.
 const inherited = process.env.SINAWI_TEST_GUARD;
 const root = inherited && existsSync(inherited) ? inherited : realpathSync(mkdtempSync(join(realTmp, "sinawi-test-")));
 const guarded = {
@@ -49,6 +53,8 @@ for (const value of [guarded.HOME, guarded.TMPDIR, guarded.SINAWI_DATA_DIR, guar
 // The guarded home has no git identity of the owner's: commits in test repositories use this one.
 if (root !== inherited) writeFileSync(join(guarded.HOME, ".gitconfig"), "[user]\n\tname = Sinawi Test\n\temail = test@sinawi.invalid\n");
 delete process.env.AGENT_ORCHESTRA_DATA_DIR;
+// The owner's account and config folders, which HOME alone does not move.
+for (const name of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "SINAWI_CLAUDE_DESKTOP_CONFIG", "SINAWI_CURSOR_MCP_CONFIG"]) delete process.env[name];
 delete process.env.AGENT_ORCHESTRA_PORT;
 Object.assign(process.env, guarded);
 if (root !== inherited) process.on("exit", () => rmSync(root, { recursive: true, force: true, maxRetries: 3 }));
@@ -70,19 +76,29 @@ const childEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
 /** The arguments with the options object guarded (added where the caller gave none). */
 const guardArgs = (args: unknown[]): unknown[] => {
   const out = [...args];
-  const at = Array.isArray(out[1]) ? 2 : 1;
+  // `execFile(file, null, options, cb)`: a null where the arguments go still leaves options third.
+  const at = Array.isArray(out[1]) || (out[1] == null && out[2] && typeof out[2] === "object") ? 2 : 1;
   const options = out[at];
   if (options && typeof options === "object" && !Array.isArray(options)) out[at] = { ...options, env: childEnv((options as { env?: NodeJS.ProcessEnv }).env) };
+  else if (options == null && at < out.length) out[at] = { env: childEnv() };
   else out.splice(at, 0, { env: childEnv() });
   return out;
+};
+const REAL_CLIS = new Set(["claude", "codex", "grok", "opencode", "cursor-agent", "gemini", "gh", "security"]);
+const refuseRealCli = (name: string, args: unknown[]) => {
+  const command = String(args[0] ?? "");
+  // exec/execSync take one shell line: its first word is the program.
+  const program = name === "exec" || name === "execSync" ? command.trim().split(/\s+/u)[0] ?? "" : command;
+  const base = program.replace(/^.*\//u, "");
+  if (REAL_CLIS.has(base) && !(isAbsolute(program) && inside(program, root))) throw new Error(`test guard: a test started the real ${base}; give it a stand-in in a temporary folder`);
 };
 const cp = childProcess as unknown as Record<string, Fn>;
 for (const name of ["spawn", "spawnSync", "execFile", "execFileSync", "exec", "execSync", "fork"]) {
   const original = cp[name]! as Fn & { [promisify.custom]?: Fn };
-  const wrapped = function guardedChildProcess(this: unknown, ...args: unknown[]) { return original.apply(this, guardArgs(args)); } as Fn & { [promisify.custom]?: Fn };
+  const wrapped = function guardedChildProcess(this: unknown, ...args: unknown[]) { refuseRealCli(name, args); return original.apply(this, guardArgs(args)); } as Fn & { [promisify.custom]?: Fn };
   // promisify(execFile) resolves to { stdout, stderr } through this; keep it, guarded too.
   const custom = original[promisify.custom];
-  if (custom) wrapped[promisify.custom] = (...args: unknown[]) => custom(...guardArgs(args));
+  if (custom) wrapped[promisify.custom] = (...args: unknown[]) => { refuseRealCli(name, args); return custom(...guardArgs(args)); };
   cp[name] = wrapped;
 }
 
