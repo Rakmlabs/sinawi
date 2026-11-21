@@ -3,6 +3,7 @@ import { maxEvents, trimEvents } from "./events.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { killSessionProcessGroups, runCli } from "./cli.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
@@ -215,6 +216,16 @@ function runExhausted(run: { exitCode: number; cliText: string; quotaErrorEviden
 const LEAD_SKILL_MARK = /^\s*created-by:\s*sinawi-lead\s*$/mu;
 /** The mark counts only in the skill's front matter, not anywhere in its body. */
 const leadMarked = (text: string) => LEAD_SKILL_MARK.test(/^---\n([\s\S]*?)\n---/u.exec(text)?.[1] ?? "");
+
+/**
+ * A lead owns one project: its folder is never the home folder or `/`, whoever asks (the app, the
+ * HTTP API, an outside AI's create_lead, a lead creating another). The app picks a folder first too.
+ */
+export function assertLeadFolder(cwd: string | undefined, home = homedir()): void {
+  if (!cwd) return;
+  const folder = resolve(cwd);
+  if (folder === resolve(home) || folder === "/") throw new Error(`담당은 프로젝트 폴더에서 일합니다. 홈 폴더나 / (${folder})는 담당 폴더가 될 수 없으니 프로젝트 폴더를 고르세요.`);
+}
 
 export class Orchestra {
   private sessions = new Map<string, Session>();
@@ -578,6 +589,7 @@ export class Orchestra {
       input = { ...input, agent: input.agent || fallback.agent, ...(input.workers?.length ? {} : { workers: fallback.workers, workerConfigs: undefined }) };
     }
     if (!entity && input.steward?.name?.trim()) this.assertStewardNameFree(input.steward.name.trim().slice(0, 80), undefined, input.workspaceId ?? "personal");
+    if (!entity && input.steward) assertLeadFolder(input.cwd);
     const workspaceId = input.workspaceId ?? "personal";
     // No first message: an empty chat that waits for one (followup starts its first turn).
     const empty = !input.prompt.trim();
@@ -2189,6 +2201,7 @@ export class Orchestra {
     const name = input.name.trim().slice(0, 80);
     if (!name) throw new Error("담당 이름이 필요합니다.");
     this.assertStewardNameFree(name, undefined, input.workspaceId);
+    for (const cwd of input.cwds ?? []) assertLeadFolder(cwd);
     const now = new Date().toISOString();
     const base: Steward = { id: randomUUID(), name, agent: input.agent ?? "claude", skills: [], systemPrompt: "", workers: [], mergePolicy: DEFAULT_MERGE_POLICY, cwds: [], ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), createdAt: now };
     const steward = applyStewardPatch(base, { ...input, name }, now);
@@ -2208,6 +2221,7 @@ export class Orchestra {
     if (patch.name !== undefined && !name) throw new Error("담당 이름이 필요합니다.");
     const destination = workspaceId ?? current.workspaceId;
     this.assertStewardNameFree(name ?? current.name, id, destination);
+    for (const cwd of patch.cwds ?? []) assertLeadFolder(cwd);
     if (workspaceId) {
       for (const session of this.stewardThreads(id)) if (session.status === "running") this.assertSessionPolicy({ ...session, workspaceId });
     }
