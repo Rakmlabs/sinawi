@@ -1581,6 +1581,8 @@ export class Orchestra {
     const mediaOn = mediaRequest && this.mediaPolicyOn(session.workspaceId);
     this.assertSessionPolicy(session);
     this.assertPermissionMode(session.workspaceId, settings.permissionMode);
+    // The answer turn already ended (the user wrote while it settled): answer with that turn, not this one.
+    if (session.steward?.answering?.result) this.settleStewardAnswer(session, session.steward.answering.result.outcome);
     session.status = "running";
     delete session.endedAt;
     const auto = this.goalAutoNext.delete(id);
@@ -1958,6 +1960,7 @@ export class Orchestra {
   private finish(session: Session, blocked = false) {
     if (session.status !== "running") return;
     session.status = blocked ? "error" : "done"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
+    this.endAnswerTurn(session, "done");
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     const tracking = this.trackingChecklist(session);
     if (blocked && !tracking) this.event(session, session.agent, "error", "워커가 막힌 채로 끝났고 총괄이 다시 맡기지 않았습니다. 작업은 끝나지 않았습니다.");
@@ -1992,6 +1995,7 @@ export class Orchestra {
     if (controller && this.controllers.get(session.id) !== controller) return;
     if (session.status !== "running") return;
     session.status = "stopped"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
+    this.endAnswerTurn(session, "stopped");
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     this.event(session, session.agent, "status", "중지됨");
     if (session.steward) void this.stewardTurnEnded(session, "stopped").catch(() => undefined);
@@ -2002,6 +2006,7 @@ export class Orchestra {
     if (controller && this.controllers.get(session.id) !== controller) return;
     if (session.status !== "running") return;
     session.status = "error"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
+    this.endAnswerTurn(session, "error");
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     const message = error instanceof Error ? error.message : String(error);
     // The chat already shows why (a sign-in error with its login button): no second, vaguer line.
@@ -2861,6 +2866,12 @@ export class Orchestra {
     if (outcome !== "stopped") this.drainStewardInbox(session);
   }
 
+  /** The turn that answers another lead ended: keep its outcome and text with the question. */
+  private endAnswerTurn(session: Session, outcome: "done" | "error" | "stopped"): void {
+    const asked = session.steward?.answering;
+    if (asked && !asked.result) asked.result = { outcome, text: this.stewardLastAnswer.get(session.id) ?? "" };
+  }
+
   /** `run` false while restoring: the message waits for the first stewardTick. */
   private settleStewardAnswer(session: Session, outcome: "done" | "error" | "stopped", run = true): void {
     const asked = session.steward?.answering;
@@ -2868,8 +2879,9 @@ export class Orchestra {
     delete session.steward!.answering;
     const asker = this.sessions.get(asked.id);
     if (!asker?.steward) return;
+    if (asked.result) outcome = asked.result.outcome;
     const answer = outcome === "done"
-      ? stripLeadBlocks(this.stewardLastAnswer.get(session.id) ?? "") || "(답이 비어 있습니다)"
+      ? stripLeadBlocks(asked.result ? asked.result.text : this.stewardLastAnswer.get(session.id) ?? "") || "(답이 비어 있습니다)"
       : `(이 담당이 답하지 못했습니다: ${outcome === "stopped" ? "사용자가 중지했습니다" : "실행 중 오류가 났습니다"})`;
     this.deliverToSteward(asker, { prompt: replyPrompt(stewardName(session), asked.question, answer), depth: asked.depth }, run);
   }

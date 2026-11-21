@@ -235,7 +235,11 @@ export interface StewardState {
   /** Messages waiting for this lead (other leads' questions and answers, its report). Kept across restarts. */
   inbox?: StewardDelivery[];
   /** The lead whose question this lead is answering now; its answer goes back when the work ends. */
-  answering?: { id: string; question: string; depth: number };
+  answering?: {
+    id: string; question: string; depth: number;
+    /** Set when the turn that answers ends, so a later turn never answers in its place. */
+    result?: { outcome: "done" | "error" | "stopped"; text: string };
+  };
   /** Lets another lead's request change this project; off, the lead only looks and answers. */
   acceptWork?: boolean;
   /** What the app did after the last turn (merges), told to the lead at the start of the next. */
