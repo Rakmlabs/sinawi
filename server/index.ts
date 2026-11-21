@@ -49,6 +49,9 @@ function shutdown() {
   for (const session of orchestra.list()) {
     if (session.status === "running") orchestra.stop(session.id);
   }
+  // Save now: a long request still open (an MCP bridge waiting) can keep httpServer.close below
+  // from finishing before launchd's SIGKILL, and the last events would be lost. Saved again after.
+  void flushSessions().catch((error) => console.error("세션 저장 실패:", error instanceof Error ? error.message : error));
   // Runs not tied to a session controller (live status answers) still own process groups.
   killCliProcessGroups("SIGTERM");
   for (const client of websocket.clients) client.close(1001, "서버를 종료합니다");
