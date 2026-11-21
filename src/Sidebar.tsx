@@ -367,7 +367,8 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
       <section className="sidebar-projects" aria-label={t("side.projects")}>
         <div className="sidebar-section-heading"><h2>{t("side.projects")}</h2><button aria-label={t("ob.createProject")} title={t("ob.createProject")} disabled={busy} onClick={() => { setEditor({ kind: "create", id: "", value: "" }); setMenu(undefined); }}><Plus size={15} /></button></div>
         {editor?.kind === "create" && editForm(editor)}
-        {!searching && !visibleGroups.length && <p className="sidebar-empty">{t("side.projectsEmpty")}</p>}
+        {/* Once leads hold the work, empty-section hints are noise (review round 2, §6). */}
+        {!searching && !visibleGroups.length && !leads.length && <p className="sidebar-empty">{t("side.projectsEmpty")}</p>}
         {visibleGroups.map((group) => {
           const open = searching || !closed.has(group.id);
           const chats = visibleSessions.filter((session) => session.groupId === group.id);
@@ -383,7 +384,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
           </div>;
         })}
       </section>
-      <section className={`sidebar-recents${dropClass(UNGROUPED)}`} aria-label={t("side.recentChats")} data-drop-group={UNGROUPED}><div className="sidebar-section-heading"><h2>{t("side.recent")}</h2>{drag && <small className="drop-hint">{t("side.dropUnsorted")}</small>}</div>{dropTarget === UNGROUPED && drag && <div className="drop-slot" aria-hidden="true">{t("side.moveUnsorted", { title: drag.title })}</div>}{ungrouped.length ? ungrouped.map(sessionRow) : !searching ? <p className="sidebar-empty">{t("side.noChats")}</p> : null}</section>
+      <section className={`sidebar-recents${dropClass(UNGROUPED)}`} aria-label={t("side.recentChats")} data-drop-group={UNGROUPED}><div className="sidebar-section-heading"><h2>{t("side.recent")}</h2>{drag && <small className="drop-hint">{t("side.dropUnsorted")}</small>}</div>{dropTarget === UNGROUPED && drag && <div className="drop-slot" aria-hidden="true">{t("side.moveUnsorted", { title: drag.title })}</div>}{ungrouped.length ? ungrouped.map(sessionRow) : !searching && !leads.length ? <p className="sidebar-empty">{t("side.noChats")}</p> : null}</section>
     </nav>
     <div className="sidebar-footer">
       <button className={`sidebar-settings${managementTab ? " active" : ""}`} aria-haspopup="menu" aria-expanded={Boolean(footerMenu)} aria-current={managementTab ? "page" : undefined}
