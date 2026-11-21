@@ -9,7 +9,7 @@ import { findTool, handleToolMcp, needsApproval, inProcess, isUserOnlyRoute, nam
 import { withJosa } from "./korean.js";
 import { ApprovalStore, approvalRequester, type AppApproval, type ApprovalStatus } from "./app-approvals.js";
 import { waitResult } from "./session-wait.js";
-import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, clientSetups, connectEntry, ensureAppMcpToken, scriptClientConfig, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
+import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, clientSetups, connectEntry, ensureAppMcpToken, scriptClientConfig, installAppMcpLauncher, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
 import { LEAD_MCP_SERVER } from "./lead-tools.js";
 import { loadSchedules, saveSchedules, type ScheduleInput } from "./schedules.js";
 import { isComputerUseAllowed } from "./workspace-policy.js";
@@ -1570,7 +1570,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     // file. `config` is the npm package through npx, which works only once @rakmlabs/sinawi is
     // published; `scriptConfig` is the same entry as `clients` with the token written in.
     const tokenFile = appMcpTokenPath(mcpDataDir);
-    return { token, tokenFile, script: script ?? null, server: APP_MCP_SERVER, clients: script ? clientSetups(script, tokenFile) : [], config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token) : null };
+    const node = script ? await installAppMcpLauncher(mcpDataDir) : undefined;
+    return { token, tokenFile, script: script ?? null, server: APP_MCP_SERVER, clients: script ? clientSetups(script, tokenFile, node) : [], config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token, node) : null };
   };
   // For the settings page: how to connect Claude Desktop (shows the token, so not a tool).
   // POST from the app (a browser sends its Origin on POST, not on a same-origin GET); GET stays for in-process callers.
@@ -1591,7 +1592,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     await ensureAppMcpToken(mcpDataDir);
     const script = await installAppMcpScript(mcpDataDir);
     if (!script) throw new Error("Sinawi: 연결 스크립트를 찾지 못했습니다. / The bridge script was not found.");
-    return connectEntry(script, appMcpTokenPath(mcpDataDir));
+    return connectEntry(script, appMcpTokenPath(mcpDataDir), await installAppMcpLauncher(mcpDataDir));
   };
   const clientError = (res: Response, error: unknown) => {
     if (error instanceof McpClientConfigError) { res.status(409).json({ error: error.message, code: error.code, path: error.path }); return; }

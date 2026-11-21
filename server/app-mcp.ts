@@ -99,6 +99,39 @@ export async function installAppMcpScript(dataDir: string): Promise<string | und
   return target;
 }
 
+export const APP_MCP_LAUNCHER = "sinawi-node";
+const posixQuote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
+
+/**
+ * The command clients run instead of a Node path (review L7): n or nvm switching versions removes the
+ * Node the server ran with, so a path written into a client's config broke. This launcher tries that
+ * Node first, then the node on PATH and the usual install places, and runs the bridge with it.
+ */
+export function launcherSource(node = process.execPath): string {
+  return [
+    "#!/bin/sh",
+    "# Sinawi MCP: runs the bridge with Node (written by the app; rewritten when its Node changes).",
+    `for node in ${posixQuote(node)} "$(command -v node 2>/dev/null)" /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do`,
+    '  [ -n "$node" ] && [ -x "$node" ] && exec "$node" "$@"',
+    "done",
+    'echo "Sinawi MCP: Node.js를 찾지 못했습니다 / Node.js was not found" >&2',
+    "exit 127",
+    "",
+  ].join("\n");
+}
+
+/** Writes <data>/hooks/sinawi-node (see launcherSource) and returns its path. */
+export async function installAppMcpLauncher(dataDir: string, node = process.execPath): Promise<string> {
+  const target = join(dataDir, "hooks", APP_MCP_LAUNCHER);
+  const source = launcherSource(node);
+  if ((await readFile(target, "utf8").catch(() => "")) !== source) {
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, source, { mode: 0o755 });
+    await chmod(target, 0o755);
+  }
+  return target;
+}
+
 export const appUrl = () => `http://127.0.0.1:${envVar("PORT") || "3001"}`;
 
 /**

@@ -15,6 +15,7 @@
 | 프로토콜 버전 | `2025-06-18`, `2025-03-26`, `2024-11-05` | `server/app-tools.ts` `MCP_VERSIONS` |
 | 도구 수 | 외부 표면 81개(승인 필요 30개 포함, 담당 전용 도구 제외) | `tools/list` 직접 확인 |
 | stdio 브리지 | `packages/sinawi/lib/mcp.mjs` 한 파일. 앱 안 사본: `/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`, 데이터 폴더 사본: `<데이터 폴더>/hooks/sinawi-mcp.mjs` | `src-tauri/tauri.conf.json` resources |
+| Node 실행기 | 설정 → 외부 AI 연결이 보여 주는 명령은 Node 절대 경로 대신 `<데이터 폴더>/hooks/sinawi-node`를 쓴다. 앱이 쓰던 Node → PATH의 `node` → `/opt/homebrew/bin/node`·`/usr/local/bin/node`·`/usr/bin/node` 순으로 찾아 실행하므로, n·nvm으로 Node 버전을 바꿔도 등록한 연결이 깨지지 않는다. 아래 예시의 `node`도 PATH에 node가 있으면 그대로 된다 | `server/app-mcp.ts` `launcherSource` |
 | 브리지 환경 변수 | `SINAWI_URL` → 없으면 `http://127.0.0.1:${SINAWI_PORT:-3001}`. 토큰: `SINAWI_MCP_TOKEN` → `SINAWI_MCP_TOKEN_FILE` → `$SINAWI_DATA_DIR/app-mcp-token` → 기본 토큰 파일. **같은 Mac이면 env 없이도 기본 토큰 파일을 읽는다**(호출마다 다시 읽어 재발급에도 안 끊김) | `packages/sinawi/lib/mcp.mjs` |
 
 ### 꼭 알아 둘 것

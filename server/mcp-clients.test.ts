@@ -60,7 +60,7 @@ test("connect to Claude Desktop: preview, then merge the sinawi entry, keep ever
   assert.equal(preview.body.exists, true);
   assert.equal(preview.body.replaces, false);
   const entry = preview.body.entry;
-  assert.equal(entry.command, process.execPath);
+  assert.equal(entry.command, join(data, "hooks", "sinawi-node"), "the Node launcher, not a Node path n/nvm may remove");
   assert.equal(entry.args[0], join(data, "hooks", "sinawi-mcp.mjs"), "the app's copy of the bridge");
   assert.equal(entry.env.SINAWI_MCP_TOKEN_FILE, appMcpTokenPath(data), "the token file, not the token");
   assert.equal(entry.env.SINAWI_MCP_TOKEN, undefined, "no secret is copied into another app's config");

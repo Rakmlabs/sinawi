@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { APP_TOOLS, injectRequest, LEAD_TOOL_NAMES, nameLookup, namedLabel, ROUTE_EXCLUSIONS, toolsFor } from "./app-tools.js";
 import { appMcpTokenPath } from "./app-mcp.js";
@@ -110,7 +110,7 @@ test("the external MCP endpoint refuses a missing or wrong token and answers wit
   assert.equal(connection.body.config.mcpServers.sinawi.command, "npx", "the config runs the npm package");
   assert.deepEqual(connection.body.config.mcpServers.sinawi.args, ["-y", "@rakmlabs/sinawi", "mcp"]);
   const alternative = connection.body.scriptConfig.mcpServers.sinawi;
-  assert.equal(alternative.command, process.execPath, "the alternative runs the app's copy with Node, without npx");
+  assert.match(alternative.command, /hooks\/sinawi-node$/u, "the alternative runs the app's copy through the Node launcher, without npx");
   assert.equal(alternative.args[0], connection.body.script);
   assert.equal(alternative.env.SINAWI_MCP_TOKEN, token);
   // Per-client setup: the app's copy of the bridge, the token read from its file, never written in.
@@ -382,4 +382,19 @@ test("an in-process call whose outer caller hangs up closes the route's response
   hangUp.abort();
   await assert.rejects(call, /연결을 끊었습니다/u);
   assert.equal(closed, true, "the waiting route sees the close and stops");
+});
+
+test("the Node launcher outlives a removed Node: it falls back to the node on PATH (review L7)", async (t) => {
+  const { installAppMcpLauncher } = await import("./app-mcp");
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const dir = await mkdtemp(join(tmpdir(), "sinawi-launcher-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const launcher = await installAppMcpLauncher(dir, join(dir, "gone", "node"));
+  const script = join(dir, "hello.mjs");
+  await writeFile(script, "console.log('bridge ran', process.argv.length)");
+  const run = spawnSync(launcher, [script], { encoding: "utf8", env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /bridge ran/u);
 });
