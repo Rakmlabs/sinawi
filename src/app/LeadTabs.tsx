@@ -56,10 +56,13 @@ export const LeadTabs = memo(function LeadTabs({ stewardId, name, threads: allTh
   };
   const [listOpen, setListOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const allButton = useRef<HTMLButtonElement>(null);
+  // A closed list starts fresh: the next open shows every chat, not the last search.
+  const closeList = () => { setListOpen(false); setQuery(""); };
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!listOpen) return;
-    const away = (event: MouseEvent) => { if (!panel.current?.parentElement?.contains(event.target as Node)) setListOpen(false); };
+    const away = (event: MouseEvent) => { if (!panel.current?.parentElement?.contains(event.target as Node)) { setListOpen(false); setQuery(""); } };
     window.addEventListener("mousedown", away);
     return () => window.removeEventListener("mousedown", away);
   }, [listOpen]);
@@ -140,12 +143,12 @@ export const LeadTabs = memo(function LeadTabs({ stewardId, name, threads: allTh
     </div>
     <span className="lead-tabs-all-wrap">
       <button type="button" className={`lead-tabs-all${listOpen ? " open" : ""}`} aria-haspopup="dialog" aria-expanded={listOpen} title={t("leadTabs.all", { n: allThreads.length })} aria-label={t("leadTabs.all", { n: allThreads.length })}
-        onClick={() => setListOpen((old) => !old)}>
+        ref={allButton} onClick={() => listOpen ? closeList() : setListOpen(true)}>
         <List size={15} aria-hidden="true" /><span>{allThreads.length}</span>
         {allThreads.some((thread) => thread.status === "running") && <span className="lead-tabs-all-running" aria-hidden="true" />}
       </button>
       {listOpen && <div ref={panel} className="lead-tabs-panel" role="dialog" aria-label={t("leadTabs.allTitle", { name })}
-        onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setListOpen(false); } }}>
+        onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeList(); allButton.current?.focus(); } }}>
         <div className="lead-tabs-panel-head">
           <label className="lead-tabs-search"><Search size={14} aria-hidden="true" /><input autoFocus type="search" value={query} placeholder={t("leadTabs.search")} aria-label={t("leadTabs.search")} onChange={(event) => setQuery(event.target.value)} /></label>
           <button type="button" className="lead-tabs-new" disabled={busy || !activeId} onClick={() => { setListOpen(false); onNew(); }}><Plus size={15} aria-hidden="true" /><span>{t("leadTabs.new")}</span></button>
