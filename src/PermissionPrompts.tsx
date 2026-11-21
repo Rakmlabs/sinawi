@@ -1,3 +1,4 @@
+import { waitsElsewhere } from "./AppApprovals";
 import { useCallback, useEffect, useState } from "react";
 import { ShieldQuestion } from "lucide-react";
 import { APP_ERROR_EVENT } from "./link-open";
@@ -52,7 +53,14 @@ export function PermissionPrompts({ workspaceId, activeSessionId, sessionTitle, 
   if (!shown.length) return null;
   return (
     <div className="perm-stack" role="region" aria-label={t("perm.label")}>
-      {shown.map((item) => (
+      {shown.map((item) => waitsElsewhere(item.sessionId, activeSessionId) ? (
+        // Another chat's question: one line that leads there, not a full card over this chat (third review U2).
+        <div key={item.id} className="perm-elsewhere" role="status">
+          <ShieldQuestion size={14} aria-hidden="true" />
+          <span>{t("perm.elsewhere", { chat: sessionTitle(item.sessionId) || t("perm.otherSession") })} <span className="perm-elsewhere-what">{t("perm.title", { tool: item.toolName })}</span></span>
+          <button type="button" className="perm-session" onClick={() => onOpenSession(item.sessionId)}>{t("perm.openChat")}</button>
+        </div>
+      ) : (
         <div key={item.id} className="perm-card" role="alertdialog" aria-label={t("perm.title", { tool: item.toolName })}>
           <div className="perm-head">
             <ShieldQuestion size={15} aria-hidden="true" />

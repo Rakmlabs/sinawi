@@ -21,6 +21,11 @@ type Props = { activeSessionId?: string; sessionTitle: (id: string) => string | 
  * changing settings, merging, stopping. Nothing ran yet; 승인 runs the tool, 거절 drops it. Shown
  * in every workspace, since an outside AI is not tied to the one on screen.
  */
+/** A question or approval for another chat than the open one: shown as one line that leads there. */
+export function waitsElsewhere(sessionId: string | undefined, activeSessionId: string | undefined): boolean {
+  return Boolean(sessionId && sessionId !== activeSessionId);
+}
+
 export function AppApprovals({ activeSessionId, sessionTitle, onOpenSession }: Props) {
   const [items, setItems] = useState<AppApproval[]>([]);
   const [busy, setBusy] = useState<string>();
@@ -62,6 +67,14 @@ export function AppApprovals({ activeSessionId, sessionTitle, onOpenSession }: P
           item.workspaceName && t("approval.workspace", { name: item.workspaceName }),
           chat && t("approval.session", { name: `'${chat}'` }),
         ].filter(Boolean).join(" · ");
+        // Another chat's approval: one line that leads there, not a full card over this chat (third review U2).
+        if (waitsElsewhere(item.sessionId, activeSessionId)) return (
+          <div key={item.id} className="perm-elsewhere" role="status">
+            <ShieldAlert size={14} aria-hidden="true" />
+            <span>{t("perm.elsewhere", { chat: chat || t("perm.otherSession") })} <span className="perm-elsewhere-what">{item.summary}</span></span>
+            <button type="button" className="perm-session" onClick={() => onOpenSession(item.sessionId!)}>{t("perm.openChat")}</button>
+          </div>
+        );
         return (
           <div key={item.id} className="perm-card" role="alertdialog" aria-label={title}>
             <div className="perm-head">

@@ -13,3 +13,9 @@
 .perm-id { font-family: var(--font-mono); opacity: .75; }
 .perm-hint { white-space: normal; }
 .perm-hint .link-button { padding: 0; border: 0; background: none; color: var(--accent-fg, var(--accent)); font: inherit; text-decoration: underline; cursor: pointer; }
+/* Another chat's question or approval: one line that leads to that chat (third review U2). */
+.perm-elsewhere { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface); color: var(--text-secondary); font-size: calc(13px * var(--font-scale)); }
+.perm-elsewhere > svg { flex: none; color: var(--warn-fg, var(--warn)); }
+.perm-elsewhere > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-elsewhere-what { color: var(--text-muted); }
+.perm-elsewhere .perm-session { flex: none; }
