@@ -42,6 +42,7 @@ import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, Pe
 import { leadName, stewardDescription, stewardIdOf } from "../lead";
 import { LeadTabs, threadTabs } from "./LeadTabs";
 import { showSessionAction } from "./show-session";
+import { originLabel } from "../origin";
 import { accountScopeKey, scopedApi, workspaceApi, workspacePath, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
@@ -430,6 +431,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   };
   useEffect(() => { void load(); }, []);
   const connected = useAppSocket(onServerMessage, () => { draftStore.clear(); void load(); });
+  const emptyChat = Boolean(active && active.status !== "running" && !active.events.some((event) => event.type === "message"));
   // A new lead owns one project: it starts only once a folder is picked, never in the home folder.
   const leadNeedsFolder = !active && Boolean(stewardDraft && !stewardDraft.id) && (!cwd || cwd === boot.homeCwd);
   const canSendBase = Boolean(
@@ -926,7 +928,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     onSelect={sidebarHandlers.onSelect} onSelectWorker={sidebarHandlers.onSelectWorker} onNew={() => sidebarHandlers.onNewStewardThread(tabStewardId)} onRename={sidebarHandlers.onRenameSession} />}
                   {active && active.status !== "running" && <QuotaReturnBanner active={active} threshold={quotaThreshold} allowedAgents={allowedAgents} busy={busy}
                     onReturn={(eventId) => void sessionAction(`/sessions/${active.id}/quota/return`, { eventId })} />}
-                  <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} {...chatScrollHandlers}>
+                  <div ref={chatBody} className={`chat-body ${(!active && !pendingRecommendation) || (emptyChat && !selectedWorker) ? "empty-chat" : ""}`} {...chatScrollHandlers}>
                     {selectedWorker ? <><WorkerThread key={`${active?.id}-${selectedWorker.id}`} worker={selectedWorker} draftKey={active?.status === "running" ? draftKey(active.id, selectedWorker.id) : undefined} /><div ref={bottom} /></> : !active ? (
                       pendingRecommendation ? <div className="messages routing-message">
                         <div className="message user-message"><div className="message-author"><strong>{t("names.user")}</strong></div><div className="message-text">{prompt}</div></div>
@@ -952,6 +954,15 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                             {promptChips().map(([label, text]) => <button key={label} onClick={() => { setPrompt(text); composerInput.current?.focus(); }}>{label}</button>)}
                           </div>
                         </>}
+                      </div>
+                    ) : emptyChat ? (
+                      // A chat opened with nothing said yet (an outside AI's create_session, a new thread):
+                      // say what it is and what to do, instead of a blank page (review L5).
+                      <div className="minimal-empty">
+                        {activeProject && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
+                        <h2>{active.steward ? <><UserCheck size={20} aria-hidden="true" /> {t("ws.emptyChatLead", { name: active.steward.name ?? "" })}</> : t("ws.emptyChatTitle")}</h2>
+                        <p className="minimal-empty-note">{active.origin ? t("ws.emptyChatOpenedBy", { name: originLabel(active.origin) }) : active.steward ? t("ws.emptyChatLeadHint") : t("ws.emptyChatHint")}</p>
+                        <div ref={bottom} />
                       </div>
                     ) : (
                       <MessageList active={active} events={conversationEvents} tasksById={tasksById} latestHandoffId={latestHandoffId} latestAssistantId={latestAssistant?.id}

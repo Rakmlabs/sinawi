@@ -299,7 +299,9 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
     const chats = [session, ...group.others];
     const running = chats.filter((chat) => chat.status === "running").length;
     const failed = !running && session.status === "error";
-    const preview = leadPreview(session).replace(/\s+/gu, " ").slice(0, 140);
+    // What the lead said last in any of its chats: a chat an outside AI just opened empty does not
+    // blank the lead's line (review L1).
+    const preview = chats.map(leadPreview).find(Boolean)?.replace(/\s+/gu, " ").slice(0, 140) ?? "";
     const progress = goalProgress(session);
     const folded = closed.has(group.id) && !searching;
     const anyActive = chats.some((chat) => chat.id === selected) && tab === "workspace";

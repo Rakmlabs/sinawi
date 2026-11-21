@@ -25,10 +25,11 @@ type Props = {
   variant?: "sidebar" | "panel";
 };
 
-function State({ status }: { status: Session["status"] }) {
-  return status === "running"
-    ? <span className="lcl-state running" role="img" aria-label={statusLabels.running}><Beat /></span>
-    : <span className={`lcl-state ${status}`} role="img" aria-label={statusLabels[status]} />;
+function State({ status, empty = false }: { status: Session["status"]; empty?: boolean }) {
+  if (status === "running") return <span className="lcl-state running" role="img" aria-label={statusLabels.running}><Beat /></span>;
+  // Nothing said yet: not "done", just empty.
+  if (empty) return <span className="lcl-state empty" role="img" aria-label={t("lcl.empty")} />;
+  return <span className={`lcl-state ${status}`} role="img" aria-label={statusLabels[status]} />;
 }
 
 /**
@@ -59,7 +60,7 @@ export function LeadChatList({ chats, query = "", selectedId, selectedWorker, on
         <div className={`lcl-row${selected ? " active" : ""}`}>
           <button type="button" className="lcl-open" aria-current={selected ? "page" : undefined} onClick={() => onSelect(session.id)}
             title={[session.title, statusLabels[session.status], row.openedBy && t("origin.openedBy", { name: row.openedBy })].filter(Boolean).join(" · ")}>
-            <State status={session.status} />
+            <State status={session.status} empty={!session.events.some((event) => event.type === "message")} />
             {row.openedBy && <Plug size={12} className="lcl-origin" aria-label={t("origin.openedBy", { name: row.openedBy })} />}
             <span className="lcl-title">{session.title}</span>
             {row.runningWorkers > 0 && <small className="lcl-count running">{t("lcl.workersRunning", { n: row.runningWorkers })}</small>}
