@@ -276,7 +276,7 @@ test("write_skill and update_skill keep reusable skills that delegate_task attac
     await mkdir(join(repo, ".claude", "skills", "mine"), { recursive: true });
     await writeFile(join(repo, ".claude", "skills", "mine", "SKILL.md"), "---\nname: mine\ndescription: 내 규칙\n---\n\n내가 쓴 규칙\n");
     await assert.rejects(orchestra.leadToolCall(chatId, "update_skill", { name: "mine", content: "바꿔치기", scope: "project" }), /담당이 만든 것이 아니라/u);
-    await assert.rejects(orchestra.leadToolCall(chatId, "update_skill", { name: "mine", content: "바꿔치기" }), /담당이 만든 것이 아니라/u, "nor through the project fallback");
+    await assert.rejects(orchestra.leadToolCall(chatId, "update_skill", { name: "mine", content: "바꿔치기" }), /scope:"project"/u, "no project fallback past the approval");
     // The mark only counts in the front matter.
     await mkdir(join(repo, ".claude", "skills", "sneaky"), { recursive: true });
     await writeFile(join(repo, ".claude", "skills", "sneaky", "SKILL.md"), "---\nname: sneaky\ndescription: 남의 규칙\n---\n\ncreated-by: sinawi-lead\n");

@@ -2523,7 +2523,8 @@ export class Orchestra {
     if (update && existing === undefined && args.scope === undefined) {
       const projectFile = join(session.cwd, ".claude", "skills", name, "SKILL.md");
       const project = await readFile(projectFile, "utf8").catch(() => undefined);
-      if (project !== undefined) return this.writeLeadSkill(session, { ...args, scope: "project" }, true);
+      // A project skill is changed only through scope:"project", which waits for the user's approval.
+      if (project !== undefined) throw new Error(`${name}은 프로젝트 스킬입니다. update_skill에 scope:"project"를 주면 사용자 승인 후에 고쳐집니다.`);
     }
     if (update && existing === undefined) throw new Error(`스킬 ${name}이 없습니다. write_skill로 만드세요.`);
     if (!update && existing !== undefined) throw new Error(`스킬 ${name}이 이미 있습니다. update_skill로 고치세요.`);

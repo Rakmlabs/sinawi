@@ -44,7 +44,12 @@ export interface AppTool {
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
   /** Line on the approval card (approval tools); `names` turns IDs into the names the user knows. */
   summary?(args: Record<string, unknown>, names: NameLookup): string;
+  /** A "write" tool that some calls of need the user's approval anyway (write_skill into the repo). */
+  approvalFor?(args: Record<string, unknown>): boolean;
 }
+
+/** Whether this call waits for the user's approval. */
+export const needsApproval = (tool: AppTool, args: Record<string, unknown>) => tool.risk === "approval" || Boolean(tool.approvalFor?.(args));
 
 /**
  * Names for the IDs an approval mentions: "채팅 'API 정리' (3f2a9c1e)". The server's lookup reads
@@ -150,9 +155,9 @@ function routeTool(spec: RouteToolSpec): AppTool {
   };
 }
 
-function leadTool(spec: { name: string; description: string; properties?: Record<string, JsonSchema>; required?: string[]; risk: ToolRisk; summary?(args: Record<string, unknown>, names: NameLookup): string }): AppTool {
+function leadTool(spec: { name: string; description: string; properties?: Record<string, JsonSchema>; required?: string[]; risk: ToolRisk; summary?(args: Record<string, unknown>, names: NameLookup): string; approvalFor?(args: Record<string, unknown>): boolean }): AppTool {
   return {
-    name: spec.name, description: spec.description, risk: spec.risk, surfaces: ["lead"], routes: [], summary: spec.summary,
+    name: spec.name, description: spec.description, risk: spec.risk, surfaces: ["lead"], routes: [], summary: spec.summary, approvalFor: spec.approvalFor,
     inputSchema: { type: "object", properties: spec.properties ?? {}, ...(spec.required?.length ? { required: spec.required } : {}) },
     async run(args, ctx) {
       if (!ctx.leadCall) throw new Error(`${spec.name}는 담당 실행에서만 쓸 수 있습니다.`);
@@ -228,7 +233,9 @@ const LEAD_ONLY: AppTool[] = [
   }),
   leadTool({
     name: "write_skill", risk: "write",
-    description: "재사용할 스킬(작업 지침 문서)을 만든다. 같은 종류의 일을 여러 번 맡길 때 브리프 대신 스킬로 남겨 delegate_task의 skills에 붙인다.",
+    description: "재사용할 스킬(작업 지침 문서)을 만든다. 같은 종류의 일을 여러 번 맡길 때 브리프 대신 스킬로 남겨 delegate_task의 skills에 붙인다. scope:'project'는 저장소에 남아 다른 AI도 읽으므로 사용자 승인 후에 저장된다(pending_approval이 오면 list_approvals로 결과 확인).",
+    approvalFor: (args) => args.scope === "project",
+    summary: (args) => `프로젝트 스킬 ${String(args.name ?? "")} 만들기: ${String(args.description ?? "").slice(0, 120)}`,
     properties: {
       name: str("짧은 영문 소문자 이름 (예: 'api-review')."),
       description: str("언제 쓰는 스킬인지 한 줄."),
@@ -238,7 +245,9 @@ const LEAD_ONLY: AppTool[] = [
     required: ["name", "description", "content"],
   }),
   leadTool({
-    name: "update_skill", risk: "write", description: "write_skill로 만든 스킬의 설명이나 본문을 고친다. 프로젝트 스킬은 담당이 만든 것만 고칠 수 있다(사용자가 쓴 스킬은 그대로 둔다).",
+    name: "update_skill", risk: "write", description: "write_skill로 만든 스킬의 설명이나 본문을 고친다. 프로젝트 스킬은 scope:'project'로, 사용자 승인 후에 고쳐진다. 담당이 만든 것만 고칠 수 있고, 표식이 없는 옛 담당 스킬은 승인을 거치며 표식이 붙는다(사용자가 쓴 스킬은 그대로 둔다).",
+    approvalFor: (args) => args.scope === "project",
+    summary: (args) => `프로젝트 스킬 ${String(args.name ?? "")} 고치기${args.description ? `: ${String(args.description).slice(0, 120)}` : ""}`,
     properties: { name: str("스킬 이름."), description: str("새 설명(선택)."), content: str("새 본문(선택)."), scope: { type: "string", enum: ["lead", "project"] } },
     required: ["name"],
   }),

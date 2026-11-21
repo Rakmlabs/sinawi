@@ -361,3 +361,14 @@ test("shell words with spaces or quotes are quoted for a terminal", async () => 
   assert.equal(shellWord("/Users/me/Library/Application Support/x"), "'/Users/me/Library/Application Support/x'");
   assert.equal(shellWord("it's"), `'it'\\''s'`);
 });
+
+test("a lead's skill in the repo waits for the user's approval; its own skills do not (review M1.3)", async () => {
+  const { findTool, needsApproval } = await import("./app-tools");
+  const write = findTool("lead", "write_skill")!;
+  const update = findTool("lead", "update_skill")!;
+  assert.equal(needsApproval(write, { name: "a", scope: "project" }), true);
+  assert.equal(needsApproval(update, { name: "a", scope: "project" }), true);
+  assert.equal(needsApproval(write, { name: "a" }), false);
+  assert.equal(needsApproval(write, { name: "a", scope: "lead" }), false);
+  assert.match(write.summary!({ name: "shared", description: "모두 쓰는 규칙", scope: "project" }, {} as never), /프로젝트 스킬 shared/u);
+});

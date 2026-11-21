@@ -5,7 +5,7 @@ import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes, SETUP_TOOLS } from "./setup.js";
 import { BrowserBridge, QUEUE_DIR, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
 import { ComputerBridge, registerComputerRoutes, SHOT_DIR, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
-import { findTool, handleToolMcp, inProcess, isUserOnlyRoute, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
+import { findTool, handleToolMcp, needsApproval, inProcess, isUserOnlyRoute, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
 import { withJosa } from "./korean.js";
 import { ApprovalStore, approvalRequester, type AppApproval, type ApprovalStatus } from "./app-approvals.js";
 import { waitResult } from "./session-wait.js";
@@ -1514,7 +1514,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const callTool = async (caller: CallerContext, name: string, args: Record<string, unknown>) => {
     const tool = findTool(caller.surface, name);
     if (!tool) throw new Error(`알 수 없는 도구: ${name}`);
-    if (tool.risk !== "approval") return tool.run(args, toolContext(caller));
+    if (!needsApproval(tool, args)) return tool.run(args, toolContext(caller));
     const item = await approvals.create({ tool: name, args, summary: tool.summary?.(args, await approvalNames()) ?? name, source: caller.surface, ...(caller.sessionId ? { sessionId: caller.sessionId } : {}), workspaceId: caller.workspaceId, ...approvalContext(caller) });
     return { status: "pending_approval", approvalId: item.id, summary: item.summary, next: "사용자가 앱의 승인 카드에서 승인하면 실행됩니다. 결과는 list_approvals(approval_id)로 확인하세요. 같은 요청을 다시 보내지 마세요." };
   };
