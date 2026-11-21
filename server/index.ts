@@ -2,18 +2,24 @@ import { setDevelopmentOrigins } from "./origin-policy.js";
 import { createServer } from "./server.js";
 import { accessSync } from "node:fs";
 import { resolve } from "node:path";
-import { envVar, runtimeOptions } from "./runtime.js";
+import { dataDirFor, envVar, runtimeOptions } from "./runtime.js";
 import { installBrowserTooling } from "./browser-bridge.js";
 import { installComputerTooling } from "./computer-bridge.js";
 import { installServeTooling } from "./serve-tool.js";
 import { installSimTooling } from "./sim-tool.js";
 import { killCliProcessGroups } from "./cli.js";
+import { reapStaleCliGroups, setCliGroupLedger } from "./cli-ledger.js";
+import { join } from "node:path";
 
 const port = Number(envVar("PORT") ?? 3001);
 const options = runtimeOptions();
 if (options.staticDir) accessSync(resolve(options.staticDir, "index.html"));
 // The installed app serves its own UI: a page on a Vite dev port is just another local page then.
 setDevelopmentOrigins(!options.staticDir);
+// CLIs a killed server left running (L5): end them before anything new starts.
+setCliGroupLedger(join(dataDirFor(options.dataDir), "cli-groups.json"));
+const reaped = reapStaleCliGroups();
+if (reaped.length) console.log(`이전 서버가 남긴 CLI ${reaped.length}개를 정리했습니다 / ended ${reaped.length} CLI group(s) a previous server left running`);
 const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: true, worktrees: true, appMcp: true });
 void installBrowserTooling().catch((error) => console.error("ao-browser 설치 실패:", error.message));
 void installComputerTooling().catch((error) => console.error("ao-computer 설치 실패:", error.message));

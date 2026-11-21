@@ -2,6 +2,7 @@ import { ensurePermissionServerScript, PERMISSION_TOOL, PROMPT_TIMEOUT_MS, permi
 import { claudeLeadServer, codexLeadArgs, ensureLeadServerScript, LEAD_MCP_RULE, LEAD_MCP_SERVER, LEAD_TOOL_TIMEOUT_MS, leadMcpLaunch, type LeadMcpLaunch } from "./lead-tools.js";
 import { cliChildEnv, DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
+import { forgetEndedCliGroups, recordCliGroup } from "./cli-ledger.js";
 import { envVar } from "./runtime.js";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -647,6 +648,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    if (process.platform !== "win32") recordCliGroup(child.pid, invocation.command);
     // The cast above only types stdout/stderr; stdin is a pipe exactly when there is a prompt for it.
     const input = (child as unknown as { stdin: import("node:stream").Writable | null }).stdin;
     if (invocation.stdin !== undefined && input) {
@@ -752,7 +754,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     liveCliGroups.add(killProcessGroup);
     installExitHook();
     // Once the run is over and no SIGKILL escalation is pending, the group is no longer ours to signal.
-    const releaseGroup = () => { if (!escalationTimer) liveCliGroups.delete(killProcessGroup); };
+    const releaseGroup = () => { if (!escalationTimer) liveCliGroups.delete(killProcessGroup); forgetEndedCliGroups(); };
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();
 
