@@ -327,7 +327,9 @@ test("a lead answering another lead without leave cannot hand out work through i
   });
   orchestra.stewardDataDir = dataDir;
   const chat = await orchestra.create({ prompt: "준비", agent: "claude", workers: ["codex"], cwd: repo, steward: { name: "a" } });
-  await waitFor(() => chat.status === "done");
+  // The lead's wrap-up after "done" (merge, then answering whoever asked) clears `answering`; on a
+  // loaded machine it ran after the line below and the follow-up was no longer an answer turn.
+  await waitFor(() => chat.status === "done" && !orchestra.isWorking(chat.id));
   chatId = chat.id;
   chat.steward!.answering = { id: "other", question: "q", depth: 0 };
   await orchestra.followup(chat.id, "다른 담당의 질문");
