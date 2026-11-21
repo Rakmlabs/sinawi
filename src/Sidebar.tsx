@@ -18,6 +18,7 @@ import { t, translatedMap, useT } from "./i18n";
 import { originLabel } from "./origin";
 import { LeadChatList } from "./app/LeadChatList";
 import { appKeyStatus } from "./app-key";
+import { useNeedsYou } from "./app/needs-you";
 
 const agentNames: Record<Session["agent"], string> = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
 const statusLabels = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
@@ -101,6 +102,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
   const { workspaces } = useWorkspaces();
   // Without the app key the server refuses this window's live feed: say that, not "reconnecting".
   const keyMissing = useSyncExternalStore(appKeyStatus.subscribe, appKeyStatus.missing, () => false);
+  const waiting = useNeedsYou();
   const [footerMenu, setFooterMenu] = useState<{ x: number; y: number }>();
   const [workerTree, dispatchWorkerTree] = useReducer(workerTreeReducer, { expanded: new Set(selected ? [selected] : []) });
   const [closed, setClosed] = useState<Set<string>>(new Set());
@@ -301,6 +303,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
     </div>;
     const chats = [session, ...group.others];
     const running = chats.filter((chat) => chat.status === "running").length;
+    const needsYou = chats.filter((chat) => waiting.has(chat.id)).length;
     const failed = !running && session.status === "error";
     // What the lead said last in any of its chats: a chat an outside AI just opened empty does not
     // blank the lead's line (review L1).
@@ -321,7 +324,9 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
               {running > 0 ? <small className="sidebar-lead-running"><span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span>{t("lcl.running", { n: running })}</small> : failed ? <span className="status-dot error" role="img" aria-label={statusLabels.error} /> : null}
               {progress && <small className="sidebar-goal-progress" title={t("goal.progressTitle", progress)}>{progress.done}/{progress.total}</small>}
             </span>
-            <small className="sidebar-lead-preview">{preview || t("side.leadNoMessages")}</small>
+            {needsYou > 0
+              ? <small className="sidebar-lead-preview needs" title={t("lcl.needsYouTitle")}>{t("side.leadNeedsYou", { n: needsYou })}</small>
+              : <small className="sidebar-lead-preview">{preview || t("side.leadNoMessages")}</small>}
           </span>
           <ChevronRight size={14} className={`folder-chevron ${folded ? "" : "open"}`} aria-hidden="true" />
         </button>

@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Session } from "../server/types";
-import { chatRows, hiddenTabs, saveHiddenTabs, shortAgo, visibleTabs } from "./lead-tree";
+import { agoLabel, chatRows, hiddenTabs, reopenRunning, saveHiddenTabs, shortAgo, taskSummary, visibleTabs } from "./lead-tree";
+import { t } from "./i18n";
 
 const chat = (id: string, status: Session["status"], time: string, extra: Partial<Session> = {}) => ({
   id, title: `채팅 ${id}`, status, agent: "claude", createdAt: time, workspaceId: "default", cwd: "/p", workers: ["claude"],
@@ -34,4 +35,24 @@ test("short times and closed tabs", () => {
   const threads = [chat("a", "done", "t"), chat("b", "running", "t"), chat("c", "done", "t")];
   assert.deepEqual(visibleTabs(threads, hidden).map((thread) => thread.id), ["b", "c"], "a running chat comes back");
   assert.deepEqual(visibleTabs(threads, hidden, "a").map((thread) => thread.id), ["a", "b", "c"], "so does the open one");
+});
+
+test("a worker row says what the task is about, not its heading or folder preamble", () => {
+  assert.equal(taskSummary("## 목표\n로그인 버그를 고친다\n## 완료 기준\n테스트 통과"), "로그인 버그를 고친다");
+  assert.equal(taskSummary("작업 폴더(/private/tmp/x)에서 일한다.\n\n- **README** 첫 화면을 `고친다`"), "README 첫 화면을 고친다");
+  assert.equal(taskSummary("---\n# 제목만\n"), "제목만", "a short heading alone is still better than nothing");
+});
+
+test("a finished chat's time reads as a past moment, unlike a running one's elapsed time", () => {
+  const now = Date.parse("2026-11-22T10:00:00Z");
+  assert.equal(agoLabel("2026-11-22T09:59:50Z", now), t("ago.now"));
+  assert.equal(agoLabel("2026-11-22T09:57:00Z", now), t("lcl.ago", { time: t("ago.minutes", { n: 3 }) }));
+});
+
+test("a closed tab that runs again stays open after it finishes", () => {
+  const hidden = new Set(["a", "b"]);
+  const running = [chat("a", "running", "2026-11-22T10:00:00Z"), chat("b", "done", "2026-11-22T10:00:00Z")] as Session[];
+  const next = reopenRunning(running, hidden);
+  assert.deepEqual([...next], ["b"]);
+  assert.equal(reopenRunning([chat("b", "done", "2026-11-22T10:00:00Z")] as Session[], next), next, "nothing changes: the same set");
 });

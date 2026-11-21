@@ -233,6 +233,7 @@
 .sidebar-lead-name .status-beat { display: inline-flex; flex: none; }
 .sidebar-lead-name .status-dot { flex: none; }
 .sidebar-lead-preview { display: block; max-width: 100%; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+.sidebar-lead-preview.needs { color: var(--warn-fg); font-weight: 600; }
 .sidebar-lead-running { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--accent-fg); font-size: calc(12px * var(--font-scale)); font-weight: 600; }
 .sidebar-lead-open .folder-chevron { flex: none; color: var(--text-subtle); transition: transform .15s ease; }
 .sidebar-lead-open .folder-chevron.open { transform: rotate(90deg); }

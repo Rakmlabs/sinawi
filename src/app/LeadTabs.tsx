@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { List, Plug, Plus, Search, Settings2, X } from "lucide-react";
-import { hiddenTabs, saveHiddenTabs, visibleTabs } from "../lead-tree";
+import { hiddenTabs, reopenRunning, saveHiddenTabs, visibleTabs } from "../lead-tree";
 import { LeadChatList } from "./LeadChatList";
 import type { Session } from "../../server/types";
 import { Beat } from "../Beat";
@@ -44,6 +44,11 @@ export const LeadTabs = memo(function LeadTabs({ stewardId, name, threads: allTh
   // Closed tabs (this browser only): the chat stays, in the list below and in the sidebar.
   const [hidden, setHidden] = useState(() => hiddenTabs(stewardId));
   useEffect(() => setHidden(hiddenTabs(stewardId)), [stewardId]);
+  // A closed tab that runs again stays open afterwards, so its result is not missed.
+  useEffect(() => {
+    const next = reopenRunning(allThreads, hidden);
+    if (next !== hidden) { setHidden(next); saveHiddenTabs(stewardId, next); }
+  }, [allThreads, hidden, stewardId]);
   const threads = visibleTabs(allThreads, hidden, activeId);
   const closeTab = (id: string) => {
     const next = new Set(hidden); next.add(id);

@@ -195,6 +195,8 @@ export function cleanBriefTitle(markdown: string, max = 140): string {
     const isHeading = /^\s*#{1,6}\s/.test(raw);
     const line = inlineMarkdown(raw.replace(/^(\s*(#{1,6}\s+|>\s*|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+))+/, "").replace(/\s#+\s*$/, ""));
     if (!line) continue;
+    // A lead's brief often opens with where to work ("작업 폴더(/private/tmp/…)에서"): not what the task is.
+    if (!isHeading && /^(?:작업\s*폴더|working\s+(?:folder|directory)|cwd)(?=[\s(:：]|$)/iu.test(line)) continue;
     if (isHeading && !heading && line.length <= 12) { heading = line; continue; }
     return clipLine(line, max);
   }

@@ -4,17 +4,24 @@ import type { AgentId, Session, SessionStatus } from "../server/types";
 import { delegationWorkers } from "./conversation";
 import { t } from "./i18n";
 import { originLabel } from "./origin";
+import { cleanBriefTitle } from "./worker-log";
 
 export type WorkerRow = { id: string; label: string; agent: AgentId; status: SessionStatus; task: string; startedAt: string; endedAt?: string };
 export type ChatRow = { session: Session; lastAt: string; workers: WorkerRow[]; runningWorkers: number; openedBy?: string };
 
 const lastAt = (session: Session) => session.events.at(-1)?.time ?? session.createdAt;
 
-/** Workers of one chat, latest task first line as what it is doing. */
+/**
+ * One line saying what a task is about (cleanBriefTitle): markdown headings ("## 목표"), list and
+ * emphasis marks and the folder preamble of a lead's brief are skipped.
+ */
+export const taskSummary = (text: string, max = 160): string => cleanBriefTitle(text, max);
+
+/** Workers of one chat, with what each is doing (taskSummary of its latest task). */
 export function chatWorkers(session: Session, now = Date.now()): WorkerRow[] {
   return delegationWorkers(session, now).map((worker) => {
     const latest = worker.tasks.at(-1)!;
-    const task = latest.event.text.split("\n").find((line) => line.trim())?.trim().slice(0, 160) ?? "";
+    const task = taskSummary(latest.event.text);
     return { id: worker.id, label: worker.label, agent: worker.agent, status: worker.status as SessionStatus, task, startedAt: latest.startedAt, endedAt: latest.endedAt };
   });
 }
@@ -29,6 +36,12 @@ export function chatRows(chats: Session[], query = "", now = Date.now()): ChatRo
     })
     .filter((row) => !needle || [row.session.title, row.openedBy ?? "", ...row.workers.flatMap((worker) => [worker.label, worker.task])].some((text) => text.toLocaleLowerCase().includes(needle)))
     .sort((a, b) => Number(b.session.status === "running") - Number(a.session.status === "running") || b.lastAt.localeCompare(a.lastAt));
+}
+
+/** "방금", "3분 전": a past moment, never confused with a running chat's elapsed "0:08". */
+export function agoLabel(iso: string, now = Date.now()): string {
+  const short = shortAgo(iso, now);
+  return short === t("ago.now") ? short : t("lcl.ago", { time: short });
 }
 
 /** "방금", "3분", "2시간", "4일": how long ago, short enough for a list row. */
@@ -50,6 +63,18 @@ export function hiddenTabs(stewardId: string, storage: Pick<Storage, "getItem"> 
 
 export function saveHiddenTabs(stewardId: string, ids: Set<string>, storage: Pick<Storage, "setItem"> | undefined = globalThis.localStorage): void {
   try { storage?.setItem(hiddenKey(stewardId), JSON.stringify([...ids].slice(-200))); } catch { /* a convenience only */ }
+}
+
+/**
+ * A closed tab whose chat runs again comes back for good (review R6): it used to show only while
+ * running and vanish with its result. Returns the same set when nothing changes.
+ */
+export function reopenRunning(threads: Session[], hidden: Set<string>): Set<string> {
+  const back = threads.filter((thread) => thread.status === "running" && hidden.has(thread.id));
+  if (!back.length) return hidden;
+  const next = new Set(hidden);
+  for (const thread of back) next.delete(thread.id);
+  return next;
 }
 
 /** The tabs to show: closed ones stay hidden unless open now or running. */
