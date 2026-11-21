@@ -8,6 +8,7 @@ import { workspaceName } from "../workspaces";
 import { names } from "./labels";
 import type { AgentId, WorkspaceId, WorkspacePolicy } from "../../server/types";
 import { t } from "../i18n";
+import { Switch } from "../settings/controls";
 
 const AGENTS: AgentId[] = ["codex", "claude", "grok"];
 
@@ -139,11 +140,12 @@ function restrictionCount(policy: WorkspacePolicy) {
 }
 
 function RuleToggle({ id, settingId, label, hint, checked, disabled, onChange }: { id: string; settingId?: string; label: string; hint: string; checked: boolean; disabled: boolean; onChange: (value: boolean) => void }) {
+  // The same switch as every other on/off setting (src/settings/controls.tsx), not a checkbox.
   return <div className="workspace-rule" data-setting-id={settingId}>
-    <label className="workspace-rule-head" htmlFor={id}>
-      <span>{label}</span>
-      <input id={id} type="checkbox" role="switch" checked={checked} disabled={disabled} aria-describedby={`${id}-hint`} onChange={(event) => onChange(event.target.checked)} />
-    </label>
+    <div className="workspace-rule-head">
+      <label id={`${id}-label`} htmlFor={id}>{label}</label>
+      <Switch id={id} checked={checked} disabled={disabled} labelledBy={`${id}-label`} describedBy={`${id}-hint`} onChange={onChange} />
+    </div>
     <small id={`${id}-hint`}>{hint}</small>
   </div>;
 }
