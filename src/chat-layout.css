@@ -9,7 +9,7 @@ body,
 
 .app-shell {
   --window-header-height: 48px;
-  --sidebar-width: 260px;
+  --sidebar-width: 280px;
   --sidebar-motion: 180ms ease-out;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);

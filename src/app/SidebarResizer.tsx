@@ -1,10 +1,11 @@
 // The sidebar's width, set by dragging its edge (third review U1: chat titles shrank to 1–3 letters
-// in a fixed 260px column). Keyboard: arrows change it, Home resets; a double-click resets too.
+// in a fixed 260px column). The default is 280px, so a row's waiting chip and outside-AI chip fit side
+// by side (fourth review). Keyboard: arrows change it, Home resets; a double-click resets too.
 // Remembered per browser (a viewer convenience, so localStorage is enough).
 import { useCallback, useState } from "react";
 import { t } from "../i18n";
 
-export const SIDEBAR_DEFAULT = 260;
+export const SIDEBAR_DEFAULT = 280;
 export const SIDEBAR_MIN = 220;
 export const SIDEBAR_MAX = 440;
 const KEY = "sinawi.sidebarWidth";
