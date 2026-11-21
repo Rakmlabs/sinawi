@@ -64,7 +64,7 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
   // Sixth review R6-4: what others see on GitHub is denied to Grok either way; reading is not.
   for (const command of ["gh pr merge 7 --squash", "gh pr close 7", "gh pr review 7 --approve", "gh pr comment 7 -b hi", "gh pr create -t x -b y", "gh issue create -t x", "gh issue comment 3 -b hi", "gh run rerun 1", "gh run cancel 1",
     // PR #8 review P8-1: aliases, newer subcommands, a flag before the subcommand.
-    "gh pr new -t x", "gh issue new -t x", "gh pr revert 1", "gh pr update-branch 1", "gh pr -R o/r merge 1", "gh pr --repo o/r merge 1", "gh issue -R o/r comment 1 -b x", "gh co 7", "gh release create v1", "gh api graphql -f query=x", "gh api -H X-HTTP-Method-Override:DELETE repos/o/r"]) {
+    "gh pr new -t x", "gh issue new -t x", "gh pr revert 1", "gh pr update-branch 1", "gh pr -R o/r merge 1", "gh pr --repo o/r merge 1", "gh issue -R o/r comment 1 -b x", "gh co 7", "gh pr co 7", "gh agent create x", "gh agents list", "gh at verify x", "gh rs list", "gh release create v1", "gh api graphql -f query=x", "gh api -H X-HTTP-Method-Override:DELETE repos/o/r"]) {
     assert.ok(denied(grok.args).some((rule) => matches(rule, command)), command);
     assert.ok(denied(grokOn.args).some((rule) => matches(rule, command)), `${command} (on)`);
   }

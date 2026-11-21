@@ -233,6 +233,8 @@ const GROK_GH_DENIED = [
   ...["create", "new", "list", "archive", "autolink", "clone", "delete", "deploy-key", "edit", "fork", "gitignore", "license", "read-dir", "read-file", "rename", "set-default", "sync", "unarchive"].map((op) => `gh repo ${op}*`),
   ...["login", "logout", "refresh", "setup-git", "switch", "token"].map((op) => `gh auth ${op}*`),
   ...["browse", "codespace", "cs", "discussion", "gist", "org", "project", "release", "skill", "cache", "workflow", "co", "agent-task", "alias", "attestation", "completion", "config", "copilot", "extension", "ext", "gpg-key", "label", "licenses", "preview", "ruleset", "secret", "ssh-key", "status", "variable"].map((command) => `gh ${command}*`),
+  // Built-in aliases gh 2.98 lists beside their commands (PR #8 second review P8-4).
+  "gh agent*", "gh at*", "gh rs*", "gh pr co*",
   "gh api *graphql*", "gh api *verride*", "gh api *ethod*",
 ];
 
