@@ -7,6 +7,7 @@ import { injectRequest } from "./app-tools.js";
 import { appMcpTokenPath } from "./app-mcp.js";
 import { mcpClientConfigPath } from "./mcp-clients.js";
 import { createServer } from "./server.js";
+import { appKey } from "./app-key.js";
 
 // Every config path points into a temp folder: the real Claude Desktop and Cursor configs are never read.
 async function fixture(t: test.TestContext) {
@@ -27,7 +28,7 @@ async function fixture(t: test.TestContext) {
     await rm(directory, { recursive: true, force: true });
   });
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => injectRequest(created.app as never, method, path, body, headers) as Promise<{ status: number; body: any }>;
-  const fromApp = { origin: "http://127.0.0.1:5198" };
+  const fromApp = { origin: "http://127.0.0.1:5198", "x-sinawi-app": appKey() };
   return { directory, data, claude, cursor, call, fromApp };
 }
 

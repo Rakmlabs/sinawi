@@ -42,13 +42,15 @@ async function waitUntil(predicate: () => boolean) {
 }
 
 test("terminal websocket accepts only loopback clients and the app origins", () => {
-  assert.equal(isTerminalRequestAllowed("127.0.0.1", "http://127.0.0.1:3001"), true);
-  assert.equal(isTerminalRequestAllowed("127.0.0.1", "http://127.0.0.1:5188"), true);
-  assert.equal(isTerminalRequestAllowed("::1", "http://localhost:5188"), true);
-  assert.equal(isTerminalRequestAllowed("::ffff:127.0.0.1", "tauri://localhost"), true);
-  assert.equal(isTerminalRequestAllowed("192.168.1.5", "http://127.0.0.1:3001"), false);
-  assert.equal(isTerminalRequestAllowed("127.0.0.1", "https://evil.example"), false);
-  assert.equal(isTerminalRequestAllowed("127.0.0.1", undefined), false);
+  assert.equal(isTerminalRequestAllowed("127.0.0.1", "http://127.0.0.1:3001", true), true);
+  assert.equal(isTerminalRequestAllowed("127.0.0.1", "http://127.0.0.1:5188", true), true);
+  assert.equal(isTerminalRequestAllowed("::1", "http://localhost:5188", true), true);
+  assert.equal(isTerminalRequestAllowed("::ffff:127.0.0.1", "tauri://localhost", true), true);
+  assert.equal(isTerminalRequestAllowed("192.168.1.5", "http://127.0.0.1:3001", true), false);
+  assert.equal(isTerminalRequestAllowed("127.0.0.1", "https://evil.example", true), false);
+  assert.equal(isTerminalRequestAllowed("127.0.0.1", undefined, true), false);
+  // H1: a matching Origin alone is text any local program can send; the app key is what counts.
+  assert.equal(isTerminalRequestAllowed("127.0.0.1", "http://127.0.0.1:3001", false), false);
 });
 
 test("terminal sessions survive reconnects, replay bounded scrollback, and route input", async () => {

@@ -8,6 +8,7 @@ import test from "node:test";
 import { WebSocket } from "ws";
 import { injectRequest } from "./app-tools.js";
 import { createServer } from "./server.js";
+import { appKey } from "./app-key.js";
 
 const ORIGIN = `http://127.0.0.1:${process.env.SINAWI_PORT ?? 3001}`;
 
@@ -19,7 +20,7 @@ async function start(t: test.TestContext, directory: string) {
 }
 
 const connect = (port: number, autoPong: boolean) => new Promise<WebSocket>((resolve, reject) => {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: ORIGIN }, autoPong });
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, [`sinawi-app.${appKey()}`], { headers: { origin: ORIGIN }, autoPong });
   socket.once("message", () => resolve(socket));
   socket.once("error", reject);
 });
@@ -48,7 +49,7 @@ test("unreadable data keeps the server up: /api/health says why and a window is 
   const health = await injectRequest(created.app as never, "GET", "/api/health") as { body: { ok: boolean; error?: string } };
   assert.equal(health.body.ok, true, "still recognisable as Sinawi by the app");
   assert.match(health.body.error ?? "", /ENOTDIR|not a directory/iu);
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: ORIGIN } });
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, [`sinawi-app.${appKey()}`], { headers: { origin: ORIGIN } });
   const code = await new Promise<number>((resolve) => socket.once("close", resolve));
   assert.equal(code, 1011);
 });

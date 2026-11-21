@@ -10,7 +10,10 @@ import { installSimTooling } from "./sim-tool.js";
 import { killCliProcessGroups } from "./cli.js";
 import { reapStaleCliGroups, setCliGroupLedger } from "./cli-ledger.js";
 import { join } from "node:path";
+import { initAppKey } from "./app-key.js";
 
+// First: the app window's key leaves process.env before anything (a CLI) could inherit it.
+initAppKey();
 const port = Number(envVar("PORT") ?? 3001);
 const options = runtimeOptions();
 if (options.staticDir) accessSync(resolve(options.staticDir, "index.html"));

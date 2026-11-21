@@ -95,6 +95,29 @@ fn server_layout<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Result<server_age
     Ok(layout)
 }
 
+/// The main window's key for the app server (server/app-key.ts). The server hands it only to this
+/// binary (it checks the process on the other end of the connection), and this hands it only to the
+/// main window showing the app server, never to a browser tab or another page.
+#[tauri::command]
+fn app_key(webview: tauri::Webview) -> Result<String, String> {
+    if cfg!(dev) { return Err("dev runs take the key from the page".into()); }
+    let url = webview.url().map_err(|error| error.to_string())?;
+    let on_server = url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port_or_known_default() == Some(3001);
+    if webview.label() != "main" || !on_server { return Err("only the app window".into()); }
+    let address = SERVER_ADDRESS.to_socket_addrs().ok().and_then(|mut a| a.next()).ok_or("server address")?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(500)).map_err(|e| e.to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let request = format!("GET /api/app-key HTTP/1.1\r\nHost: {SERVER_ADDRESS}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(|e| e.to_string())?;
+    let (headers, body) = response.split_once("\r\n\r\n").ok_or("bad response")?;
+    if !headers.starts_with("HTTP/1.1 200") { return Err("the server refused".into()); }
+    let value: serde_json::Value = serde_json::from_str(body.trim()).map_err(|e| e.to_string())?;
+    value.get("key").and_then(|key| key.as_str()).map(str::to_string).ok_or_else(|| "no key".into())
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ServerVersionStatus {
@@ -232,6 +255,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             open_devtools,
+            app_key,
             server_version_status,
             permissions::permission_status,
             permissions::request_permission,

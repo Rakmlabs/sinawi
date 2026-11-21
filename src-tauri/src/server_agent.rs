@@ -216,6 +216,11 @@ fn macho_has_arm64(path: &Path) -> bool {
     }
 }
 
+/// This app's own executable (resolved), which the server trusts to collect the window's key.
+fn app_exe() -> String {
+    std::env::current_exe().ok().and_then(|path| fs::canonicalize(path).ok()).map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
 /// The node binary an installed plist launches (first ProgramArguments string).
 fn plist_node(contents: &str) -> Option<String> {
     let rest = &contents[contents.find("<key>ProgramArguments</key>")?..];
@@ -228,6 +233,8 @@ fn plist_node(contents: &str) -> Option<String> {
 fn plist_outdated(layout: &Layout) -> bool {
     let Ok(c) = fs::read_to_string(&layout.plist) else { return true };
     if c.contains("/bin/zsh") || !c.contains("<key>PATH</key>") || !c.contains("<key>SINAWI_PORT</key>") { return true; }
+    // The server gives the window's key only to this binary (server/app-key.ts): it must know where it is.
+    if !c.contains(&format!("<key>SINAWI_APP_EXE</key><string>{}</string>", xml(&app_exe()))) { return true; }
     let Some(node) = plist_node(&c) else { return true };
     apple_silicon() && !macho_has_arm64(Path::new(&node)) && resolve_node_env().0 != node
 }
@@ -256,6 +263,7 @@ fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
     <key>SINAWI_STATIC_DIR</key><string>{dist}</string>
     <key>SINAWI_DATA_DIR</key><string>{data}</string>
     <key>SINAWI_SERVER_VERSION</key><string>{version}</string>
+    <key>SINAWI_APP_EXE</key><string>{app_exe}</string>
   </dict>
   <key>WorkingDirectory</key><string>{cwd}</string>
   <key>RunAtLoad</key><true/>
@@ -269,7 +277,7 @@ fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
 "#,
         server = s(&layout.server_dir.join("server.cjs")), dist = s(&layout.server_dir.join("dist")),
         data = s(&layout.data_dir), cwd = s(&layout.server_dir), version = xml(version),
-        node = xml(&node), path_env = xml(&path_env), home = xml(&std::env::var("HOME").unwrap_or_default()));
+        node = xml(&node), path_env = xml(&path_env), home = xml(&std::env::var("HOME").unwrap_or_default()), app_exe = xml(&app_exe()));
     fs::write(&layout.plist, plist)
 }
 

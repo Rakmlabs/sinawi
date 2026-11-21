@@ -33,6 +33,7 @@ import { authNotification, sessionNotifications } from "./notification-sources.j
 import type { NotificationInput, NotificationType } from "./notification-types.js";
 import { createTerminalService } from "./terminal.js";
 import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
+import { hasAppKey, isAppExecutable, peerExecutable, appKey } from "./app-key.js";
 import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from "./mcp-clients.js";
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
@@ -132,17 +133,20 @@ function localGuard(req: Request, res: Response, next: NextFunction) {
 
 /**
  * The user's own decisions and secrets (USER_ONLY_ROUTES: approving, answering a permission, the MCP
- * token, deleting a workspace, every tool that needs approval) only from the app window (a browser
- * Origin of the app) or from the server itself (an approved tool's in-process run). A local program
- * without an Origin, such as an agent's curl, gets 403 here; it can still use everything else and
- * should go through MCP, where these become approval cards.
+ * token, deleting a workspace, every tool that needs approval) only from the app window or from the
+ * server itself (an approved tool's in-process run). The window proves itself with the app key
+ * (app-key.ts), not with its Origin: any local program can write an Origin header. A local program,
+ * such as an agent's curl, gets 403 here; it can still use everything else and should go through MCP,
+ * where these become approval cards.
  */
 const USER_ONLY_ERROR = "이 작업은 시나위 앱 화면에서만 할 수 있습니다. MCP 도구를 쓰면 승인 요청으로 올라갑니다. / Only the Sinawi app window can do this; through MCP it becomes an approval request.";
-/** The app window (its Origin) or the server's own in-process run of a tool. */
-const fromUser = (req: Request) => inProcess(req) || Boolean(req.headers.origin && isAllowedOrigin(req.headers.origin));
+/** The app window (its key, from an app Origin) or the server's own in-process run of a tool. */
+const fromUser = (req: Request) => inProcess(req) || Boolean(req.headers.origin && isAllowedOrigin(req.headers.origin) && hasAppKey(req.headers));
 
 export function userOnlyGuard(req: Request, res: Response, next: NextFunction) {
   if (fromUser(req) || !isUserOnlyRoute(req.method, req.originalUrl.split("?")[0])) { next(); return; }
+  // Tells the app window its key is missing or stale (a restarted server), so it asks again once.
+  res.setHeader("x-sinawi-app-key", "required");
   res.status(403).json({ error: USER_ONLY_ERROR });
 }
 
@@ -1021,7 +1025,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   app.post("/api/workspaces", async (req, res) => {
     // A new space's policy (full access, computer use ...) is the user's, like PATCH: see userOnlyGuard.
-    if (req.body?.settings != null && !fromUser(req)) { res.status(403).json({ error: USER_ONLY_ERROR }); return; }
+    if (req.body?.settings != null && !fromUser(req)) { res.setHeader("x-sinawi-app-key", "required"); res.status(403).json({ error: USER_ONLY_ERROR }); return; }
     try {
       const name = workspaceName(req.body?.name);
       if (req.body?.settings != null) normalizeWorkspacePolicy(req.body.settings, true);
@@ -1067,7 +1071,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const id = workspaceIdFormat(routeParam(req.params.id));
       const hasSettings = req.body?.settings != null;
       // Renaming is open (rename_workspace); a policy (full access, computer use ...) is the user's: see userOnlyGuard.
-      if (hasSettings && !fromUser(req)) { res.status(403).json({ error: USER_ONLY_ERROR }); return; }
+      if (hasSettings && !fromUser(req)) { res.setHeader("x-sinawi-app-key", "required"); res.status(403).json({ error: USER_ONLY_ERROR }); return; }
       // Rename, update settings (merged onto the stored ones), or both.
       const name = req.body?.name == null && hasSettings ? undefined : workspaceName(req.body?.name);
       if (hasSettings) normalizeWorkspacePolicy(req.body.settings, true);
@@ -1820,6 +1824,15 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, ...(startError ? { error: startError } : {}), app: "sinawi", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: envVar("SERVER_VERSION") ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });
   app.get("/api/health", sendHealth);
+  // The installed app's binary (not its window, not any other program) collects the window's key.
+  app.get("/api/app-key", async (req, res) => {
+    if (req.headers.origin || !isAppExecutable(await peerExecutable(req.socket.remotePort))) {
+      res.status(403).json({ error: "Only the Sinawi app can ask for this." });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ key: appKey() });
+  });
   app.get("/health", sendHealth);
   // Unknown API routes must never become a successful HTML response.
   app.use("/api", (_req, res) => res.status(404).json({ error: "API를 찾을 수 없습니다." }));
@@ -1837,7 +1850,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
 
   httpServer.on("upgrade", (request, socket, head) => {
     if (terminal.handleUpgrade(request, socket, head)) return;
-    if (request.url !== "/ws" || !isLoopbackHost(request.headers.host) || !request.headers.origin || !isAllowedOrigin(request.headers.origin)) {
+    // Every session, live: the app window only (its key, see app-key.ts), never just a matching Origin.
+    if (request.url !== "/ws" || !isLoopbackHost(request.headers.host) || !request.headers.origin || !isAllowedOrigin(request.headers.origin) || !hasAppKey(request.headers)) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n"); socket.destroy(); return;
     }
     websocket.handleUpgrade(request, socket, head, (client) => websocket.emit("connection", client, request));

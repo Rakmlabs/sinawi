@@ -1,12 +1,16 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+
+// The app window's key for this run (server/app-key.ts): the server checks it, Vite puts it in the page.
+const env = { ...process.env, SINAWI_APP_KEY: randomBytes(32).toString("base64url") };
 
 const names = ["server", "vite"];
 const children = [
   spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-    stdio: "inherit",
+    stdio: "inherit", env,
   }),
   spawn(process.execPath, ["node_modules/vite/bin/vite.js"], {
-    stdio: "inherit",
+    stdio: "inherit", env,
   }),
 ];
 const pending = new Set(children);

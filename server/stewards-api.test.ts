@@ -12,6 +12,7 @@ import { issueComputerToken, revokeComputerToken } from "./computer-tokens.js";
 import { loadSessions, loadStewards, loadWorkspaceState, saveSessions, saveStewards, saveWorkspaceState } from "./store.js";
 import { notesPath, saveNotes, stewardDir, userPreferencesPath } from "./steward.js";
 import type { Session } from "./types.js";
+import { appKey } from "./app-key.js";
 
 function request(app: Express, method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
@@ -20,7 +21,7 @@ function request(app: Express, method: string, path: string, body?: unknown, hea
     const req = new IncomingMessage(socket as never);
     req.method = method; req.url = path; req.httpVersion = "1.1"; req.httpVersionMajor = 1; req.httpVersionMinor = 1;
     const json = body === undefined ? undefined : JSON.stringify(body);
-    req.headers = { host: "127.0.0.1", origin: "tauri://localhost", ...headers, ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
+    req.headers = { host: "127.0.0.1", origin: "tauri://localhost", "x-sinawi-app": appKey(), ...headers, ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
     const res = new ServerResponse(req);
     res.assignSocket(socket as never);
     res.on("error", reject);

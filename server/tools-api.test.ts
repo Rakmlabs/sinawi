@@ -8,6 +8,7 @@ import test from "node:test";
 import type { Express } from "express";
 import { createServer } from "./server.js";
 import { saveWorkspaceState } from "./store.js";
+import { appKey } from "./app-key.js";
 
 // These fixtures predate configurable workspaces and use the legacy personal/company pair.
 const seedLegacyWorkspaces = (directory: string) => saveWorkspaceState({ currentWorkspaceId: "personal", workspaces: [{ id: "personal", name: "개인" }, { id: "company", name: "회사" }], defaults: { personal: {}, company: {} } }, directory);
@@ -20,7 +21,7 @@ function request(app: Express, method: string, path: string, body?: unknown): Pr
     const req = new IncomingMessage(socket as never);
     req.method = method; req.url = path; req.httpVersion = "1.1"; req.httpVersionMajor = 1; req.httpVersionMinor = 1;
     const json = body === undefined ? undefined : JSON.stringify(body);
-    req.headers = { host: "127.0.0.1", origin: "tauri://localhost", ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
+    req.headers = { host: "127.0.0.1", origin: "tauri://localhost", "x-sinawi-app": appKey(), ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
     const res = new ServerResponse(req); res.assignSocket(socket as never); res.on("error", reject); socket.on("error", reject);
     res.on("finish", () => {
       try {

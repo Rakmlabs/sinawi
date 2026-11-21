@@ -15,6 +15,7 @@ import {
   type TerminalNotice,
 } from "./terminal-events";
 import { t } from "./i18n";
+import { appKeyProtocols, loadAppKey } from "./app-key";
 const HEIGHT_KEY = "orchestra.terminal.height";
 const DEFAULT_HEIGHT = 320;
 const MIN_HEIGHT = 180;
@@ -217,9 +218,10 @@ function TerminalSurface({ tab, visible, runtimeRef, onNotice, onExit, onShortcu
         return true;
       });
 
-      const connect = () => {
+      const connect = () => { void loadAppKey(reconnectAttempt > 0).then(openSocket); };
+      const openSocket = () => {
         if (disposed) return;
-        socket = new WebSocket(websocketUrl(tab, terminal.cols, terminal.rows));
+        socket = new WebSocket(websocketUrl(tab, terminal.cols, terminal.rows), appKeyProtocols());
         socket.binaryType = "arraybuffer";
         socket.addEventListener("open", () => {
           reconnectAttempt = 0;

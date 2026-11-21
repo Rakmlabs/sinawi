@@ -856,6 +856,7 @@ export const ROUTE_EXCLUSIONS: Record<string, string> = {
   "POST /api/sim-view/open": "헤더의 시뮬레이터 버튼: Apple Simulator 앱을 앞으로 가져온다(화면 동작).",
   "POST /api/terminal/external": "macOS Terminal.app을 여는 화면 동작.",
   "GET /health": "/api/health와 같은 내용(app_status).",
+  "GET /api/app-key": "설치된 시나위 앱 본체만 받는 앱 창 키(도구로 내주면 안 된다).",
   "GET /{*path}": "앱 화면(정적 파일).",
 };
 
