@@ -8,10 +8,11 @@
  * pre-approved one — Claude's own auto mode would otherwise decide those by itself.
  *
  * What an "allow" decision guarantees (checked statically, before the command runs):
- * - every segment's program is one of a small fixed set (SAFE_PROGRAMS below), with per-program
- *   argument checks: no git global options, `-c`, `config` or writing/exec flags; no
- *   `rg --pre`/follow-symlink flags; npm/pnpm/yarn only `test`/`run` without prefix/global flags, and
- *   only where the workspace pre-approves programs that run code (H2, `runtime` argument);
+ * - every segment's program is one of a small fixed set (bashCommandAllowed), and uses only the
+ *   subcommands and options listed for it (optionsAllowed: no git global options, `-c`, `config` or
+ *   writing/exec flags; no `rg --pre`/follow-symlink flags);
+ *   npm/pnpm/yarn only `test`/`run` without prefix/global flags, and only where the workspace
+ *   pre-approves programs that run code (H2, `runtime` argument);
  * - nothing is expanded: no `$`, backticks, braces, unquoted `~` (at a word start or after `=`/`:`),
  *   unquoted glob characters (`*?[`, which bash 3.2 lets match `..`), comments, here-docs;
  * - no path argument, `cd` target or redirection target has a `..` component, absolute paths must
@@ -129,6 +130,18 @@ export function riskyWords(words: string[]): boolean {
     const push = rest.indexOf("push");
     if (push >= 0 && rest.slice(push + 1).some((word) => /^(?:-f|-d|--force.*|--delete|--mirror|--prune|--all)$/u.test(word) || /^-[a-z]*[fd][a-z]*$/u.test(word) || /^[+:]/u.test(word))) return true;
   }
+  if (program === "git") {
+    // Global options before the subcommand that run a program or set config (`-c core.pager=…`,
+    // `--exec-path=.`), and the options that name the program run on the other side of a transfer.
+    for (let at = 0; at < rest.length && rest[at]!.startsWith("-"); at++) {
+      if (/^(?:-c|--config-env|--exec-path)/u.test(rest[at]!)) return true;
+      if (rest[at] === "-C") at++;
+    }
+    if (rest.some((word) => /^--(?:upl|rece|exec)/u.test(word))) return true;
+  }
+  if (program === "rg" && rest.some((word) => word.startsWith("--pre"))) return true;
+  // `--co` is the shortest abbreviation GNU sort accepts for --compress-program.
+  if (program === "sort" && rest.some((word) => word.startsWith("--co"))) return true;
   if (program === "curl" && rest.some((word) => /^(?:-K|--config)/u.test(word) || /^-[a-zA-Z]*K/u.test(word))) return true;
   if (program === "xcrun" && rest[0] === "simctl" && rest[1] === "spawn") return true;
   if (program === "trash" && rest.some((word) => word.startsWith("/") || word.startsWith("~") || word.split("/").includes(".."))) return true;
@@ -204,6 +217,125 @@ export function argumentsStayInside(args: string[], cwd: string, root: string, h
 }
 
 /**
+ * Whether the words of one command use only the subcommands and options listed for its program
+ * (fifth review R5-1: `sort --compress-program=./x`, `git fetch --upload-pack=./x`, `rg --pre=./x`
+ * ran code under the plain prefix rules). An allowlist, not a list of dangerous flags: a program,
+ * subcommand, option or `VAR=value` prefix that is not listed returns false and the hook asks.
+ *
+ * - The spec is chosen by the longest key that the leading words match (`git log`, `gh pr`, `ls`).
+ *   No key (git global options such as `-c`/`-C`/`--exec-path`, `env`, `xargs`, `GIT_X=1 git …`)
+ *   is false.
+ * - Long options must be written out in full (`--name` or `--name=value`). An abbreviation that GNU
+ *   getopt or git would accept (`--compress-prog`) is not on the list, so it asks.
+ * - Every letter of a short cluster is checked (`rg -nz`). A letter listed as taking a value
+ *   (`-m`, `-A3`) ends the cluster: the rest is its value. A value in the next word is never skipped:
+ *   it is checked like any other word, so a mis-listed option can only make the hook ask more.
+ * - `ops`: the first operand (word not starting with `-`) must be one of them (`git stash pop`).
+ * - `any`: every option passes (programs without options that run code); `deny` is checked on every
+ *   word either way (ffmpeg's plugin-loading filters, sips `--js`).
+ * - `--` ends the options; a lone `-` is an operand.
+ *
+ * Self-contained on purpose (its source goes into the hook script).
+ */
+export function optionsAllowed(words: string[]): boolean {
+  interface Spec { s?: string; v?: string; l?: string; n?: boolean; any?: boolean; ops?: string; deny?: RegExp }
+  // Options shared by git diff, log and show. Left out: --output, --ext-diff, --textconv (run or
+  // write through a program), -O (order file), --no-index (compares files outside the repository),
+  // --show-signature (runs gpg).
+  const gitDiff = "--stat --numstat --shortstat --dirstat --summary --name-only --name-status --patch --no-patch --raw --patch-with-stat --cached --staged --merge-base --color --no-color --color-words --word-diff --word-diff-regex --unified --minimal --patience --histogram --diff-algorithm --diff-filter --find-renames --find-copies --no-renames --relative --no-relative --ignore-space-change --ignore-all-space --ignore-blank-lines --ignore-space-at-eol --ignore-cr-at-eol --function-context --check --full-index --binary --abbrev --no-abbrev --exit-code --quiet --no-ext-diff --no-textconv --submodule --src-prefix --dst-prefix --no-prefix --text --irreversible-delete --pickaxe-all --pickaxe-regex --stat-width --compact-summary";
+  const gitLog = `${gitDiff} --oneline --format --pretty --graph --decorate --no-decorate --all --branches --tags --remotes --author --committer --since --until --after --before --grep --all-match --invert-grep --regexp-ignore-case --extended-regexp --fixed-strings --max-count --skip --reverse --first-parent --no-merges --merges --follow --abbrev-commit --no-abbrev-commit --date --relative-date --full-history --simplify-by-decoration --left-right --cherry-pick --cherry-mark --boundary --topo-order --date-order --author-date-order --no-walk --source --log-size --notes --no-notes --ancestry-path --dense --sparse --parents --children --walk-reflogs --max-parents --min-parents --name-only --expand-tabs --no-expand-tabs`;
+  const specs: Record<string, Spec> = {
+    "git status": { s: "sbvz", v: "u", l: "--short --branch --porcelain --long --verbose --show-stash --untracked-files --ignored --ignore-submodules --column --no-column --ahead-behind --no-ahead-behind --renames --no-renames --find-renames --null" },
+    "git diff": { s: "pusazwWRbcqD", v: "UMCBSGl", l: gitDiff },
+    "git log": { s: "pusazwWRbcqDiEFPmrt", v: "nUMCBSG", n: true, l: gitLog },
+    "git show": { s: "pusazwWRbcqDm", v: "UMCBSG", n: true, l: `${gitLog} --show-notes` },
+    "git rev-parse": { s: "q", l: "--short --verify --quiet --abbrev-ref --symbolic --symbolic-full-name --show-toplevel --show-prefix --show-cdup --git-dir --absolute-git-dir --git-common-dir --git-path --is-inside-work-tree --is-inside-git-dir --is-bare-repository --is-shallow-repository --show-superproject-working-tree --show-object-format --all --branches --tags --remotes --default --sq --sq-quote --not --path-format --local-env-vars --resolve-git-dir --since --until --after --before --revs-only --no-revs --flags --no-flags" },
+    "git ls-files": { s: "cdmoiksustvfzr", v: "xX", l: "--cached --deleted --modified --others --ignored --stage --killed --unmerged --directory --no-empty-directory --exclude --exclude-standard --exclude-per-directory --error-unmatch --full-name --recurse-submodules --abbrev --debug --eol --deduplicate --format --sparse --with-tree --resolve-undo --exclude-from" },
+    "git blame": { s: "wsetnflpcbk", v: "LMC", l: "--porcelain --line-porcelain --incremental --root --show-stats --date --abbrev --show-name --show-number --show-email --reverse --first-parent --ignore-rev --ignore-revs-file --color-lines --color-by-age --progress --no-progress --minimal --encoding --score-debug" },
+    // Left out: -p/-i/-e/--edit (an editor), --pathspec-from-file.
+    "git add": { s: "AuvnfNq", l: "--all --update --verbose --dry-run --force --intent-to-add --no-all --ignore-removal --no-ignore-removal --renormalize --ignore-errors --ignore-missing --sparse --chmod --refresh" },
+    // Left out: -e/--edit and -c (an editor), -S/--gpg-sign (gpg), -t/--template, -p, --interactive.
+    "git commit": { s: "aqvnsoiz", v: "mFC", l: "--message --file --amend --no-edit --all --allow-empty --allow-empty-message --no-verify --verify --signoff --no-signoff --author --date --quiet --verbose --dry-run --only --include --fixup --squash --reset-author --cleanup --trailer --no-gpg-sign --short --porcelain --long --status --no-status --reuse-message --untracked-files --null" },
+    // Left out: --edit-description (an editor).
+    "git branch": { s: "arvldDmMcCfqtiz", v: "u", l: "--list --all --remotes --verbose --show-current --contains --no-contains --merged --no-merged --sort --format --delete --move --copy --force --set-upstream-to --unset-upstream --track --no-track --points-at --column --no-column --color --no-color --quiet --ignore-case --create-reflog --abbrev --no-abbrev --omit-empty --recurse-submodules" },
+    // Left out: -p/--patch, --pathspec-from-file.
+    "git checkout": { s: "fqtml", v: "bB", l: "--track --no-track --force --quiet --detach --orphan --ours --theirs --merge --guess --no-guess --progress --no-progress --overwrite-ignore --no-overwrite-ignore --recurse-submodules --no-recurse-submodules --overlay --no-overlay --ignore-other-worktrees --conflict" },
+    "git switch": { s: "dftmq", v: "cC", l: "--create --force-create --detach --discard-changes --force --merge --track --no-track --orphan --guess --no-guess --quiet --progress --no-progress --conflict --ignore-other-worktrees --recurse-submodules --no-recurse-submodules" },
+    "git restore": { s: "SWqm", v: "s", l: "--source --staged --worktree --ours --theirs --quiet --merge --conflict --ignore-unmerged --overlay --no-overlay --progress --no-progress --recurse-submodules --no-recurse-submodules --ignore-skip-worktree-bits" },
+    "git rm": { s: "rfnq", l: "--cached --dry-run --force --quiet --ignore-unmatch --sparse" },
+    "git mv": { s: "fknv", l: "--force --dry-run --verbose" },
+    "git stash": { s: "uakqpS", v: "m", l: "--include-untracked --all --keep-index --no-keep-index --quiet --message --index --staged --patch --stat --name-only --name-status --no-include-untracked --only-untracked", ops: "list show push pop apply drop save" },
+    // Left out: -s/--strategy, -X/--strategy-option (run `git-merge-NAME`), -e/--edit, -S/--gpg-sign.
+    "git merge": { s: "nqv", v: "mF", l: "--no-ff --ff --ff-only --squash --no-squash --commit --no-commit --no-edit --abort --continue --quit --message --file --stat --no-stat --log --no-log --quiet --verbose --allow-unrelated-histories --no-verify --verify --signoff --no-signoff --progress --no-progress --autostash --no-autostash --no-gpg-sign --rerere-autoupdate --no-rerere-autoupdate --into-name" },
+    // Left out: -s/-u/--sign/--local-user and -v/--verify (gpg), -e/--edit.
+    "git tag": { s: "ladfi", v: "nmF", l: "--list --sort --contains --no-contains --points-at --merged --no-merged --format --annotate --message --file --delete --force --column --no-column --ignore-case --no-sign --create-reflog --color --omit-empty" },
+    "git worktree": { s: "fnqvz", v: "bB", l: "--force --detach --checkout --no-checkout --lock --porcelain --verbose --dry-run --expire --track --no-track --guess-remote --no-guess-remote --orphan --reason --quiet --relative-paths --no-relative-paths", ops: "list add remove prune move lock unlock repair" },
+    // Left out: show/update/prune (they contact the remote), add -f (fetches), --mirror.
+    "git remote": { s: "v", v: "tm", l: "--verbose --tags --no-tags --push --all --add --delete", ops: "add get-url rename remove rm set-url set-head" },
+    "gh pr": { any: true, deny: /^(?:--editor|-[a-zA-Z]*e)/u, ops: "list view diff checks status create comment edit ready merge close reopen review checkout" },
+    "gh issue": { any: true, deny: /^(?:--editor|-[a-zA-Z]*e)/u, ops: "list view create comment edit close reopen status develop" },
+    "gh repo view": { any: true },
+    "gh run": { any: true, ops: "list view watch rerun download cancel" },
+    "gh api": { any: true },
+    "gh auth status": { any: true },
+    "gh search": { any: true, ops: "code commits issues prs repos" },
+    "ls": { any: true }, "cat": { any: true }, "head": { any: true }, "tail": { any: true }, "du": { any: true }, "mkdir": { any: true }, "stat": { any: true },
+    "touch": { any: true }, "test": { any: true }, "echo": { any: true }, "printf": { any: true }, "pwd": { any: true }, "tsc": { any: true }, "jq": { any: true }, "lsof": { any: true }, "trash": { any: true },
+    "wc": { s: "lwcmL", l: "--lines --words --bytes --chars --max-line-length --total" },
+    "file": { s: "bciIhLzZkNsE0p", l: "--brief --mime --mime-type --mime-encoding --dereference --no-dereference --extension --apple --keep-going --no-pad --special-files --uncompress --print0 --preserve-date" },
+    // Left out: --pre, --pre-glob (run a program per file), -z/--search-zip (runs decompressors),
+    // -L/--follow (symlinks out of the folder).
+    "rg": { s: "nisSwxvclFHhoqUPaNIp0.bu", v: "egftTABCmjrMEd", l: "--files --hidden --no-ignore --no-ignore-vcs --no-ignore-dot --no-ignore-parent --no-ignore-global --no-ignore-exclude --no-ignore-files --ignore-file --glob --iglob --type --type-not --type-list --type-add --ignore-case --smart-case --case-sensitive --word-regexp --line-regexp --invert-match --count --count-matches --files-with-matches --files-without-match --fixed-strings --regexp --after-context --before-context --context --max-count --max-depth --line-number --no-line-number --column --no-column --heading --no-heading --with-filename --no-filename --only-matching --quiet --multiline --multiline-dotall --pcre2 --no-pcre2 --engine --json --no-json --vimgrep --color --colors --sort --sortr --stats --trim --text --unrestricted --null --null-data --replace --max-columns --max-columns-preview --max-filesize --no-messages --passthru --byte-offset --encoding --no-config --one-file-system --threads --binary --no-binary --crlf --path-separator --field-match-separator --field-context-separator --context-separator --pretty --line-buffered --block-buffered --mmap --no-mmap --unicode --no-unicode --include-zero --sort-files --files-without-match --dfa-size-limit --regex-size-limit --auto-hybrid-regex" },
+    "grep": { s: "rnicvlLwxEFGHhoqsbaUIzT0", v: "efmABCdD", l: "--recursive --line-number --ignore-case --no-ignore-case --count --files-with-matches --files-without-match --fixed-strings --extended-regexp --basic-regexp --perl-regexp --invert-match --word-regexp --line-regexp --include --exclude --exclude-dir --color --colour --only-matching --quiet --silent --no-filename --with-filename --context --after-context --before-context --max-count --regexp --file --null --null-data --text --binary-files --no-messages --byte-offset --label --initial-tab --line-buffered" },
+    // Left out: --compress-program (runs a program), --files0-from.
+    "sort": { s: "bdfghiMnrRsuVzcCm", v: "ktoST", l: "--output --key --field-separator --reverse --numeric-sort --unique --human-numeric-sort --ignore-case --general-numeric-sort --month-sort --version-sort --random-sort --random-source --stable --check --merge --zero-terminated --buffer-size --temporary-directory --parallel --batch-size --ignore-leading-blanks --dictionary-order --ignore-nonprinting --debug --sort" },
+    // Left out: -K/--config (a config file sets any option), -w/--write-out (`%output{file}` writes a
+    // file), --libcurl, -T/--upload-file, -D/--dump-header, -F/--form and --data-urlencode (`name@FILE`
+    // sends a file the path check cannot see).
+    "curl": { s: "sSfLIivkGgO46JRN", v: "oHXdAmuebcxrCyY", l: "--silent --show-error --fail --fail-with-body --location --head --include --verbose --insecure --output --remote-name --header --request --data --data-raw --data-binary --json --user-agent --max-time --connect-timeout --retry --retry-delay --retry-max-time --user --referer --cookie --cookie-jar --compressed --http1.1 --http2 --get --globoff --proxy --noproxy --url --range --max-filesize --create-dirs --output-dir --no-progress-meter --progress-bar --ipv4 --ipv6 --remote-header-name --oauth2-bearer --speed-limit --speed-time --limit-rate --resolve --cacert --max-redirs" },
+    // ladspa, frei0r and lv2 filters load a shared library.
+    "ffmpeg": { any: true, deny: /ladspa|frei0r|lv2/iu }, "ffprobe": { any: true, deny: /ladspa|frei0r|lv2/iu },
+    // `--js` runs JavaScript.
+    "sips": { any: true, deny: /^-(?:j|-js)/u },
+    "ao-browser": { any: true }, "ao-computer": { any: true }, "ao-sim": { any: true }, "ao-serve list": { any: true }, "ao-serve logs": { any: true }, "ao-serve stop": { any: true },
+    "xcrun simctl list": { any: true }, "xcrun simctl boot": { any: true }, "xcrun simctl shutdown": { any: true }, "xcrun simctl io": { any: true }, "xcrun simctl install": { any: true }, "xcrun simctl uninstall": { any: true },
+    "xcrun simctl launch": { any: true }, "xcrun simctl terminate": { any: true }, "xcrun simctl get_app_container": { any: true }, "xcrun simctl status_bar": { any: true }, "xcrun simctl ui": { any: true },
+  };
+  let spec: Spec | undefined;
+  let start = 0;
+  for (let length = Math.min(3, words.length); length > 0 && !spec; length--) {
+    const found = specs[words.slice(0, length).join(" ")];
+    if (found) { spec = found; start = length; }
+  }
+  if (!spec) return false;
+  const longs = new Set((spec.l ?? "").split(" ").filter(Boolean));
+  let operands = false;
+  let first = true;
+  for (const word of words.slice(start)) {
+    if (spec.deny?.test(word)) return false;
+    if (operands || word === "-" || !word.startsWith("-")) {
+      if (first && spec.ops && !spec.ops.split(" ").includes(word)) return false;
+      first = false;
+      continue;
+    }
+    if (word === "--") { operands = true; continue; }
+    if (spec.any) continue;
+    if (word.startsWith("--")) {
+      const eq = word.indexOf("=");
+      if (!longs.has(eq < 0 ? word : word.slice(0, eq))) return false;
+      continue;
+    }
+    if (spec.n && /^-\d+$/u.test(word)) continue;
+    for (let at = 1; at < word.length; at++) {
+      const letter = word[at]!;
+      if ((spec.v ?? "").includes(letter)) break;
+      if (!(spec.s ?? "").includes(letter)) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * The hook's answer for one Bash command: "allow" (the compound safe set, bashCommandAllowed),
  * "ask" (the user decides on an approval card, even in Claude's own auto mode), or undefined
  * (Claude's own rules decide).
@@ -211,7 +343,8 @@ export function argumentsStayInside(args: string[], cwd: string, root: string, h
  * With the workspace switch for programs that run code OFF, only two kinds of command are left to
  * Claude's rules: the compound safe set, and ONE simple command of fixed words that starts with a
  * pre-approved program (`git status`, `rg`, `curl` …, supervision.ts DEVELOPMENT_SHELL_PROGRAMS)
- * whose file arguments stay inside the folder. Everything else asks: node, python and every program
+ * that uses only the options listed for it (optionsAllowed) and whose file arguments stay inside the
+ * folder. Everything else asks: node, python and every program
  * not on the list (perl, a script `./x.sh`), quote fragments, `$(…)`, variables, chains, pipes,
  * redirections, globs. With the switch ON, Claude's auto mode decides unlisted commands as before.
  * Risky forms (riskyWords) ask either way.
@@ -226,7 +359,7 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
   if (host.runtimePrograms) return undefined;
   if (!words) return "ask";
   const length = preapprovedPrefix(words, prefixes);
-  if (!length) return "ask";
+  if (!length || !optionsAllowed(words)) return "ask";
   // gh names API paths (`/repos/x`), not files; its file reads are `@FILE` values.
   const args = words.slice(length);
   if (words[0] === "gh" ? !argumentsStayInside(args.filter((arg) => arg.includes("@")).map((arg) => arg.slice(arg.indexOf("@"))), cwd, root, host) : !argumentsStayInside(args, cwd, root, host)) return "ask";
@@ -239,11 +372,11 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
  */
 export function bashCommandAllowed(command: string, cwd: string, root: string, host: HookHost): boolean {
   // Path-reading programs: every argument is checked as a path (option values after `=` too).
-  const pathPrograms = new Set(["ls", "cat", "head", "tail", "wc", "grep", "rg", "mkdir", "touch", "test"]);
+  // Options and subcommands are checked by optionsAllowed (the listed ones only).
+  const pathPrograms = new Set(["ls", "cat", "head", "tail", "wc", "grep", "rg", "mkdir", "touch", "test", "sort"]);
   // Programs that never touch files themselves (only through redirections, checked separately).
   const plainPrograms = new Set(["echo", "printf", "true", "false", "pwd"]);
   const gitSubcommands = new Set(["status", "diff", "log", "show", "add", "commit", "rev-parse", "ls-files", "blame"]);
-  const gitDenied = /^(?:-c$|--config|--output|--ext-diff|--textconv|--no-index|--exec|--git-dir|--work-tree|--upload-pack|--receive-pack|--open-files-in-pager|-O)/u;
   const packageManagers = new Set(["npm", "pnpm", "yarn"]);
   const packageDenied = /^(?:--prefix|-C$|--dir|--cwd|-g$|--global|--location|--script-shell|--userconfig|--globalconfig|--workspace-root|-w$|--node-options)/u;
   const resolveReal = (absolute: string): string | undefined => {
@@ -336,17 +469,8 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
       return true;
     }
     if (plainPrograms.has(program)) return true;
-    if (pathPrograms.has(program)) {
-      if (program === "grep" && args.some((arg) => /^-[A-Za-z]*R/u.test(arg) || arg.startsWith("--dereference"))) return false;
-      if (program === "rg" && args.some((arg) => /^-[A-Za-z]*L/u.test(arg) || /^--(?:pre|follow)/u.test(arg))) return false;
-      if (program === "wc" && args.some((arg) => arg.startsWith("--files0"))) return false;
-      return pathArgsOk(args, dirs);
-    }
-    if (program === "git") {
-      if (!gitSubcommands.has(args[0] ?? "")) return false;
-      if (args.some((arg) => gitDenied.test(arg))) return false;
-      return pathArgsOk(args.slice(1), dirs);
-    }
+    if (pathPrograms.has(program)) return optionsAllowed(segment) && pathArgsOk(args, dirs);
+    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs);
     if (packageManagers.has(program)) {
       if (!host.runtimePrograms) return false;
       if (args[0] !== "test" && args[0] !== "run" && args[0] !== "run-script") return false;
@@ -469,7 +593,7 @@ const __name = (fn) => fn;
 // The pre-approved prefixes (supervision.ts DEVELOPMENT_SHELL_PROGRAMS): with the switch off, only a
 // simple command of fixed words starting with one of them is left to Claude's rules.
 const prefixes = ${JSON.stringify(DEVELOPMENT_SHELL_PROGRAMS)};
-${[bashCommandAllowed, staticCommandWords, riskyWords, riskyCommand, preapprovedPrefix, argumentsStayInside, hookDecision].map((fn) => fn.toString()).join("\n")}
+${[bashCommandAllowed, optionsAllowed, staticCommandWords, riskyWords, riskyCommand, preapprovedPrefix, argumentsStayInside, hookDecision].map((fn) => fn.toString()).join("\n")}
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
@@ -483,7 +607,7 @@ process.stdin.on("end", () => {
       allow: "Sinawi: safe programs confined to the worker folder",
       ask: host.runtimePrograms
         ? "Sinawi: this command reaches outside the project (gh api write, forced or deleting git push, simctl spawn, curl -K, trash outside the folder)"
-        : "Sinawi: this workspace pre-approves only simple commands of listed programs with files inside the project; this one runs code, is not on the list, or cannot be read in advance (quotes glued to text, $(...), variables, chains, pipes, redirections, globs, paths outside)",
+        : "Sinawi: this workspace pre-approves only simple commands of listed programs with files inside the project; this one runs code, is not on the list, uses an option not listed for it, or cannot be read in advance (quotes glued to text, $(...), variables, chains, pipes, redirections, globs, paths outside)",
     };
     if (decision) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: decision, permissionDecisionReason: reasons[decision] } }));
   } catch {}

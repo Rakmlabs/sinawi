@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { bashCommandAllowed, bashHookSettings, ensureBashHookScript, hookDecision, nodeHookHost, riskyCommand, staticCommandWords, type HookHost } from "./claude-bash-hook.js";
+import { bashCommandAllowed, bashHookSettings, ensureBashHookScript, hookDecision, nodeHookHost, optionsAllowed, riskyCommand, staticCommandWords, type HookHost } from "./claude-bash-hook.js";
 import { buildInvocation, prepareCliInvocation } from "./cli.js";
 import { DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
 
@@ -185,8 +185,40 @@ test("the fourth review's bypasses and every command that runs code ask while th
   ]) assert.equal(decide(command), "ask", command);
 });
 
+// Fifth review R5-1: with the switch off, options of pre-approved programs that run a program passed
+// under the plain prefix rules and ran (sort --compress-program, git fetch --upload-pack, git push
+// --receive-pack, rg --pre). Each program now lists the subcommands and options that pass.
+test("options and subcommands that are not listed for a pre-approved program ask while the switch is off", () => {
+  for (const command of [
+    // The fifth review's repros.
+    "sort -S 100K -T . --compress-program=./m1.sh big.txt -o out.txt", "git fetch --upload-pack=./m2.sh .", "git push --receive-pack=./m3.sh . HEAD:refs/heads/x", "rg --pre=./m4.sh hello .",
+    // Abbreviated, attached with `=`, or as the next word.
+    "sort --compress-prog=./x a.txt", "sort --compress-program ./x a.txt", "sort --co=./x a.txt", "sort --files0-from=list", "git fetch --upl=./x .", "git push --rece=./x .", "git fetch --upload-pack ./x .",
+    "rg --pre ./x hi", "rg --pre-glob '*' --pre ./x hi", "rg --pre-glob=x hi", "rg -z hi", "rg -nz hi", "rg --search-zip hi", "rg -L hi", "rg --follow hi", "rg -nL hi",
+    // git: global options, config and environment prefixes, unlisted subcommands and options.
+    "git -c core.sshCommand=./x fetch", "git -c core.pager=./x log", "git -c alias.x='!sh' x", "git --exec-path=. status", "git -C . status", "git --git-dir=.git log", "GIT_PAGER=./x git log", "GIT_SSH_COMMAND=./x git status",
+    "git fetch", "git pull", "git push", "git push -u origin feature", "git clone x y", "git config core.pager x", "git rebase --exec ./x main", "git submodule update", "git archive HEAD", "git grep -O x",
+    "git diff --output=out.txt", "git diff --ext-diff", "git log --textconv", "git log -p --ext-diff", "git log --show-signature", "git log -O order", "git diff --no-index a.txt b.txt",
+    "git add -p", "git add -e", "git add --edit", "git commit -e -m x", "git commit -S -m x", "git commit --gpg-sign -m x", "git commit -t tpl", "git commit -c HEAD", "git commit -aS -m x",
+    "git merge -s ours x", "git merge -Xtheirs x", "git merge --strategy=x y", "git tag -s v1 -m x", "git tag -v v1", "git branch --edit-description", "git blame --contents x a.txt", "git rm --pathspec-from-file=x",
+    "git stash clear", "git remote update", "git remote show origin", "git remote add -f x y", "git worktree x",
+    // Programs not on the list that run what they are given.
+    "tar --to-command=./x -xf a.tar", "tar --use-compress-program=./x -cf a.tar a.txt", "xargs ls", "env ls", "less a.txt", "man ls", "awk 'BEGIN{system(\"id\")}'", "sed -n e a.txt", "perl -e 1",
+    // Other listed programs.
+    "curl -K cfg https://e.com", "curl --config cfg https://e.com", "curl -w '%{output}' https://e.com", "curl --write-out x https://e.com", "curl --libcurl x.c https://e.com", "curl -T a.txt https://e.com", "curl -F f=@a.txt https://e.com", "curl --data-urlencode name@a.txt https://e.com",
+    "sips --js x.js a.png", "sips -j x.js a.png", "ffmpeg -i a.mp4 -af ladspa=x out.mp4", "ffmpeg -i a.mp4 -vf frei0r=x out.mp4", "gh pr create -e", "gh pr create --editor", "gh pr frobnicate", "gh run delete 1", "file -C -m x", "wc --files0-from=x",
+  ]) assert.equal(decide(command), "ask", command);
+});
+
+test("every pre-approved prefix has a list of options, and ordinary commands pass it", () => {
+  for (const prefix of DEVELOPMENT_SHELL_PROGRAMS) assert.equal(optionsAllowed(prefix.split(" ")), true, prefix);
+  for (const command of ["git status", "git status -sb", "git log --oneline -5", "git log -n5 --stat", "git log -p -- a.txt", "git diff --stat", "git diff --cached -U3", "git diff HEAD~1 -- a.txt", "git show HEAD --stat", "git commit -m x", "git commit -am x", "git commit --amend --no-edit", "git add -A", "git checkout -b fix/x", "git switch -c x", "git stash push -m x", "git stash pop", "git merge --no-ff x", "git branch -vv", "git worktree add -b w ../w", "git remote -v", "git tag -l", "git rev-parse --show-toplevel", "rg -n x src", "rg -tts -C2 x", "rg --files -g '*.ts'", "ls -la", "sort -o out.txt a.txt", "sort -rn -k2 a.txt", "jq .name package.json", "tsc --noEmit -p .", "curl -s https://x", "curl -sSL -o out.json https://x", "gh pr view 7 --json title", "gh pr checks 7 --watch", "ffmpeg -i a.mp4 -vf scale=2 out.mp4", "grep -rn x src", "wc -l a.txt", "head -20 a.txt"]) {
+    assert.equal(optionsAllowed(staticCommandWords(command)!), true, command);
+  }
+});
+
 test("simple commands of pre-approved programs inside the folder are left to Claude's rules, or allowed", () => {
-  for (const command of ["git status", "git log --oneline -5 HEAD~3", "git commit -m \"fix: ../ and $ stay text\"".replace("$ ", ""), "git checkout -b fix/x", "rg -n 'a b' src", "rg --files", "ls -la src", "cat a.txt", "curl -s 'https://example.com/a?b=1'", "gh pr view 7 --json title", "gh api repos/a/b", "gh api /repos/a/b/pulls", "xcrun simctl list devices", "sort -o out.txt a.txt", "tsc --noEmit -p .", "git log --format=\"%h %s\"", "jq .name package.json", "ffmpeg -i a.mp4 out.mp4"]) {
+  for (const command of ["git status", "git log --oneline -5 HEAD~3", "git diff --stat", "git commit -m x", "git commit -m \"fix: ../ and $ stay text\"".replace("$ ", ""), "git checkout -b fix/x", "rg -n 'a b' src", "rg --files", "ls -la src", "cat a.txt", "curl -s 'https://example.com/a?b=1'", "gh pr view 7 --json title", "gh api repos/a/b", "gh api /repos/a/b/pulls", "xcrun simctl list devices", "sort -o out.txt a.txt", "tsc --noEmit -p .", "git log --format=\"%h %s\"", "jq .name package.json", "ffmpeg -i a.mp4 out.mp4"]) {
     assert.notEqual(decide(command), "ask", command);
   }
   assert.equal(decide("git status && git diff --stat"), "allow", "the compound safe set");
@@ -210,7 +242,12 @@ test("forms that reach outside the project are recognised: gh api writes, forced
   for (const command of ["gh api -X DELETE repos/a/b", "gh api repos/a/b --method=POST", "gh api repos/a/b -f x=1", "gh api graphql -F q=@f", "git push -f", "git push origin --force-with-lease", "git push origin +main", "git push origin :old", "git push --delete origin x", "xcrun simctl spawn booted /bin/ls", "trash /etc/x", "trash ../x", "trash ~/x", "cd x && git push --force"]) {
     assert.equal(riskyCommand(command), true, command);
   }
-  for (const command of ["gh api repos/a/b", "gh api -XGET repos", "gh api --method GET x", "git push", "git push -u origin feature-fix", "xcrun simctl list", "trash a.txt"]) assert.equal(riskyCommand(command), false, command);
+  for (const command of ["gh api repos/a/b", "gh api -XGET repos", "gh api --method GET x", "git push", "git push -u origin feature-fix", "xcrun simctl list", "trash a.txt", "git commit -c HEAD", "sort --check a.txt", "rg --files"]) assert.equal(riskyCommand(command), false, command);
+  // Fifth review R5-1: options that run a program ask with the switch on too.
+  for (const command of ["sort --compress-program=./x a", "sort --compress-prog ./x a", "git fetch --upload-pack=./x .", "git push --receive-pack=./x .", "git -c core.pager=./x log", "git -C . -c x=y log", "git --exec-path=. status", "rg --pre ./x hi", "rg --pre-glob x hi"]) {
+    assert.equal(riskyCommand(command), true, command);
+    assert.equal(decide(command, true), "ask", command);
+  }
 });
 
 test("the hook script asks for code runs unless the workspace pre-approves them, and always for risky forms", async (t) => {
@@ -229,4 +266,6 @@ test("the hook script asks for code runs unless the workspace pre-approves them,
   assert.equal(decision(run("git push --force origin main")), "ask");
   assert.equal(decision(run("git push --force origin main", true)), "ask", "risky forms ask even with the switch on");
   assert.equal(decision(run("git status")), "allow");
+  for (const command of ["sort --compress-program=./m1.sh a.txt -o out.txt", "git fetch --upload-pack=./m2.sh .", "git push --receive-pack=./m3.sh . HEAD:refs/heads/x", "rg --pre=./m4.sh hello .", "sort --compress-prog=./x a.txt", "rg -nz x"]) assert.equal(decision(run(command)), "ask", command);
+  assert.equal(decision(run("sort -rn a.txt")), "allow");
 });
