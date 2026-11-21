@@ -147,7 +147,13 @@ test("routing rules accept same-agent and repeated worker slots but still requir
   assert.throws(() => validateRoutingSettings(settings), /작업자가 한 명 이상/);
 });
 
-test("initial settings discover bounded model identifiers from local CLI config and cache", async () => {
+test("initial settings discover bounded model identifiers from local CLI config and cache", async (t) => {
+  // Inherited account roots win over `home` (see "inherited CLI account roots ..."): a run inside Claude Code has one.
+  for (const name of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"]) {
+    const saved = process.env[name];
+    delete process.env[name];
+    t.after(() => { if (saved === undefined) delete process.env[name]; else process.env[name] = saved; });
+  }
   const home = await mkdtemp(join(tmpdir(), "orchestra-model-home-"));
   const data = await mkdtemp(join(tmpdir(), "orchestra-model-data-"));
   await Promise.all([mkdir(join(home, ".codex")), mkdir(join(home, ".claude")), mkdir(join(home, ".grok"))]);
