@@ -3,6 +3,7 @@ import test from "node:test";
 import { buildInvocation, CLAUDE_READ_TOOLS, GROK_READ_TOOLS, meaningfulStderr, normalizeCliLine, type RunCliOptions } from "./cli.js";
 import { Orchestra } from "./orchestra.js";
 import type { Session } from "./types.js";
+import { onAbort } from "./test-abort.js";
 
 async function waitUntilSettled(session: Session, timeoutMs = 5_000) {
   const started = Date.now();
@@ -58,7 +59,7 @@ test("the orchestrator's verification run asks for read tools, workers do not ru
 test("a watchdog stop names the silent step instead of a bare message", async () => {
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
     options.onLine({ type: "tool", text: "명령: npm test" });
-    options.signal?.addEventListener("abort", () => resolve({ exitCode: 143, finalText: "" }), { once: true });
+    onAbort(options.signal, () => resolve({ exitCode: 143, finalText: "" }));
   });
   const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 30);
   const session = await orchestra.create({ prompt: "Silent task", agent: "claude", workers: ["codex"], cwd: process.cwd() });

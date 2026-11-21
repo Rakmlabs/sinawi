@@ -4,6 +4,7 @@ import { normalizeCliLine, type RunCliOptions } from "./cli.js";
 import { Orchestra } from "./orchestra.js";
 import { StallDetector } from "./supervision.js";
 import type { Session } from "./types.js";
+import { onAbort } from "./test-abort.js";
 
 async function settle(session: Session, timeoutMs = 5_000) {
   const started = Date.now();
@@ -40,7 +41,7 @@ test("raw CLI activity keeps a quiet run alive past the inactivity watchdog", as
 
 test("without activity the watchdog still stops a silent run", async () => {
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
-    options.signal?.addEventListener("abort", () => resolve({ exitCode: 143, finalText: "" }), { once: true });
+    onAbort(options.signal, () => resolve({ exitCode: 143, finalText: "" }));
   });
   const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 60);
   const session = await orchestra.create({ prompt: "silent", agent: "claude", workers: ["codex"], cwd: process.cwd() });
@@ -63,7 +64,7 @@ test("activity without any session event is capped: endless retry noise fails wi
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
     // Raw output forever (partial deltas, retries), but nothing that becomes a message/tool/result.
     const beat = setInterval(() => options.onActivity?.(), 20);
-    options.signal?.addEventListener("abort", () => { clearInterval(beat); resolve({ exitCode: 143, finalText: "" }); }, { once: true });
+    onAbort(options.signal, () => { clearInterval(beat); resolve({ exitCode: 143, finalText: "" }); });
   });
   const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 10_000);
   orchestra.quietLimitMs = 300;

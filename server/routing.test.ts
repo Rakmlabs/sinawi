@@ -10,6 +10,7 @@ import {
   defaultRoutingSettings, discoverLocalModels, loadRoutingSettings, RoutingService, saveRoutingSettings, validateRoutingSettings,
   type PlannerRunner,
 } from "./routing.js";
+import { onAbort } from "./test-abort.js";
 
 const fixtureSkills = [
   { id: "react-skill", name: "React", source: "Test", description: "React UI component implementation" },
@@ -240,7 +241,7 @@ test("planner failures surface a warning and fall back to editable routing rules
 test("planner execution is bounded by the configured timeout", async () => {
   let aborted = false;
   const runner: PlannerRunner = (options) => new Promise(() => {
-    options.signal?.addEventListener("abort", () => { aborted = true; }, { once: true });
+    onAbort(options.signal, () => { aborted = true; });
   });
   const home = await mkdtemp(join(tmpdir(), "orchestra-empty-home-"));
   const service = new RoutingService({ runner, homeDir: home, skillLoader: async () => [], timeoutMs: 10 });

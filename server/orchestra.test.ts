@@ -8,6 +8,7 @@ import { defaultWorkspacePolicy, mediaBlockedMessage } from "./workspace-policy.
 import type { RunCliOptions } from "./cli.js";
 import type { AgentId } from "./types.js";
 import { publicSkills } from "./skills.js";
+import { onAbort } from "./test-abort.js";
 
 // No workspace id is special. These tests configure "company" the way an old install's migration does:
 // Codex off and media generation off, through the same resolvers the server passes.
@@ -587,10 +588,10 @@ test("stop aborts an active CLI run and reaches stopped state", async () => {
   let markStarted!: () => void;
   const started = new Promise<void>((resolve) => { markStarted = resolve; });
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
-    options.signal?.addEventListener("abort", () => {
+    onAbort(options.signal, () => {
       observedAbort = true;
       resolve({ exitCode: 143, finalText: "" });
-    }, { once: true });
+    });
     markStarted();
   });
   const orchestra = new Orchestra(() => undefined, runner);
@@ -606,10 +607,10 @@ test("stop aborts an active CLI run and reaches stopped state", async () => {
 test("an inactive run is aborted and reported as an error", async () => {
   let observedAbort = false;
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
-    options.signal?.addEventListener("abort", () => {
+    onAbort(options.signal, () => {
       observedAbort = true;
       resolve({ exitCode: 143, finalText: "" });
-    }, { once: true });
+    });
   });
   const orchestra = new Orchestra(
     undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 20,
@@ -628,12 +629,12 @@ test("run output resets the inactivity watchdog", async () => {
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
     const first = setTimeout(() => options.onLine({ type: "status", text: "still working" }), 120);
     const second = setTimeout(() => resolve({ exitCode: 0, finalText: "done" }), 240);
-    options.signal?.addEventListener("abort", () => {
+    onAbort(options.signal, () => {
       observedAbort = true;
       clearTimeout(first);
       clearTimeout(second);
       resolve({ exitCode: 143, finalText: "" });
-    }, { once: true });
+    });
   });
   const orchestra = new Orchestra(
     undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 200,

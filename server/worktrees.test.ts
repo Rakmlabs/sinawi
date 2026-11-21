@@ -10,6 +10,7 @@ import { SHOT_DIR } from "./computer-bridge.js";
 import { Orchestra } from "./orchestra.js";
 import type { Session } from "./types.js";
 import { cleanupSessionWorktrees, ensureWorkerWorktree, mergeWorktree, pruneEmptyWorktrees, removeWorktree, userWorktrees, worktreeReviewNote, worktreesRoot, worktreeStatus, WorktreeDirtyError } from "./worktrees.js";
+import { whenAborted } from "./test-abort.js";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
 
@@ -107,9 +108,14 @@ test("forced removal discards uncommitted changes; session cleanup keeps dirty w
   await assert.rejects(stat(b.path));
 });
 
-async function settle(session: Session, timeoutMs = 10_000) {
+/**
+ * Waits until the orchestra has nothing in flight for the session (isWorking), not on `status`: the
+ * status is briefly not "running" between the lead, its workers and the review. The limit only
+ * catches a stuck run; real git worktrees on a loaded machine took over 10 s (third review N5).
+ */
+async function settle(session: Session, orchestra?: { isWorking(id: string): boolean }, timeoutMs = 60_000) {
   const started = Date.now();
-  while (session.status === "running") {
+  while (session.status === "running" || orchestra?.isWorking(session.id)) {
     if (Date.now() - started > timeoutMs) throw new Error("session did not settle");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -133,7 +139,7 @@ test("workers run in separate worktrees and the lead's review is told where the 
   const orchestra = new Orchestra(() => undefined, runner);
   orchestra.worktreeDataDir = dataDir;
   const session = await orchestra.create({ prompt: "two files", agent: "claude", workers: ["claude", "grok"], cwd: repo });
-  await settle(session);
+  await settle(session, orchestra);
   assert.equal(session.status, "done");
   const [lead, claude, grok, review] = calls;
   assert.match(lead.prompt, /전용 git worktree와 브랜치/);
@@ -238,7 +244,7 @@ test("an aborted worker that writes after SIGTERM keeps its worktree: pruning wa
       return { exitCode: 0, finalText: text };
     }
     workerStarted();
-    await new Promise<void>((resolve) => options.signal?.addEventListener("abort", () => resolve(), { once: true }));
+    await whenAborted(options.signal);
     // Still writing during the SIGTERM grace period.
     await new Promise((resolve) => setTimeout(resolve, 300));
     await writeFile(join(options.cwd, "late.txt"), "late\n");
@@ -273,10 +279,10 @@ test("a new run waits for an in-flight prune and gets a usable worktree", async 
   const orchestra = new Orchestra(() => undefined, runner);
   orchestra.worktreeDataDir = dataDir;
   const session = await orchestra.create({ prompt: "first", agent: "claude", workers: ["claude"], cwd: repo });
-  await settle(session);
+  await settle(session, orchestra);
   // The worker changed nothing, so its worktree is being pruned; start the next run right away.
   await orchestra.followup(session.id, "second");
-  await settle(session);
+  await settle(session, orchestra);
   assert.equal(session.status, "done");
   assert.equal(cwds.length, 2);
   const waitStart = Date.now();
@@ -311,7 +317,7 @@ test("the user's own worktrees are listed for the lead; Sinawi's are not", async
   const orchestra = new Orchestra(() => undefined, runner);
   orchestra.worktreeDataDir = dataDir;
   const session = await orchestra.create({ prompt: "기존꺼로 배포해줘", agent: "codex", workers: ["claude"], cwd: sibling });
-  await settle(session);
+  await settle(session, orchestra);
   assert.match(prompts[0], /이 저장소의 사용자 작업 폴더/);
   assert.ok(prompts[0].includes(`\`${repo}\` — 브랜치 \`main\``));
   assert.doesNotMatch(prompts[0].split("## 워커 작업 위치")[0], /sinawi\/abcdef12/);

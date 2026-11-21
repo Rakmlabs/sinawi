@@ -8,15 +8,17 @@ import type { RunCliOptions } from "./cli.js";
 import { nextGoalStep, parseChecklist, parseGoals, GOAL_MAX_IDLE_TURNS } from "./goals.js";
 import { Orchestra } from "./orchestra.js";
 import { ensureWorkerWorktree, mergeWorktree } from "./worktrees.js";
+import { whenAborted } from "./test-abort.js";
 
 const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env }).trim();
 
-async function waitFor(predicate: () => boolean, ms = 5_000) {
+async function waitFor(predicate: () => boolean, ms = 5_000, state?: () => unknown) {
   const start = Date.now();
   while (!predicate()) {
     // Polls until true, so a long limit costs nothing when it passes; it only absorbs a loaded machine.
-    if (Date.now() - start > ms * 4) throw new Error("timed out");
+    // `state` goes into the error, so a timeout says where the run stood (stuck, or only slow).
+    if (Date.now() - start > ms * 4) throw new Error(`timed out${state ? `: ${JSON.stringify(state())}` : ""}`);
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -117,7 +119,9 @@ test("a commander runs goals in order, merges each into the main checkout and re
   const orchestra = new Orchestra(undefined, runner);
   orchestra.worktreeDataDir = dataDir;
   const commander = await orchestra.create({ prompt: "둘 다 해", agent: "codex", workers: ["claude"], cwd: repo, commander: true });
-  await waitFor(() => commander.commander!.goals.length === 2 && commander.commander!.goals.every((goal) => goal.state === "merged") && commander.status === "done" && prompts.some((prompt) => prompt.includes("[앱] 모든 목표가 끝났습니다")), 15_000);
+  await waitFor(() => commander.commander!.goals.length === 2 && commander.commander!.goals.every((goal) => goal.state === "merged") && commander.status === "done" && prompts.some((prompt) => prompt.includes("[앱] 모든 목표가 끝났습니다")), 45_000,
+    // Two goals with real worktrees and merges: about 9 s with 16 busy cores, over 60 s at load 108 (third review).
+    () => ({ status: commander.status, working: orchestra.isWorking(commander.id), goals: commander.commander!.goals.map((goal) => goal.state), prompts: prompts.length }));
   assert.equal(await readFile(join(repo, "one.txt"), "utf8"), "one\n");
   assert.equal(await readFile(join(repo, "two.txt"), "utf8"), "two\n");
   const [first, second] = commander.commander!.goals.map((goal) => orchestra.get(goal.childId!)!);
@@ -266,7 +270,7 @@ test("stopping a chat that split its work stops its goal chats and starts no mor
   const { repo, dataDir } = await tempRepo(t);
   const runner = async (options: RunCliOptions) => {
     if (options.usageContext?.role === "worker") {
-      await new Promise((resolve) => options.signal?.addEventListener("abort", resolve, { once: true }));
+      await whenAborted(options.signal);
       return { exitCode: 130, finalText: "" };
     }
     if (options.prompt.includes("당신은 Sinawi의 총지휘입니다")) return { exitCode: 0, finalText: "정리" };
