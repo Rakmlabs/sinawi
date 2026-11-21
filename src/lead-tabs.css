@@ -9,7 +9,7 @@
   background: var(--bg-app);
   font-size: calc(13px * var(--font-scale));
 }
-.lead-tabs-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; max-width: 160px; min-width: 0; padding-right: 6px; color: var(--text); }
+.lead-tabs-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; max-width: 160px; min-width: 0; padding-right: 6px; color: var(--text); }
 .lead-tabs-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .lead-tabs-avatar { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--avatar-text); font-size: calc(12px * var(--font-scale)); font-weight: 700; }
 .lead-tabs-list {
@@ -20,8 +20,10 @@
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-  mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
 }
+.lead-tabs-list.fade-end { mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
+.lead-tabs-list.fade-start { mask-image: linear-gradient(to right, transparent, black 24px); }
+.lead-tabs-list.fade-start.fade-end { mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent); }
 .lead-tabs-list::-webkit-scrollbar { display: none; }
 .lead-tab {
   display: inline-flex;
@@ -82,3 +84,38 @@
   .lead-tab { max-width: 150px; }
 }
 .lead-tab-agent { flex: none; padding: 0 6px; border-radius: 999px; background: var(--warn-tint, var(--bg-inset)); color: var(--text-secondary); font-size: calc(12px * var(--font-scale)); }
+
+/* Closing a tab hides it here only; the chat stays in the list and the sidebar. */
+.lead-tab-wrap { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; }
+.lead-tab-wrap .lead-tab { padding-right: 24px; }
+.lead-tab-close {
+  position: absolute; right: 5px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-subtle); opacity: 0; cursor: pointer;
+}
+.lead-tab-wrap:hover .lead-tab-close, .lead-tab-wrap.active .lead-tab-close, .lead-tab-close:focus-visible { opacity: 1; }
+.lead-tab-close:hover { background: var(--bg-inset); color: var(--text); }
+.lead-tab-rename { outline: none; box-shadow: inset 0 0 0 1px var(--border-focus); }
+
+/* Every chat of the lead with its workers, searchable (the tab bar's list button). */
+.lead-tabs-all-wrap { position: relative; flex: none; }
+.lead-tabs-all {
+  position: relative; display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-surface); color: var(--text-secondary); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.lead-tabs-all:hover, .lead-tabs-all.open { border-color: var(--border-strong); color: var(--text); }
+.lead-tabs-all:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.lead-tabs-all-running { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.lead-tabs-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; display: flex; flex-direction: column; width: min(420px, calc(100vw - 32px)); max-height: min(560px, 70vh);
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg-raised); box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.18));
+}
+.lead-tabs-panel-head { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid var(--border-subtle); }
+.lead-tabs-search { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; height: 30px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); color: var(--text-muted); }
+.lead-tabs-search:focus-within { border-color: var(--border-focus); }
+.lead-tabs-search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; color: var(--text); font: inherit; }
+.lead-tabs-panel-body { overflow-y: auto; padding: 6px; }
+.lead-tabs-panel-note { margin: 0; padding: 8px 12px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
+@media (max-width: 720px) {
+  .lead-tabs-all span:not(.lead-tabs-all-running) { display: none; }
+}
+.lead-tabs-panel .lead-tabs-search input { height: auto; padding: 0; border: 0; border-radius: 0; box-shadow: none; outline: none; background: none; }

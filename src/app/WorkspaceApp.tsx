@@ -912,7 +912,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     {active.status === "running" && <button type="button" className="chat-action-text" disabled={busy} onClick={() => stopSession(active.id)}><Square size={11} fill="currentColor" aria-hidden="true" />{t("ws.stop")}</button>}
                   </div>}
                   {tabStewardId && !selectedWorker && <LeadTabs stewardId={tabStewardId} name={tabLeadName} threads={leadThreads} activeId={active?.id} busy={busy} leadAgent={stewards.find((item) => item.id === tabStewardId)?.agent}
-                    onSelect={sidebarHandlers.onSelect} onNew={() => sidebarHandlers.onNewStewardThread(tabStewardId)} onRename={sidebarHandlers.onRenameSession} />}
+                    onSelect={sidebarHandlers.onSelect} onSelectWorker={sidebarHandlers.onSelectWorker} onNew={() => sidebarHandlers.onNewStewardThread(tabStewardId)} onRename={sidebarHandlers.onRenameSession} />}
                   {active && active.status !== "running" && <QuotaReturnBanner active={active} threshold={quotaThreshold} allowedAgents={allowedAgents} busy={busy}
                     onReturn={(eventId) => void sessionAction(`/sessions/${active.id}/quota/return`, { eventId })} />}
                   <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} {...chatScrollHandlers}>

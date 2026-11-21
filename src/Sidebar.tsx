@@ -16,6 +16,7 @@ import { Beat } from "./Beat";
 import { DeleteDialog } from "./DeleteDialog";
 import { t, translatedMap, useT } from "./i18n";
 import { originLabel } from "./origin";
+import { LeadChatList } from "./app/LeadChatList";
 
 const agentNames: Record<Session["agent"], string> = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
 const statusLabels = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
@@ -295,26 +296,37 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
           onClick={(event) => menu === group.id ? setMenu(undefined) : openMenu("steward", group.id, event, true)}><MoreHorizontal size={15} /></button>
       </div>
     </div>;
-    const active = selected === session.id && tab === "workspace" && !props.selectedWorker;
+    const chats = [session, ...group.others];
+    const running = chats.filter((chat) => chat.status === "running").length;
+    const failed = !running && session.status === "error";
     const preview = leadPreview(session).replace(/\s+/gu, " ").slice(0, 140);
     const progress = goalProgress(session);
+    const folded = closed.has(group.id) && !searching;
+    const anyActive = chats.some((chat) => chat.id === selected) && tab === "workspace";
+    // The lead itself on top (who, and what it is doing now); every chat of it below, each with the
+    // workers it put to work (src/app/LeadChatList.tsx). The row is the lead, not its latest chat.
     return <div key={group.id} className="sidebar-chat sidebar-lead">
       <div className="sidebar-row" onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}>
-        <button className={`sidebar-lead-open${active ? " active" : ""}`} aria-current={active ? "page" : undefined} title={`${name} · ${session.title} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
+        <button className={`sidebar-lead-open${anyActive && folded ? " active" : ""}`} title={`${name} · ${statusLabels[session.status]}`}
+          aria-expanded={!folded} aria-controls={`lead-chats-${group.id}`}
+          onClick={() => setClosed((old) => { const next = new Set(old); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next; })}>
           {leadAvatar(name)}
           <span className="sidebar-lead-copy">
             <span className="sidebar-lead-name"><span className="sidebar-session-title">{name}</span>
-              {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : session.status === "error" ? <span className="status-dot error" role="img" aria-label={statusLabels.error} /> : null}
+              {running > 0 ? <small className="sidebar-lead-running"><span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span>{t("lcl.running", { n: running })}</small> : failed ? <span className="status-dot error" role="img" aria-label={statusLabels.error} /> : null}
               {progress && <small className="sidebar-goal-progress" title={t("goal.progressTitle", progress)}>{progress.done}/{progress.total}</small>}
             </span>
             <small className="sidebar-lead-preview">{preview || t("side.leadNoMessages")}</small>
           </span>
+          <ChevronRight size={14} className={`folder-chevron ${folded ? "" : "open"}`} aria-hidden="true" />
         </button>
         {newThreadButton(group)}
         <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: name })} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
       </div>
-      {subChats(session.id).length > 0 && <div className="sidebar-subchats" aria-label={t("side.subChats", { title: name })}>{subChats(session.id).map(sessionRow)}</div>}
-      {group.others.length > 0 && <div className="sidebar-subchats sidebar-lead-threads" aria-label={t("side.leadThreads", { name, count: group.others.length + 1 })}>{group.others.map(sessionRow)}</div>}
+      {!folded && <div id={`lead-chats-${group.id}`} aria-label={t("side.leadThreads", { name, count: chats.length })}>
+        <LeadChatList chats={chats} query={query} selectedId={tab === "workspace" ? selected : undefined} selectedWorker={props.selectedWorker}
+          onSelect={onSelect} onSelectWorker={props.onSelectWorker} childChats={subChats} limit={5} />
+      </div>}
     </div>;
   };
   const ungrouped = visibleSessions.filter((session) => !visibleGroups.some((group) => group.id === session.groupId));
