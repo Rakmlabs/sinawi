@@ -1,4 +1,5 @@
 import { installAccountSkills } from "./account-tooling.js";
+import { originLabel } from "../src/origin.js";
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes, SETUP_TOOLS } from "./setup.js";
 import { BrowserBridge, QUEUE_DIR, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
@@ -440,7 +441,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const message = JSON.stringify({ type: "notifications", workspaceId });
     for (const client of websocket.clients) if (client.readyState === WebSocket.OPEN) client.send(message);
   });
-  const notify = (input: NotificationInput) => { void notifications.add(input).catch((error) => console.error("알림 저장 실패:", error.message)); };
+  const notify = (input: NotificationInput, options?: { renew?: boolean }) => { void notifications.add(input, options).catch((error) => console.error("알림 저장 실패:", error.message)); };
   const terminal = createTerminalService({ onError: (message) => {
     notify({ workspaceId: workspaceState.currentWorkspaceId, key: "terminal:load", type: "error", title: "통합 터미널 시작 실패", body: message });
   } });
@@ -1275,15 +1276,17 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const session = orchestra.get(routeParam(req.params.id));
       if (!session) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
       const windows = openClients();
-      // Another workspace is not switched to under the user's hands: a notification opens it instead.
+      // The user's screen is theirs (review M3): a notification always says who asks to show what, and
+      // the window opens the chat by itself only when the user is on an empty, untouched new-chat screen
+      // (src/app/show-session.ts). Another workspace is never switched to under the user's hands.
+      const asker = originLabel(requestOrigin(req.body?.origin));
       const here = session.workspaceId === currentWorkspace();
+      notify({ workspaceId: session.workspaceId, type: "info", key: `show:${session.id}`, title: asker && asker !== "MCP" ? `${asker}: 이 채팅을 봐 달라고 합니다` : "이 채팅을 봐 달라는 요청", body: session.title, action: { label: "채팅 열기", sessionId: session.id } }, { renew: true });
       if (here) {
         const message = JSON.stringify({ type: "show-session", sessionId: session.id, workspaceId: session.workspaceId });
         for (const client of windows) client.send(message);
-      } else {
-        notify({ workspaceId: session.workspaceId, type: "info", key: `show:${session.id}`, title: `채팅을 봐 달라는 요청: ${session.title}`, body: "외부 AI가 이 채팅을 보여 달라고 했습니다.", action: { label: "세션 열기", sessionId: session.id } });
       }
-      res.json({ ok: true, shown: here && windows.length > 0, notified: !here, workspaceId: session.workspaceId, title: session.title });
+      res.json({ ok: true, shown: here && windows.length > 0, notified: true, workspaceId: session.workspaceId, title: session.title });
     } catch (error) { errorResponse(res, error, 400); }
   });
   app.post("/api/sessions/:id/merge/approve", async (req, res) => {
@@ -1481,7 +1484,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       }
       if (/^\/api\/(?:stewards|settings)(?:\/|$)/.test(url.pathname) && !url.searchParams.has("workspace")) url.searchParams.set("workspace", caller.workspaceId);
       // Work an outside AI or a lead asks for carries who asked: the chat shows it (RequestOrigin).
-      const startsWork = method === "POST" && /^\/api\/sessions(?:\/[^/]+\/messages)?$/.test(url.pathname);
+      const startsWork = method === "POST" && /^\/api\/sessions(?:\/[^/]+\/(?:messages|show))?$/.test(url.pathname);
       const ownChat = caller.sessionId && url.pathname === `/api/sessions/${encodeURIComponent(caller.sessionId)}/messages`;
       if (startsWork && caller.origin && !ownChat && body && typeof body === "object") body = { ...(body as Record<string, unknown>), origin: caller.origin };
       return dispatch(method, `${url.pathname}${url.search}`, body);

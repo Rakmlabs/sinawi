@@ -100,6 +100,11 @@ test("an outside orchestrator opens a lead's chat with its own model, waits for 
   assert.deepEqual(listed.map((row: { id: string }) => row.id), [opened.id]);
   const shown = await mcp("show_session", { session_id: opened.id });
   assert.equal(shown.ok, true);
+  // Review M3: a notification says who asks; the window decides whether to switch (src/app/show-session.ts).
+  const notes = (await call("GET", "/api/notifications")).body as { key?: string; title: string; action?: { sessionId?: string } }[];
+  const asked = notes.find((note) => note.key === `show:${opened.id}`);
+  assert.equal(asked?.title, "Grok Bot: 이 채팅을 봐 달라고 합니다");
+  assert.equal(asked?.action?.sessionId, opened.id);
 });
 
 test("a lead's new chat without agent or model keeps the lead's own CLI and model", async (t) => {

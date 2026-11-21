@@ -41,6 +41,7 @@ import { ToolsPanel, toolsShortcut } from "../ToolsPanel";
 import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SessionDraft, SkillInfo as Skill, Bot as Preset, Steward } from "../../server/types";
 import { leadName, stewardDescription, stewardIdOf } from "../lead";
 import { LeadTabs, threadTabs } from "./LeadTabs";
+import { showSessionAction } from "./show-session";
 import { accountScopeKey, scopedApi, workspaceApi, workspacePath, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
@@ -395,6 +396,14 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   // Messages agents are still writing live in draftStore, not in this component's state: a draft
   // frame arrives ~every 50ms and must re-render only the message that shows it.
   useEffect(() => () => draftStore.clear(), []);
+  // When the user last typed or clicked: show_session waits until they leave the app alone.
+  const lastInputAt = useRef(0);
+  useEffect(() => {
+    const touched = () => { lastInputAt.current = Date.now(); };
+    window.addEventListener("keydown", touched, true);
+    window.addEventListener("pointerdown", touched, true);
+    return () => { window.removeEventListener("keydown", touched, true); window.removeEventListener("pointerdown", touched, true); };
+  }, []);
   const onServerMessage = (message: ServerMessage) => {
     if (message.type === "draft" && typeof message.sessionId === "string") {
       draftStore.put(message as unknown as SessionDraft);
@@ -412,9 +421,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       setSelected((current) => current === message.sessionId ? undefined : current);
     }
     if (message.type === "session") setSessions((old) => upsertPushedSession(old, message.session as Session, Boolean(message.incremental)));
-    // An outside AI asked to show the user a chat (show_session): open it when it is in this workspace.
+    // An outside AI asked to show the user a chat (show_session). The server always notifies; the chat
+    // opens by itself only from an empty, untouched new-chat screen (review M3).
     if (message.type === "show-session" && typeof message.sessionId === "string" && message.workspaceId === workspaceId) {
-      selectConversation(message.sessionId);
+      const action = showSessionAction({ requested: message.sessionId, tab, selected, prompt, drafting: Boolean(stewardDraft), lastInputAt: lastInputAt.current });
+      if (action === "open") selectConversation(message.sessionId);
     }
   };
   useEffect(() => { void load(); }, []);

@@ -112,7 +112,7 @@ npm 패키지 `@rakmlabs/sinawi`는 **아직 게시 전**입니다(`npx`가 404)
 | `send_message` | 담당·외부 | 아니오 | 채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 실행 중인 채팅에는 보낼 수 없다(먼저 wait_for_session). 결과는 wait_for_session, get_session_summary, get_session으로 확인한다. |
 | `ask_running_session` | 담당·외부 | 아니오 | 실행 중인 채팅에 진행을 멈추지 않고 곁가지 질문을 한다("지금 어디까지 했어?"). 답은 채팅에 따로 붙는다. 호출자와 같은 공간의 채팅에만 물을 수 있다. |
 | `wait_for_session` | 외부만 | 아니오(읽기) | 채팅의 이번 턴이 끝날 때까지(또는 timeout_sec까지) 기다렸다가 상태, 담당의 마지막 답, 그사이 생긴 메시지를 준다. done이 false면 아직 실행 중이니 after_event_id에 lastEventId를 넣어 다시 부른다. create_session·send_message 다음에 쓴다. |
-| `show_session` | 외부만 | 아니오 | 시나위 앱 화면에 이 채팅을 띄운다(사용자가 지금 보게 한다). 공간이 다르면 그 공간으로 바꾸지 않고 알림만 띄운다. |
+| `show_session` | 외부만 | 아니오 | 사용자에게 이 채팅을 봐 달라고 알린다(알림에 '채팅 열기'). 사용자가 빈 새 채팅 화면을 두고 자리를 비웠을 때만 앱이 그 채팅으로 바로 넘어가고, 다른 채팅·설정을 보거나 입력 중이면 화면을 바꾸지 않는다. |
 | `rename_session` | 담당·외부 | 아니오 | 채팅 제목을 바꾼다. 사이드바에 보이는 이름이 바뀐다. |
 | `move_session_to_group` | 담당·외부 | 아니오 | 채팅을 프로젝트 그룹에 넣거나(group_id) 그룹에서 뺀다(group_id 비움). |
 | `move_session_to_workspace` | 담당·외부 | **필요** | 채팅을 다른 워크스페이스(공간)로 옮긴다. 옮긴 채팅은 그 공간의 정책(전체 권한, 컴퓨터 조작 등)을 따르게 되므로 사용자 승인 후 옮긴다. 공간 ID는 list_workspaces. |

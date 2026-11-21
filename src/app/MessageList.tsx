@@ -174,7 +174,7 @@ function MessageRowBody({ e, sessionId, continued, task, workerConfigs, undoable
         </div>}
         {isUser && e.metadata?.via && <span className={`message-origin ${e.metadata.via.kind}`} title={e.metadata.via.client}>
           {e.metadata.via.kind === "lead" ? <UserCheck size={12} aria-hidden="true" /> : <Plug size={12} aria-hidden="true" />}
-          {e.metadata.via.kind === "lead" ? t("origin.sentByLead", { name: originLabel(e.metadata.via) }) : t("origin.sentBy", { name: originLabel(e.metadata.via) })}
+          {e.metadata.via.kind === "lead" ? t("origin.sentByLead", { name: originLabel(e.metadata.via) }) : originLabel(e.metadata.via) === "MCP" ? t("origin.sentByUnknown") : t("origin.sentBy", { name: originLabel(e.metadata.via) })}
         </span>}
         {isUser && liveBadge && <em className={`live-status-badge${e.metadata?.live === "directive" ? " directive" : ""}`}>{liveBadge}</em>}
         {e.type === "error" && e.metadata?.loginNeeded ? <LoginNeeded login={e.metadata.loginNeeded} text={text} /> :

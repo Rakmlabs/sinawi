@@ -167,7 +167,10 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
       saveSeenToasts(workspaceId, seen);
     }
     const fresh = notifications.filter((notification) => {
-      if (notification.read || !toastEnabled(notification.type)) return false;
+      // An outside AI asking the user to look at a chat (show_session) is the one info that pops up:
+      // it no longer switches the screen, so the toast is how the user learns of it (review M3).
+      const asked = notification.key?.startsWith("show:") ?? false;
+      if (notification.read || !(toastEnabled(notification.type) || asked)) return false;
       const version = toastVersion(notification);
       return !seen.has(version);
     }).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()).slice(0, 3);
