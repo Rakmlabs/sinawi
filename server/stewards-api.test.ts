@@ -74,7 +74,7 @@ const legacyLead = (cwd: string): Session => ({
 test("leads can be created, listed, read, edited and deleted", async (t) => {
   const { app, directory } = await fixture(t);
   assert.deepEqual((await request(app, "GET", "/api/stewards")).body, []);
-  const created = await request(app, "POST", "/api/stewards", { name: " 백엔드 ", agent: "claude", systemPrompt: "백엔드만 봅니다", skills: ["review"], workers: [{ agent: "codex", model: "gpt-5" }], cwds: ["/work/api"] });
+  const created = await request(app, "POST", "/api/stewards", { name: " 백엔드 ", agent: "claude", systemPrompt: "백엔드만 봅니다", skills: ["review"], workers: [{ agent: "codex", model: "gpt-5" }], cwds: [directory] });
   assert.equal(created.status, 201);
   assert.equal(created.body.name, "백엔드");
   assert.equal(created.body.mergePolicy, "ask", "a new lead asks before merging");

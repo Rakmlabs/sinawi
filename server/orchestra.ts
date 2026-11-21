@@ -1,8 +1,9 @@
 import { numberedOptions } from "../src/composer.js";
 import { maxEvents, trimEvents } from "./events.js";
 import { randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { killSessionProcessGroups, runCli } from "./cli.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
@@ -218,13 +219,35 @@ const LEAD_SKILL_MARK = /^\s*created-by:\s*sinawi-lead\s*$/mu;
 const leadMarked = (text: string) => LEAD_SKILL_MARK.test(/^---\n([\s\S]*?)\n---/u.exec(text)?.[1] ?? "");
 
 /**
- * A lead owns one project: its folder is never the home folder or `/`, whoever asks (the app, the
- * HTTP API, an outside AI's create_lead, a lead creating another). The app picks a folder first too.
+ * A lead owns one project: its folder is never the home folder, `/`, or a folder that holds the home
+ * folder (`/Users`), whoever asks (the app, the HTTP API, an outside AI's create_lead, a lead creating
+ * another, a new chat of an existing lead). The folder is compared as the file system sees it
+ * (device and inode of its real path), so another spelling (`/USERS/me` on a case-insensitive disk,
+ * `$HOME/.`, a symlink to the home folder) is the same folder. It must be an existing absolute folder.
  */
 export function assertLeadFolder(cwd: string | undefined, home = homedir()): void {
   if (!cwd) return;
-  const folder = resolve(cwd);
-  if (folder === resolve(home) || folder === "/") throw new Error(`담당은 프로젝트 폴더에서 일합니다. 홈 폴더나 / (${folder})는 담당 폴더가 될 수 없으니 프로젝트 폴더를 고르세요.`);
+  const refuse = (folder: string) => new Error(`담당은 프로젝트 폴더에서 일합니다. 홈 폴더나 / (${folder})는 담당 폴더가 될 수 없으니 프로젝트 폴더를 고르세요.`);
+  if (!isAbsolute(cwd)) throw new Error(`담당 폴더는 절대 경로여야 합니다: ${cwd}`);
+  let real: string;
+  try {
+    real = realpathSync.native(cwd);
+    if (!statSync(real).isDirectory()) throw new Error("not a folder");
+  } catch { throw new Error(`담당 폴더가 없거나 폴더가 아닙니다: ${cwd}`); }
+  const id = (path: string) => { try { const info = statSync(path); return `${info.dev}:${info.ino}`; } catch { return undefined; } };
+  const mine = id(real);
+  // The home folder and every folder above it, as the file system identifies them.
+  const above = new Set<string>();
+  let walk: string;
+  try { walk = realpathSync.native(home); } catch { walk = resolve(home); }
+  for (;;) {
+    const found = id(walk);
+    if (found) above.add(found);
+    const parent = dirname(walk);
+    if (parent === walk) break;
+    walk = parent;
+  }
+  if (real === "/" || (mine && above.has(mine))) throw refuse(real);
 }
 
 export class Orchestra {
@@ -589,7 +612,8 @@ export class Orchestra {
       input = { ...input, agent: input.agent || fallback.agent, ...(input.workers?.length ? {} : { workers: fallback.workers, workerConfigs: undefined }) };
     }
     if (!entity && input.steward?.name?.trim()) this.assertStewardNameFree(input.steward.name.trim().slice(0, 80), undefined, input.workspaceId ?? "personal");
-    if (!entity && input.steward) assertLeadFolder(input.cwd);
+    // A new lead, or a new chat of a lead opened in another folder (that folder joins the lead's list below).
+    if (input.steward) assertLeadFolder(input.cwd);
     const workspaceId = input.workspaceId ?? "personal";
     // No first message: an empty chat that waits for one (followup starts its first turn).
     const empty = !input.prompt.trim();
