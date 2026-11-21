@@ -1468,7 +1468,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     }
     void sendApprovals().catch(() => undefined);
   });
-  type CallerContext = { surface: ToolSurface; sessionId?: string; workspaceId: string; touch?: () => void; origin?: RequestOrigin };
+  type CallerContext = { surface: ToolSurface; sessionId?: string; workspaceId: string; touch?: () => void; origin?: RequestOrigin; signal?: AbortSignal };
   /** Names for the IDs an approval's line mentions, read when it is asked for. */
   const approvalNames = async () => {
     const [groups, bots] = await Promise.all([loadGroups(options.dataDir).catch(() => []), loadBots(options.dataDir).catch(() => [])]);
@@ -1506,7 +1506,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       const startsWork = method === "POST" && /^\/api\/sessions(?:\/[^/]+\/(?:messages|show))?$/.test(url.pathname);
       const ownChat = caller.sessionId && url.pathname === `/api/sessions/${encodeURIComponent(caller.sessionId)}/messages`;
       if (startsWork && caller.origin && !ownChat && body && typeof body === "object") body = { ...(body as Record<string, unknown>), origin: caller.origin };
-      return dispatch(method, `${url.pathname}${url.search}`, body);
+      return dispatch(method, `${url.pathname}${url.search}`, body, caller.signal);
     }, workspaceId: caller.workspaceId,
     ...(caller.surface === "lead" && caller.sessionId ? { leadCall: (name: string, args: Record<string, unknown>) => orchestra.leadToolCall(caller.sessionId!, name, args, caller.touch) } : {}),
   });
@@ -1548,7 +1548,10 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         return;
       }
       await ready;
-      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace(), origin: { kind: "mcp", client: mcpClientName(req.headers["x-sinawi-client"], req.body) } };
+      // The MCP client hanging up ends what it waits on (wait_for_session), not only at its deadline.
+      const hungUp = new AbortController();
+      res.on("close", () => { if (!res.writableFinished) hungUp.abort(); });
+      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace(), origin: { kind: "mcp", client: mcpClientName(req.headers["x-sinawi-client"], req.body) }, signal: hungUp.signal };
       const answer = await handleToolMcp(req.body ?? {}, "external", APP_MCP_SERVER, (name, args) => callTool(caller, name, args));
       if (!answer) { res.status(202).end(); return; }
       res.json(answer);

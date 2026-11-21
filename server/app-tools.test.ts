@@ -372,3 +372,14 @@ test("a lead's skill in the repo waits for the user's approval; its own skills d
   assert.equal(needsApproval(write, { name: "a", scope: "lead" }), false);
   assert.match(write.summary!({ name: "shared", description: "모두 쓰는 규칙", scope: "project" }, {} as never), /프로젝트 스킬 shared/u);
 });
+
+test("an in-process call whose outer caller hangs up closes the route's response (review L2)", async () => {
+  const { injectRequest } = await import("./app-tools");
+  let closed = false;
+  const handler = ((_req: unknown, res: import("node:http").ServerResponse) => { res.on("close", () => { closed = true; }); }) as never;
+  const hangUp = new AbortController();
+  const call = injectRequest(handler, "GET", "/api/sessions/x/wait", undefined, {}, 60_000, true, hangUp.signal);
+  hangUp.abort();
+  await assert.rejects(call, /연결을 끊었습니다/u);
+  assert.equal(closed, true, "the waiting route sees the close and stops");
+});

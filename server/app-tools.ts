@@ -992,7 +992,8 @@ export const IN_PROCESS = Symbol("sinawi.inProcess");
 export const inProcess = (req: unknown) => Boolean(req && (req as Record<symbol, unknown>)[IN_PROCESS]);
 
 /** Runs one request through the Express app without a socket and returns its status and JSON body. */
-export function injectRequest(app: Handler, method: string, path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = 10 * 60_000, trusted = true): Promise<{ status: number; body: unknown }> {
+/** `signal`: the outer caller hung up; the route sees its response close, as with a real client (review L2). */
+export function injectRequest(app: Handler, method: string, path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = 10 * 60_000, trusted = true, signal?: AbortSignal): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const socket = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
     const req = new IncomingMessage(socket as never);
@@ -1028,6 +1029,10 @@ export function injectRequest(app: Handler, method: string, path: string, body?:
       return res;
     }) as typeof res.end;
     try { app(req, res); } catch (error) { clearTimeout(timer); finished = true; reject(error); return; }
+    if (signal) {
+      const hangUp = () => { if (finished) return; finished = true; clearTimeout(timer); res.emit("close"); reject(new Error("호출한 쪽이 연결을 끊었습니다.")); };
+      if (signal.aborted) hangUp(); else signal.addEventListener("abort", hangUp, { once: true });
+    }
     if (json) req.push(json);
     req.complete = true;
     req.push(null);
@@ -1036,8 +1041,8 @@ export function injectRequest(app: Handler, method: string, path: string, body?:
 
 /** `dispatch` for a ToolContext: the route's error message becomes the tool error the AI reads. */
 export function routeDispatcher(app: Handler) {
-  return async (method: string, path: string, body?: unknown) => {
-    const { status, body: output } = await injectRequest(app, method, path, body);
+  return async (method: string, path: string, body?: unknown, signal?: AbortSignal) => {
+    const { status, body: output } = await injectRequest(app, method, path, body, {}, undefined, true, signal);
     if (status >= 400) {
       const message = output && typeof output === "object" && "error" in output ? String((output as { error: unknown }).error) : `요청 실패 (${status})`;
       throw new Error(message);
