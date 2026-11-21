@@ -70,6 +70,16 @@ test("`sinawi mcp` forwards each JSON-RPC line to /api/app-mcp with the token as
   assert.deepEqual(app.seen.map((request) => JSON.parse(request.body).method).sort(), ["initialize", "tools/list"], "the message is forwarded as is");
 });
 
+test("`sinawi mcp` names its client to the app (clientInfo from initialize, or SINAWI_CLIENT_NAME), so chats show who asked", async (t) => {
+  const app = await stubApp(t);
+  const init = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "grok-cli", title: "Grok Build", version: "1" } } };
+  await bridge({ SINAWI_PORT: String(app.port), SINAWI_MCP_TOKEN: "good-token" }, [init, rpc(2, "tools/list")]);
+  assert.deepEqual(app.seen.map((request) => request.headers["x-sinawi-client"]), ["Grok%20Build", "Grok%20Build"], "the title wins over the id, every later call carries it");
+  const named = await stubApp(t);
+  await bridge({ SINAWI_PORT: String(named.port), SINAWI_MCP_TOKEN: "good-token", SINAWI_CLIENT_NAME: "내 그록봇" }, [init]);
+  assert.equal(decodeURIComponent(String(named.seen[0].headers["x-sinawi-client"])), "내 그록봇");
+});
+
 test("`sinawi mcp` skips notifications, reports the app's refusals, and finds the token in the data folder", async (t) => {
   const app = await stubApp(t);
   const url = `http://127.0.0.1:${app.port}`;

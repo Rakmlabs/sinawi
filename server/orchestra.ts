@@ -220,6 +220,10 @@ export class Orchestra {
   private turnChoices = new Set<string>();
   /** Goal sessions whose next followup is a turn the app opens itself. */
   private goalAutoNext = new Set<string>();
+  /** Chats between a follow-up call and its turn running (Orchestra.isWorking). */
+  private starting = new Set<string>();
+  /** Lead chats whose turn ended and whose merge and next step are still being worked out. */
+  private settling = new Set<string>();
   /** Goals that had stopped before the user's current message: restored when the turn was only an answer. */
   private goalPaused = new Map<string, { stopped: string; outcome?: NonNullable<Session["goal"]>["outcome"]; checklist: string }>();
   /** Goal sessions whose running turn the app opened itself. */
@@ -541,7 +545,11 @@ export class Orchestra {
     if (requested.parentId && entity) throw new Error("나눠 맡긴 채팅은 담당이 될 수 없습니다.");
     let input: StartSessionInput = entity ? {
       // A lead's threads live in the lead's workspace, wherever they were asked for from.
-      ...requested, ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}), agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort,
+      // A caller may pick this one thread's own CLI and model (an outside orchestrator: "do it with Codex").
+      ...requested, ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}),
+      ...(requested.steward?.agent || requested.steward?.model
+        ? { agent: requested.steward.agent ?? entity.agent, model: requested.steward.model, reasoningEffort: undefined }
+        : { agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort }),
       ...(entity.workers.length ? { workers: entity.workers.map((worker) => worker.agent), workerConfigs: structuredClone(entity.workers) } : {}),
       systemPrompt: entity.systemPrompt, skills: requested.skills ?? [],
     } : requested;
@@ -592,6 +600,7 @@ export class Orchestra {
       skills: selectedSkills, systemPrompt: input.systemPrompt ?? "",
       ...(input.commander ? { commander: { goals: [], forced: true } } : input.goal || input.autoRun || input.steward ? { goal: freshGoal() } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.origin ? { origin: { ...input.origin } } : {}),
       ...(input.steward && !input.parentId ? { steward: { turns: 0, since: new Date().toISOString(), ...(entity ? { id: entity.id, name: entity.name } : input.steward.name?.trim() ? { name: input.steward.name.trim().slice(0, 80) } : {}) } } : {}),
     };
     this.sessions.set(session.id, session);
@@ -614,7 +623,7 @@ export class Orchestra {
     this.controllers.set(session.id, controller);
     this.event(session, agent, "status", `${agentNames[agent]} 세션을 시작했습니다.`);
     if (session.steward) this.event(session, agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
-    this.event(session, "user", "message", input.prompt);
+    this.event(session, "user", "message", input.prompt, input.origin ? { metadata: { via: { ...input.origin } } } : {});
     if (mediaRequest && !mediaOn) this.mediaPolicyNotice(session);
     else if (autoMedia && !mediaLead) this.mediaFallbackNotice(session);
     void this.execute(session, `${input.prompt}${mediaRequest && !mediaOn ? MEDIA_OFF_NOTE : ""}`, selectedSkills, input.systemPrompt ?? "", controller, mediaLead || (mediaOn && agent === "grok"))
@@ -1476,6 +1485,25 @@ export class Orchestra {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.status === "running") throw new Error("세션이 이미 실행 중입니다.");
+    // From here until the turn is running (or refused) the chat counts as working (isWorking).
+    this.starting.add(id);
+    try { return await this.startFollowup(session, prompt, skills, settings, alreadyLogged); }
+    finally { this.starting.delete(id); }
+  }
+
+  /**
+   * The chat is still at work: a turn runs, the app is about to open the next one (a checklist turn,
+   * a message typed during the run, the lead's merge after a turn), or goal chats it split into run.
+   * What an outside caller waiting for the result (wait_for_session) must not mistake for "done".
+   */
+  isWorking(id: string): boolean {
+    const session = this.sessions.get(id);
+    if (!session) return false;
+    return session.status === "running" || this.starting.has(id) || this.settling.has(id) || this.goalAutoNext.has(id) || Boolean(session.commander?.goals.length && commanderActive(session));
+  }
+
+  private async startFollowup(session: Session, prompt: string, skills: string[], settings: ConversationSettings, alreadyLogged: boolean): Promise<Session> {
+    const id = session.id;
     // Left over from a run that was stopped or failed: older than this message, so it must not read as newer.
     const carried = session.pendingInstructions ?? [];
     delete session.pendingInstructions;
@@ -1509,7 +1537,7 @@ export class Orchestra {
     session.turnCount = (session.turnCount ?? session.events.filter((event) => event.agent === "user" && event.type === "message").length) + 1;
     // An empty chat (create without a prompt) takes its title from its first message.
     if (session.title === EMPTY_TITLE && !session.events.some((event) => event.agent === "user" && event.type === "message")) session.title = titleFrom(prompt);
-    if (!alreadyLogged) this.event(session, "user", "message", prompt);
+    if (!alreadyLogged) this.event(session, "user", "message", prompt, settings.origin ? { metadata: { via: { ...settings.origin } } } : {});
     const allowed = new Set(this.allowedAgents(session));
     // Media keywords pick Grok only while auto-switch is on and Grok is usable: the user's own choice wins,
     // and an unusable Grok means the current team carries on, never an error.
@@ -1866,9 +1894,13 @@ export class Orchestra {
     else this.event(session, session.agent, "status", tracking ? "이번 턴을 마쳤습니다." : "세션이 완료되었습니다.");
     // A project lead's work goes into the main checkout before anything else starts.
     if (session.steward) {
+      this.settling.add(session.id);
       void this.stewardTurnEnded(session, "done")
         .catch((error) => this.event(session, session.agent, "warning", error instanceof Error ? error.message : String(error)))
-        .finally(() => { if (session.status !== "running") this.afterFinish(session); });
+        .finally(() => {
+          try { if (session.status !== "running") this.afterFinish(session); }
+          finally { this.settling.delete(session.id); }
+        });
       return;
     }
     this.afterFinish(session);

@@ -170,12 +170,21 @@ function sessionRow(session: Row) {
     id: session.id, title: session.title, status: session.status, agent: session.agent, workers: session.workers, cwd: session.cwd,
     workspaceId: session.workspaceId, groupId: session.groupId, createdAt: session.createdAt, endedAt: session.endedAt,
     lead: session.steward ? defined({ id: session.steward.id, name: session.steward.name }) : undefined,
+    openedBy: session.origin ? `${session.origin.client} (${session.origin.kind})` : undefined,
     events: Array.isArray(session.events) ? session.events.length : undefined,
   });
 }
 
 function eventRow(event: Row) {
-  return defined({ id: event.id, type: event.type, role: event.role, agent: event.agent, workerId: event.workerId, time: event.time, text: clip(event.text, 4_000) });
+  const via = event.metadata?.via;
+  return defined({ id: event.id, type: event.type, role: event.role, agent: event.agent, workerId: event.workerId, time: event.time, text: clip(event.text, 4_000), sentBy: via ? `${via.client} (${via.kind})` : undefined });
+}
+
+/** Events after `afterId` (all of them when it is unknown or unset), for a caller reading a chat bit by bit. */
+function eventsAfter(events: Row[], afterId: unknown): Row[] {
+  if (typeof afterId !== "string" || !afterId) return events;
+  const index = events.findIndex((event) => event.id === afterId);
+  return index < 0 ? events : events.slice(index + 1);
 }
 
 /** Drops MCP servers' launch details (command, args, URL) from a /api/tools payload, wherever the rows sit. */
@@ -272,23 +281,23 @@ const APP: AppTool[] = [
   routeTool({
     name: "list_sessions", risk: "read", method: "GET", route: "/api/sessions",
     description: "채팅(세션) 목록: ID, 제목, 상태(running/done/error/stopped), 에이전트, 폴더, 담당 여부. 내용은 get_session이나 get_session_summary로 본다.",
-    properties: { workspace_id: str("이 워크스페이스의 채팅만. 비우면 전부."), status: str("이 상태만 (running, done, error, stopped)."), limit: num("최근 몇 개 (기본 50).") },
+    properties: { workspace_id: str("이 워크스페이스의 채팅만. 비우면 전부."), status: str("이 상태만 (running, done, error, stopped)."), lead_id: str("이 담당의 채팅(스레드)만 (list_leads의 ID)."), limit: num("최근 몇 개 (기본 50).") },
     path: (args) => `/api/sessions${query({ workspace: args.workspace_id })}`,
     pick: (output, args) => {
-      const rows = (output as Row[]).filter((session) => !args.status || session.status === args.status)
+      const rows = (output as Row[]).filter((session) => (!args.status || session.status === args.status) && (!args.lead_id || session.steward?.id === args.lead_id))
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
       return rows.slice(0, Math.max(1, Number(args.limit) || 50)).map(sessionRow);
     },
   }),
   routeTool({
     name: "get_session", risk: "read", method: "GET", route: "/api/sessions",
-    description: "채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다.",
-    properties: { session_id: str("채팅 ID."), limit: num("최근 이벤트 몇 개 (기본 30, 최대 200).") }, required: ["session_id"],
+    description: "채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. after_event_id를 주면 그 뒤에 생긴 것만 준다(앞서 읽은 마지막 이벤트 ID).",
+    properties: { session_id: str("채팅 ID."), limit: num("최근 이벤트 몇 개 (기본 30, 최대 200)."), after_event_id: str("이 이벤트 뒤의 것만 (이전 응답의 마지막 이벤트 ID).") }, required: ["session_id"],
     pick: (output, args) => {
       const session = (output as Row[]).find((item) => item.id === args.session_id);
       if (!session) throw new Error("세션을 찾을 수 없습니다.");
       const limit = Math.min(200, Math.max(1, Number(args.limit) || 30));
-      return { ...sessionRow(session), events: (session.events as Row[] ?? []).slice(-limit).map(eventRow) };
+      return { ...sessionRow(session), events: eventsAfter(session.events as Row[] ?? [], args.after_event_id).slice(-limit).map(eventRow) };
     },
   }),
   routeTool({
@@ -299,7 +308,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "create_session", risk: "write", method: "POST", route: "/api/sessions",
-    description: "새 채팅을 연다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 스레드로 열면 팀·폴더·워크스페이스는 담당 것을 쓴다. 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다.",
+    description: "새 채팅을 연다. 사용자는 시나위 화면에서 이 채팅을 실시간으로 보고 이어서 말할 수 있다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 채팅(탭)으로 열면 폴더·워크스페이스·지침·기억(노트)은 담당 것을 함께 쓰고, agent·model을 주면 이 채팅만 그 CLI·모델로 돌린다(비우면 담당의 CLI). 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 결과는 wait_for_session으로 기다린다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다.",
     properties: {
       prompt: str("첫 메시지(할 일). 비우면 빈 채팅."),
       title: str("채팅 제목(선택). 비우면 첫 메시지에서 만든다."),
@@ -321,13 +330,13 @@ const APP: AppTool[] = [
       skills: args.skills, groupId: args.group_id, workspaceId: args.workspace_id ?? ctx.workspaceId, mode: args.mode,
       // Always explicit: a chat without a mode follows the workspace's full-access switch (Orchestra.permissionModeOf).
       permissionMode: permissionMode(args.permission_mode) ?? "auto", autoRun: args.auto_run,
-      steward: typeof args.lead_id === "string" && args.lead_id ? { id: args.lead_id } : undefined,
+      steward: typeof args.lead_id === "string" && args.lead_id ? defined({ id: args.lead_id, agent: opt(args.agent), model: opt(args.model) }) : undefined,
     }),
     pick: (output) => sessionRow(output as Row),
   }),
   routeTool({
     name: "send_message", risk: "write", method: "POST", route: "/api/sessions/:id/messages",
-    description: "채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 결과는 get_session_summary나 get_session으로 확인한다.",
+    description: "채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 실행 중인 채팅에는 보낼 수 없다(먼저 wait_for_session). 결과는 wait_for_session, get_session_summary, get_session으로 확인한다.",
     properties: {
       session_id: str("채팅 ID."), prompt: str("보낼 메시지."), skills: strings("이번 메시지에 붙일 스킬."),
       permission_mode: { type: "string", enum: ["plan", "auto"], description: "plan: 계획만. auto: 실행 (기본)." },
@@ -343,6 +352,22 @@ const APP: AppTool[] = [
     properties: { session_id: str("실행 중인 채팅 ID."), prompt: str("질문.") }, required: ["session_id", "prompt"],
     path: (args) => `/api/sessions/${seg(args, "session_id")}/live`,
     body: (args) => ({ prompt: args.prompt }),
+  }),
+  routeTool({
+    name: "wait_for_session", risk: "read", method: "GET", route: "/api/sessions/:id/wait", surfaces: ["external"],
+    description: "채팅의 이번 턴이 끝날 때까지(또는 timeout_sec까지) 기다렸다가 상태, 담당의 마지막 답, 그사이 생긴 메시지를 준다. done이 false면 아직 실행 중이니 after_event_id에 lastEventId를 넣어 다시 부른다. create_session·send_message 다음에 쓴다.",
+    properties: {
+      session_id: str("채팅 ID."), timeout_sec: num("최대 몇 초 기다릴지 (기본 50, 최대 600). MCP 클라이언트의 도구 시간 제한보다 짧게."),
+      after_event_id: str("이 이벤트 뒤에 생긴 메시지만 (이전 응답의 lastEventId)."),
+    },
+    required: ["session_id"],
+    path: (args) => `/api/sessions/${seg(args, "session_id")}/wait${query({ timeout: args.timeout_sec, after: args.after_event_id })}`,
+  }),
+  routeTool({
+    name: "show_session", risk: "write", method: "POST", route: "/api/sessions/:id/show", surfaces: ["external"],
+    description: "시나위 앱 화면에 이 채팅을 띄운다(사용자가 지금 보게 한다). 공간이 다르면 그 공간으로 바꾸지 않고 알림만 띄운다.",
+    properties: { session_id: str("채팅 ID.") }, required: ["session_id"],
+    path: (args) => `/api/sessions/${seg(args, "session_id")}/show`, body: () => ({}),
   }),
   routeTool({
     name: "rename_session", risk: "write", method: "PATCH", route: "/api/sessions/:id",
@@ -849,7 +874,9 @@ const EXTERNAL_INSTRUCTIONS = [
   "Sinawi runs the Claude Code, Codex and Grok CLIs as one team on this Mac. These tools drive the running app.",
   "IDs come from list_* tools (list_sessions, list_leads, list_workspaces); never guess one.",
   "A tool marked [approval] does not run at once: it returns status \"pending_approval\" and waits for the user to approve it in the app. Tell the user, check list_approvals(approval_id) later, and do not send the same request again.",
-  "send_message starts work in a chat and returns at once; read progress with get_session.",
+  "Sinawi is where the user watches every chat an outside orchestrator starts: each chat you open shows in the app live, labelled with your client's name, and the user can keep talking in it.",
+  "To hand work to an agent: list_leads (a lead = one project with its folder, instructions and memory) → create_session(lead_id, prompt, optional agent/model) opens a new chat (tab) of that lead and starts at once → wait_for_session(session_id) until done is true → send_message(session_id, prompt) to continue in the same chat. Without a lead, create_session needs cwd.",
+  "create_session and send_message return at once; wait_for_session (or get_session with after_event_id) reads the progress. One chat runs one turn at a time; open another chat to run work in parallel.",
   "Tool descriptions and errors are in Korean. Answer the user in their own language.",
 ].join("\n");
 

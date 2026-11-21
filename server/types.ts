@@ -46,6 +46,17 @@ export interface Group {
   workspaceId: WorkspaceId;
 }
 
+/**
+ * Who asked for a chat or a message when it was not the user typing in the app: an outside AI over
+ * MCP (Grok Bot, Codex, Claude Code, Claude Desktop, ...) or another lead. Shown in the chat so the
+ * user sees who gave the work; the user can always keep talking in the same chat.
+ */
+export interface RequestOrigin {
+  kind: "mcp" | "lead";
+  /** The MCP client's name (its `clientInfo.name`, or SINAWI_CLIENT_NAME), or the lead's name. */
+  client: string;
+}
+
 export interface SessionEvent {
   id: string;
   sessionId: string;
@@ -60,7 +71,7 @@ export interface SessionEvent {
   reasoningEffort?: string;
   workerId?: string;
   workerLabel?: string;
-  metadata?: { auto?: boolean; from?: AgentId; to?: AgentId; reason?: string; previousConfig?: UpdateTeamInput; previousPlanner?: AgentSelection; undone?: boolean; deletedWorker?: boolean; quotaFallback?: boolean; resetsAt?: number; live?: "status" | "directive"; ambiguous?: boolean; promoted?: boolean; prompt?: string; targetWorkerId?: string; briefAutofilled?: string[]; phase?: "verify" | "replan" | "self-work" | "worker-report" | "verify-cut"; round?: number; stall?: "repeated-error" | "repeated-command" | "no-progress" | "tool-family-loop" | "no-success"; mergeHold?: "ask" | "never"; addedWorker?: AgentId; schedule?: ScheduleCard; leadSkill?: { name: string; scope: "lead" | "project"; action: "created" | "updated" } };
+  metadata?: { auto?: boolean; from?: AgentId; to?: AgentId; reason?: string; previousConfig?: UpdateTeamInput; previousPlanner?: AgentSelection; undone?: boolean; deletedWorker?: boolean; quotaFallback?: boolean; resetsAt?: number; live?: "status" | "directive"; ambiguous?: boolean; promoted?: boolean; prompt?: string; targetWorkerId?: string; briefAutofilled?: string[]; phase?: "verify" | "replan" | "self-work" | "worker-report" | "verify-cut"; round?: number; stall?: "repeated-error" | "repeated-command" | "no-progress" | "tool-family-loop" | "no-success"; mergeHold?: "ask" | "never"; addedWorker?: AgentId; schedule?: ScheduleCard; leadSkill?: { name: string; scope: "lead" | "project"; action: "created" | "updated" }; via?: RequestOrigin };
 }
 
 export interface PendingInstruction {
@@ -123,6 +134,8 @@ export interface Session {
   disabledStewardId?: string;
   /** The commander session this goal session was started for. */
   parentId?: string;
+  /** Who opened this chat when it was not the user in the app (an outside AI over MCP, another lead). */
+  origin?: RequestOrigin;
 }
 
 export interface GoalItem {
@@ -370,6 +383,8 @@ export interface ConversationSettings {
   permissionMode?: PermissionMode;
   /** Run multi-step requests to completion and split big ones into chats (server/goals.ts). */
   autoRun?: boolean;
+  /** Who sent this message when it was not the user in the app (see RequestOrigin). */
+  origin?: RequestOrigin;
 }
 
 export interface StartSessionInput extends ConversationSettings {
@@ -394,7 +409,7 @@ export interface StartSessionInput extends ConversationSettings {
   /** Starts as a commander that only splits the request into goal chats (server/goals.ts). */
   commander?: boolean;
   /** Starts as the project lead (server/steward.ts): a new one, or a new thread of Steward `id`. */
-  steward?: { name?: string; id?: string };
+  steward?: { name?: string; id?: string; agent?: AgentId; model?: string };
   parentId?: string;
 }
 

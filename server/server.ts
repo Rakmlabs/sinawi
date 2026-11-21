@@ -6,6 +6,7 @@ import { ComputerBridge, registerComputerRoutes, SHOT_DIR, watchComputerQueue, t
 import { findTool, handleToolMcp, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
 import { withJosa } from "./korean.js";
 import { ApprovalStore, approvalRequester, type AppApproval, type ApprovalStatus } from "./app-approvals.js";
+import { waitResult } from "./session-wait.js";
 import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, connectEntry, ensureAppMcpToken, scriptClientConfig, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
 import { LEAD_MCP_SERVER } from "./lead-tools.js";
 import { loadSchedules, saveSchedules, type ScheduleInput } from "./schedules.js";
@@ -47,7 +48,7 @@ import { enabledPublicSkills, publicSkills } from "./skills.js";
 import { RoutingService, type ModelCommandRunner, type PlannerRunner } from "./routing.js";
 import { workspaceIdPattern, createCoalescedSaver, loadBots, loadGroups, loadSessions, loadStewards, loadToolSettings, loadWorkspaceState, workspaceToolSettings, mutateBots, mutateGroups, mutateToolSettings, mutateWorkspaceState, saveSessions, saveStewards } from "./store.js";
 import { discoverMcpTools, updateMcpTool, type ToolCommandRunner } from "./tools.js";
-import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, Session, SessionDraft, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
+import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, RequestOrigin, Session, SessionDraft, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
 import { randomUUID } from "node:crypto";
 import { registerSessionFileRoutes } from "./session-files.js";
 import { registerLinkPreviewRoute } from "./link-preview.js";
@@ -208,12 +209,32 @@ function agents(value: unknown, max = 20): AgentId[] {
   return value.map(agent);
 }
 
+/**
+ * The outside AI's name: the bridge sends its client's `clientInfo.name` (or SINAWI_CLIENT_NAME) as
+ * `x-sinawi-client`; an `initialize` names it too. A bridge from before this header reads "MCP".
+ */
+export function mcpClientName(header: unknown, body?: any): string {
+  let name = "";
+  if (typeof header === "string") { try { name = decodeURIComponent(header); } catch { name = header; } }
+  if (!name && body?.method === "initialize") name = typeof body.params?.clientInfo?.name === "string" ? body.params.clientInfo.name : "";
+  return requestOrigin({ kind: "mcp", client: name })!.client;
+}
+
+/** Who asked, when an outside AI (MCP) or a lead sent the request: a short name, never markup. */
+export function requestOrigin(value: any): RequestOrigin | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  if (value.kind !== "mcp" && value.kind !== "lead") return undefined;
+  const client = typeof value.client === "string" ? value.client.replace(/[\u0000-\u001f<>]/gu, "").trim().slice(0, 60) : "";
+  return { kind: value.kind, client: client || (value.kind === "mcp" ? "MCP" : "lead") };
+}
+
 function conversationSettings(body: any): ConversationSettings {
   if (body?.mode !== undefined && body.mode !== "auto" && body.mode !== "manual") throw new Error("배정 방식이 올바르지 않습니다.");
   if (body?.autoSwitch !== undefined && typeof body.autoSwitch !== "boolean") throw new Error("자동 전환 설정이 올바르지 않습니다.");
   if (body?.permissionMode !== undefined && !["plan", "auto", "full"].includes(body.permissionMode)) throw new Error("권한 모드가 올바르지 않습니다.");
   if (body?.autoRun !== undefined && typeof body.autoRun !== "boolean") throw new Error("끝까지 진행 설정이 올바르지 않습니다.");
-  return { mode: body?.mode, autoSwitch: body?.autoSwitch, permissionMode: body?.permissionMode, autoRun: body?.autoRun };
+  const origin = requestOrigin(body?.origin);
+  return { mode: body?.mode, autoSwitch: body?.autoSwitch, permissionMode: body?.permissionMode, autoRun: body?.autoRun, ...(origin ? { origin } : {}) };
 }
 
 /** Schedule fields from a request body; schedules.ts checks the values. */
@@ -251,7 +272,11 @@ export function startInput(body: any, workspace: WorkspaceResolver, fallbackWork
     workspaceId: workspace(body?.workspaceId, fallbackWorkspace),
     // A commander's goal sessions are started by the app (parentId), never from a request.
     ...(body?.commander === true ? { commander: true } : body?.goal === true ? { goal: true } : {}),
-    ...(body?.steward === true || body?.steward && typeof body.steward === "object" ? { steward: { name: optionalString(body.steward?.name, 80), ...(body.steward?.id ? { id: string(body.steward.id, 100) } : {}) } } : {}),
+    ...(body?.steward === true || body?.steward && typeof body.steward === "object" ? { steward: {
+      name: optionalString(body.steward?.name, 80), ...(body.steward?.id ? { id: string(body.steward.id, 100) } : {}),
+      // This thread's own CLI and model instead of the lead's (an outside orchestrator picking the model).
+      ...(body.steward?.agent ? { agent: agent(body.steward.agent) } : {}), ...(body.steward?.model ? { model: optionalString(body.steward.model, 200) } : {}),
+    } } : {}),
   };
 }
 
@@ -1137,6 +1162,49 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try { await ready; res.json(orchestra.summary(routeParam(req.params.id))); }
     catch (error) { errorResponse(res, error, 404); }
   });
+  // An outside orchestrator waiting for a chat's turn (wait_for_session): answers when the chat is no
+  // longer working (Orchestra.isWorking) or at the timeout, with the lines said since `after`.
+  app.get("/api/sessions/:id/wait", async (req, res) => {
+    try {
+      await ready;
+      const id = routeParam(req.params.id);
+      if (!orchestra.get(id)) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
+      const seconds = Number(req.query.timeout);
+      const deadline = Date.now() + Math.min(600, Math.max(0, Number.isFinite(seconds) && req.query.timeout !== undefined ? seconds : 50)) * 1_000;
+      let gone = false;
+      res.on("close", () => { if (!res.writableFinished) gone = true; });
+      // Settled twice in a row: a turn that just ended may open the next one a moment later.
+      let quiet = 0;
+      while (!gone && Date.now() < deadline) {
+        quiet = orchestra.isWorking(id) ? 0 : quiet + 1;
+        if (quiet >= 2) break;
+        await new Promise((done) => setTimeout(done, quiet ? 400 : 500));
+      }
+      const session = orchestra.get(id);
+      if (!session) { res.status(404).json({ error: "세션이 지워졌습니다." }); return; }
+      if (gone) return;
+      const after = typeof req.query.after === "string" ? req.query.after : undefined;
+      res.json(waitResult(session, orchestra.isWorking(id), after, orchestra.stewardOf(session)));
+    } catch (error) { errorResponse(res, error, 400); }
+  });
+  // Brings a chat to the front of the app window (show_session): an outside AI shows the user its work.
+  app.post("/api/sessions/:id/show", async (req, res) => {
+    try {
+      await ready;
+      const session = orchestra.get(routeParam(req.params.id));
+      if (!session) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
+      const windows = openClients();
+      // Another workspace is not switched to under the user's hands: a notification opens it instead.
+      const here = session.workspaceId === currentWorkspace();
+      if (here) {
+        const message = JSON.stringify({ type: "show-session", sessionId: session.id, workspaceId: session.workspaceId });
+        for (const client of windows) client.send(message);
+      } else {
+        notify({ workspaceId: session.workspaceId, type: "info", key: `show:${session.id}`, title: `채팅을 봐 달라는 요청: ${session.title}`, body: "외부 AI가 이 채팅을 보여 달라고 했습니다.", action: { label: "세션 열기", sessionId: session.id } });
+      }
+      res.json({ ok: true, shown: here && windows.length > 0, notified: !here, workspaceId: session.workspaceId, title: session.title });
+    } catch (error) { errorResponse(res, error, 400); }
+  });
   app.post("/api/sessions/:id/merge/approve", async (req, res) => {
     try {
       const session = await orchestra.approveMerge(routeParam(req.params.id));
@@ -1297,7 +1365,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     }
     void sendApprovals().catch(() => undefined);
   });
-  type CallerContext = { surface: ToolSurface; sessionId?: string; workspaceId: string; touch?: () => void };
+  type CallerContext = { surface: ToolSurface; sessionId?: string; workspaceId: string; touch?: () => void; origin?: RequestOrigin };
   /** Names for the IDs an approval's line mentions, read when it is asked for. */
   const approvalNames = async () => {
     const [groups, bots] = await Promise.all([loadGroups(options.dataDir).catch(() => []), loadBots(options.dataDir).catch(() => [])]);
@@ -1330,6 +1398,10 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         if (target && target.workspaceId !== caller.workspaceId) throw new Error("같은 공간의 채팅에만 질문하거나 지시할 수 있습니다. 먼저 담당을 같은 공간으로 옮기세요.");
       }
       if (/^\/api\/(?:stewards|settings)(?:\/|$)/.test(url.pathname) && !url.searchParams.has("workspace")) url.searchParams.set("workspace", caller.workspaceId);
+      // Work an outside AI or a lead asks for carries who asked: the chat shows it (RequestOrigin).
+      const startsWork = method === "POST" && /^\/api\/sessions(?:\/[^/]+\/messages)?$/.test(url.pathname);
+      const ownChat = caller.sessionId && url.pathname === `/api/sessions/${encodeURIComponent(caller.sessionId)}/messages`;
+      if (startsWork && caller.origin && !ownChat && body && typeof body === "object") body = { ...(body as Record<string, unknown>), origin: caller.origin };
       return dispatch(method, `${url.pathname}${url.search}`, body);
     }, workspaceId: caller.workspaceId,
     ...(caller.surface === "lead" && caller.sessionId ? { leadCall: (name: string, args: Record<string, unknown>) => orchestra.leadToolCall(caller.sessionId!, name, args, caller.touch) } : {}),
@@ -1358,7 +1430,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     }
     try {
       await ready;
-      const caller: CallerContext = { surface: "lead", sessionId: run.sessionId, workspaceId: session.workspaceId, touch: () => touchRunActivity(token) };
+      const caller: CallerContext = { surface: "lead", sessionId: run.sessionId, workspaceId: session.workspaceId, touch: () => touchRunActivity(token), origin: { kind: "lead", client: stewardName(session) } };
       const answer = await handleToolMcp(req.body ?? {}, "lead", LEAD_MCP_SERVER, (name, args) => callTool(caller, name, args));
       if (!answer) { res.status(202).end(); return; }
       res.json(answer);
@@ -1372,7 +1444,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         return;
       }
       await ready;
-      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace() };
+      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace(), origin: { kind: "mcp", client: mcpClientName(req.headers["x-sinawi-client"], req.body) } };
       const answer = await handleToolMcp(req.body ?? {}, "external", APP_MCP_SERVER, (name, args) => callTool(caller, name, args));
       if (!answer) { res.status(202).end(); return; }
       res.json(answer);

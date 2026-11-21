@@ -82,7 +82,7 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 <!-- tools:start -->
 <!-- Generated from server/app-tools.ts by `npm run docs:ai`. Do not edit by hand. -->
 
-89 tools (85 on the lead surface, 79 on the external surface), 30 of them need approval.
+91 tools (85 on the lead surface, 81 on the external surface), 30 of them need approval.
 
 ### Lead-only (inside a lead's run)
 
@@ -112,12 +112,14 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 
 | Tool | Surface | Approval | Summary |
 |---|---|---|---|
-| `list_sessions` | lead, external | no (read) | Chats: ID, title, status, agent, folder, whether it is a lead chat. |
-| `get_session` | lead, external | no (read) | One chat with its recent messages and events (answers, tool runs, errors). |
+| `list_sessions` | lead, external | no (read) | Chats: ID, title, status, agent, folder, their lead and who opened them; lead_id lists one lead's chats. |
+| `get_session` | lead, external | no (read) | One chat with its recent messages and events (answers, tool runs, errors); after_event_id returns only newer ones. |
 | `get_session_summary` | lead, external | no (read) | A chat at a glance: status, the lead's last answer, checklist progress, pending merge, lead info. |
-| `create_session` | lead, external | no | Open a new chat; with a prompt it starts working, without one it stays empty. Can open a new thread of a lead (lead_id). |
-| `send_message` | lead, external | no | Send a follow-up message to a chat (starts the next turn). |
+| `create_session` | lead, external | no | Open a new chat (the user watches it live in the app); with a prompt it starts working, without one it stays empty. With lead_id it opens a new chat (tab) of that lead sharing its folder, instructions and memory; agent/model then pick that chat's CLI and model. |
+| `send_message` | lead, external | no | Send a follow-up message to a chat (starts the next turn). A running chat refuses it: wait_for_session first. |
 | `ask_running_session` | lead, external | no | Ask a running chat in the caller's workspace a side question without stopping it. Cross-workspace asking is unavailable. The answer is attached separately. |
+| `wait_for_session` | external only | no (read) | Wait until a chat's turn is done (or timeout_sec, default 50, max 600) and get its status, the lead's last answer and the messages since after_event_id. While done is false, call again with lastEventId. |
+| `show_session` | external only | no | Bring a chat to the front of the Sinawi window so the user sees it; a chat in another workspace raises a notification instead. |
 | `rename_session` | lead, external | no | Rename a chat (the name shown in the sidebar). |
 | `move_session_to_group` | lead, external | no | Put a chat into a project group, or take it out (empty group_id). |
 | `move_session_to_workspace` | lead, external | **yes** | Move a chat to another workspace; it then follows that workspace's policy. |
