@@ -96,6 +96,10 @@ test("an outside orchestrator opens a lead's chat with its own model, waits for 
   assert.equal(mine.text, "내가 직접 이어서");
   assert.equal(mine.metadata?.via, undefined);
 
+  // Review L3: a model is a name, never an option for the CLI.
+  const bad = await call("POST", "/api/sessions", { prompt: "x", cwd: project, agent: "claude", model: "--help", workers: ["claude"] });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /모델 이름이 올바르지 않습니다/u);
   const listed = await mcp("list_sessions", { lead_id: lead.id });
   assert.deepEqual(listed.map((row: { id: string }) => row.id), [opened.id]);
   const shown = await mcp("show_session", { session_id: opened.id });

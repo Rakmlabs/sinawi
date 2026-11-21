@@ -164,6 +164,13 @@ function optionalString(value: unknown, max = 10_000): string | undefined {
   return string(value, max);
 }
 
+/** A model name for `--model <name>`: never an option ("--help"), never spaces (review L3). */
+export function optionalModel(value: unknown): string | undefined {
+  const model = optionalString(value, 200);
+  if (model && !/^[A-Za-z0-9][\w.:/@[\]+-]*$/u.test(model)) throw new Error(`모델 이름이 올바르지 않습니다: ${model.slice(0, 40)}`);
+  return model;
+}
+
 function optionalReasoningEffort(value: unknown): string | undefined {
   const effort = optionalString(value, 30);
   if (effort && !["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error("추론 강도가 올바르지 않습니다.");
@@ -214,7 +221,7 @@ function agentSelection(value: unknown): AgentSelection {
     ...(input.id ? { id: string(input.id, 100) } : {}),
     ...(input.label ? { label: string(input.label, 100) } : {}),
     ...(input.sessionMode ? { sessionMode: input.sessionMode as "new" | "resume" } : {}),
-    ...(input.model ? { model: string(input.model, 200) } : {}),
+    ...(input.model ? { model: optionalModel(input.model)! } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: optionalReasoningEffort(input.reasoningEffort) } : {}),
     ...(input.reason ? { reason: string(input.reason, 500) } : {}),
   };
@@ -290,7 +297,7 @@ export function startInput(body: any, workspace: WorkspaceResolver, fallbackWork
     agent: body?.agent == null || body.agent === "" ? undefined as unknown as AgentId : agent(body.agent),
     // A new thread of a lead may leave the folder out: it opens in the lead's (Orchestra.create).
     workers: agents(body?.workers, 3), cwd: body?.steward?.id && (body?.cwd == null || body.cwd === "") ? "" : string(body?.cwd, 4_096),
-    model: optionalString(body?.model, 200), reasoningEffort: optionalReasoningEffort(body?.reasoningEffort),
+    model: optionalModel(body?.model), reasoningEffort: optionalReasoningEffort(body?.reasoningEffort),
     workerConfigs: agentSelections(body?.workerConfigs), planner: body?.planner == null ? undefined : agentSelection(body.planner),
     skills: ids(body?.skills),
     systemPrompt: optionalString(body?.systemPrompt, 50_000), resumeSessionId: optionalString(body?.resumeSessionId, 500),
@@ -301,7 +308,7 @@ export function startInput(body: any, workspace: WorkspaceResolver, fallbackWork
     ...(body?.steward === true || body?.steward && typeof body.steward === "object" ? { steward: {
       name: optionalString(body.steward?.name, 80), ...(body.steward?.id ? { id: string(body.steward.id, 100) } : {}),
       // This thread's own CLI and model instead of the lead's (an outside orchestrator picking the model).
-      ...(body.steward?.agent ? { agent: agent(body.steward.agent) } : {}), ...(body.steward?.model ? { model: optionalString(body.steward.model, 200) } : {}),
+      ...(body.steward?.agent ? { agent: agent(body.steward.agent) } : {}), ...(body.steward?.model ? { model: optionalModel(body.steward.model) } : {}),
     } } : {}),
   };
 }
@@ -345,7 +352,7 @@ export function workspaceDefaults(value: unknown): WorkspaceDefaults {
     ...conversationSettings(input),
     ...(input.agent == null ? {} : { agent: agent(input.agent) }),
     ...(input.workers == null ? {} : { workers: agents(input.workers, 3) }),
-    ...(input.model == null || input.model === "" ? {} : { model: string(input.model, 200) }),
+    ...(input.model == null || input.model === "" ? {} : { model: optionalModel(input.model)! }),
     ...(input.reasoningEffort == null || input.reasoningEffort === "" ? {} : { reasoningEffort: optionalReasoningEffort(input.reasoningEffort) }),
     ...(input.workerConfigs == null ? {} : { workerConfigs: agentSelections(input.workerConfigs) }),
   };
@@ -362,7 +369,7 @@ export function stewardInput(body: any, create = false): StewardPatch {
     ...(body.systemPrompt !== undefined ? { systemPrompt: body.systemPrompt.trim() } : {}),
     ...(body.skills !== undefined ? { skills: ids(body.skills) } : {}),
     ...(body.agent !== undefined ? { agent: agent(body.agent) } : {}),
-    ...(body.model !== undefined ? { model: optionalString(body.model, 200) ?? "" } : {}),
+    ...(body.model !== undefined ? { model: optionalModel(body.model) ?? "" } : {}),
     ...(body.reasoningEffort !== undefined ? { reasoningEffort: optionalReasoningEffort(body.reasoningEffort) ?? "" } : {}),
     ...(body.workers !== undefined ? { workers: agentSelections(body.workers) } : {}),
     ...(body.mergePolicy !== undefined ? { mergePolicy: body.mergePolicy } : {}),
@@ -1825,7 +1832,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
 
   app.post("/api/bots", async (req, res) => {
     try {
-      const bot: Bot = { id: randomUUID(), name: string(req.body?.name, 100), agent: agent(req.body?.agent), model: optionalString(req.body?.model, 200), skills: ids(req.body?.skills), systemPrompt: optionalString(req.body?.systemPrompt, 50_000) ?? "", createdAt: new Date().toISOString() };
+      const bot: Bot = { id: randomUUID(), name: string(req.body?.name, 100), agent: agent(req.body?.agent), model: optionalModel(req.body?.model), skills: ids(req.body?.skills), systemPrompt: optionalString(req.body?.systemPrompt, 50_000) ?? "", createdAt: new Date().toISOString() };
       await mutateBots((bots) => { bots.push(bot); }, options.dataDir);
       res.status(201).json(bot);
     } catch (error) { errorResponse(res, error); }
