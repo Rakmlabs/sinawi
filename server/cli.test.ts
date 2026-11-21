@@ -61,6 +61,12 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
     assert.ok(denied(grok.args).some((rule) => matches(rule, command)), command);
     assert.ok(denied(grokOn.args).some((rule) => matches(rule, command)), `${command} (on)`);
   }
+  // Sixth review R6-4: what others see on GitHub is denied to Grok either way; reading is not.
+  for (const command of ["gh pr merge 7 --squash", "gh pr close 7", "gh pr review 7 --approve", "gh pr comment 7 -b hi", "gh pr create -t x -b y", "gh issue create -t x", "gh issue comment 3 -b hi", "gh run rerun 1", "gh run cancel 1"]) {
+    assert.ok(denied(grok.args).some((rule) => matches(rule, command)), command);
+    assert.ok(denied(grokOn.args).some((rule) => matches(rule, command)), `${command} (on)`);
+  }
+  for (const command of ["gh pr view 7", "gh pr checks 7", "gh pr list", "gh issue list", "gh run view 1", "gh pr checkout 7"]) assert.ok(!denied(grok.args).some((rule) => matches(rule, command)), command);
   // Fourth review R4-2: text the shell only resolves when it runs ("no""de", n''ode, $(which node), chains)
   // is denied while the switch is off; real Grok 1.0.92 refused each of these forms by these rules.
   for (const rule of ["Bash(*$*)", "Bash(*`*)", "Bash(*;*)", "Bash(*|*)", "Bash(*>*)", 'Bash(*""*)', "Bash(*''*)", "Bash(*\\*)", 'Bash("*)']) {

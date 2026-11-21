@@ -117,7 +117,8 @@ export function staticCommandWords(command: string): string[] | undefined {
 
 /**
  * Forms of pre-approved programs that reach outside the project (third review H2-b), on the words of
- * one command: `gh api` with a method or fields (writes to GitHub), `git push` that forces, deletes
+ * one command: `gh api` with a method or fields and `gh pr`/`issue`/`run` subcommands that change
+ * what others see on GitHub (writes to GitHub), `git push` that forces, deletes
  * or mirrors, `xcrun simctl spawn` (runs a program on the host), `curl -K` (a config file can set any
  * option), `trash` of a path outside the folder. The prefix rules pre-approve the plain program; for
  * these forms the hook answers "ask", whatever the workspace switch says. Grok denies the same forms
@@ -130,6 +131,11 @@ export function riskyWords(words: string[]): boolean {
   while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[index]!) || ["env", "command", "exec", "nohup", "time"].includes(words[index]!))) index += 1;
   const program = (words[index] ?? "").replace(/^.*\//u, "");
   const rest = words.slice(index + 1);
+  // Sixth review R6-4: what others on GitHub see (a PR merged or closed, a review, a comment, a new
+  // issue, a run cancelled) asks like a `gh api` write. Reading (list, view, diff, checks) and
+  // `gh pr checkout` (local) do not.
+  const ghWrites: Record<string, string[]> = { pr: ["create", "comment", "edit", "ready", "merge", "close", "reopen", "review", "lock", "unlock"], issue: ["create", "comment", "edit", "close", "reopen", "develop", "delete", "transfer", "pin", "unpin", "lock", "unlock"], run: ["rerun", "cancel", "delete"] };
+  if (program === "gh" && ghWrites[rest[0] ?? ""]?.includes(rest[1] ?? "")) return true;
   if (program === "gh" && rest[0] === "api") {
     for (let at = 1; at < rest.length; at++) {
       const word = rest[at]!;

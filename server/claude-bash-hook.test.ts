@@ -301,6 +301,16 @@ test("find that only lists is allowed without a card; find that acts or follows 
   }
 });
 
+// Sixth review R6-4: gh subcommands that change what others see on GitHub ask, with the switch on too,
+// like a `gh api` write.
+test("gh writes to GitHub ask either way", () => {
+  for (const command of ["gh pr merge 7 --squash", "gh pr close 7", "gh pr review 7 --approve", "gh pr comment 7 -b hi", "gh pr create -t x -b y", "gh pr edit 7 --add-label x", "gh pr ready 7", "gh issue create -t x -b y", "gh issue comment 3 -b hi", "gh issue close 3", "gh run rerun 1", "gh run cancel 1"]) {
+    assert.equal(decide(command), "ask", command);
+    assert.equal(decide(command, true), "ask", `${command} (on)`);
+  }
+  for (const command of ["gh pr view 7", "gh pr checks 7", "gh pr diff 7", "gh pr list", "gh pr status", "gh issue list", "gh issue view 3", "gh run list", "gh run view 1", "gh pr checkout 7"]) assert.notEqual(decide(command), "ask", command);
+});
+
 // Tenth review R10-1: a hooks folder inside the project (husky) made every git command ask, `git status`
 // too. A git command that runs none of the hooks in that folder passes; which command runs which hook
 // is githooks(5), and the second test checks it against the git on this machine.

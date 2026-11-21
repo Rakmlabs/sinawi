@@ -220,6 +220,9 @@ const longFlag = (program: string, flag: string) => [`${program} ${flag}*`, `${p
 export const RISKY_SHELL_PATTERNS = [
   ...longFlag("rg", "--pre"), "git -c*", "git --config-env*", "git *--output*", "git *--ext-diff*", ...longFlag("git", "--exec"), ...longFlag("git", "--upl"), ...longFlag("git", "--rece"), "GIT_*",
   ...shortFlag("git push", "f"), ...shortFlag("git push", "d"), "git push *--force*", "git push *--delete*", "git push *--mirror*", "git push *--prune*", "git push * +*", "git push * :*",
+  ...["create", "comment", "edit", "ready", "merge", "close", "reopen", "review", "lock", "unlock"].map((op) => `gh pr ${op}*`),
+  ...["create", "comment", "edit", "close", "reopen", "develop", "delete", "transfer", "pin", "unpin", "lock", "unlock"].map((op) => `gh issue ${op}*`),
+  "gh run rerun*", "gh run cancel*", "gh run delete*",
   ...shortFlag("gh api", "X"), ...shortFlag("gh api", "f"), ...shortFlag("gh api", "F"), "gh api *--method*", "gh api *--field*", "gh api *--raw-field*", "gh api *--input*",
   ...shortFlag("curl", "o"), ...shortFlag("curl", "O"), ...shortFlag("curl", "K"), ...shortFlag("curl", "T"), "curl *--output*", "curl *--remote-name*", "curl *--config*", "curl *--upload-file*", "curl *@*", "curl *file:*",
   "xcrun simctl spawn*", "trash *..*", "trash /*", "trash * /*", "trash ~*", "trash * ~*",
