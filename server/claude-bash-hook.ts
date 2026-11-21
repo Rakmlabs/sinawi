@@ -22,8 +22,10 @@
  *   is set in the hook's environment. Because `cd` may be skipped (`false && cd x`) or run in a
  *   subshell/pipeline, every relative path is checked against every directory the shell could be in.
  *
- * Not guaranteed: what `npm test`/`npm run` scripts or git hooks do (they run project code, exactly
- * as the same single command would under the normal `Bash(npm:*)`/`Bash(git:*)` rules), a CDPATH set
+ * Not guaranteed: what `npm test`/`npm run` scripts or git hooks and config already in the repository
+ * do (they run project code, exactly as the same single command would under the normal
+ * `Bash(npm:*)`/`Bash(git:*)` rules; while the switch is off, writing into a `.git` folder asks,
+ * inGitDir), a CDPATH set
  * only in the user's shell rc (invisible to the hook), and races with other processes changing the
  * folder between the check and the run. What is neither approved nor asked for here gets no decision
  * and falls through to Claude's normal permission rules.
@@ -340,6 +342,56 @@ export function optionsAllowed(words: string[]): boolean {
 }
 
 /**
+ * Whether `target` (absolute, or relative to `cwd`) resolves, through symlinks, into a git directory
+ * below `root`: a path component `.git` (any case: macOS folders ignore it). Sixth review R6-1: a
+ * line written to `.git/config` (`core.fsmonitor`, `diff.external`, `core.hooksPath`) or a file in
+ * `.git/hooks` is run by the next allowed `git status`/`git diff`/`git commit`, so while the
+ * workspace switch is off, writes there ask.
+ *
+ * Self-contained on purpose (its source goes into the hook script).
+ */
+export function inGitDir(target: string, cwd: string, root: string, host: HookHost): boolean {
+  if (!target) return false;
+  let current = host.isAbsolute(target) ? host.resolve(target) : host.resolve(cwd, target);
+  const rest: string[] = [];
+  let real = current;
+  for (let depth = 0; depth < 4096; depth++) {
+    if (host.exists(current)) {
+      try { real = host.join(host.realpath(current), ...rest.reverse()); } catch { return true; }
+      break;
+    }
+    const parent = host.dirname(current);
+    if (parent === current) break;
+    rest.push(host.basename(current));
+    current = parent;
+  }
+  let rootReal = root;
+  try { rootReal = host.realpath(host.resolve(root)); } catch { /* compare with the path as given */ }
+  const rel = host.relative(rootReal, real);
+  return rel.split(host.sep).some((part) => part.toLowerCase() === ".git");
+}
+
+/**
+ * Whether git started in `dir` finds its repository through a `.git` entry, not through a folder
+ * that only looks like a bare repository (`HEAD`, `objects/`, `refs/`, and a `config` that git
+ * obeys). Such a folder can be written without touching `.git` (R6-1), so git asks there.
+ *
+ * Self-contained on purpose (its source goes into the hook script).
+ */
+export function gitRepositoryTrusted(dir: string, host: HookHost): boolean {
+  let current = dir;
+  try { current = host.realpath(host.resolve(dir)); } catch { /* walk the path as given */ }
+  for (let depth = 0; depth < 4096; depth++) {
+    if (host.exists(host.join(current, ".git")) || host.basename(current).toLowerCase() === ".git") return true;
+    if (host.exists(host.join(current, "HEAD")) && host.exists(host.join(current, "objects")) && host.exists(host.join(current, "refs"))) return false;
+    const parent = host.dirname(current);
+    if (parent === current) return true;
+    current = parent;
+  }
+  return true;
+}
+
+/**
  * The hook's answer for one Bash command: "allow" (the compound safe set, bashCommandAllowed),
  * "ask" (the user decides on an approval card, even in Claude's own auto mode), or undefined
  * (Claude's own rules decide).
@@ -368,6 +420,10 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
   // gh names API paths (`/repos/x`), not files: its files are `@FILE` values and download folders.
   const ghFiles = () => args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : []);
   if (!argumentsStayInside(words[0] === "gh" ? ghFiles() : args, cwd, root, host)) return "ask";
+  // R6-1: writes into a git directory, and git in a folder that only looks like a repository.
+  const readers = ["git", "cat", "head", "tail", "ls", "rg", "wc", "jq", "file", "stat", "du", "lsof", "echo", "pwd", "ffprobe"];
+  if (!readers.includes(words[0]!) && args.some((arg) => [arg, arg.slice(arg.indexOf("=") + 1), arg.replace(/^@/u, "")].some((value) => inGitDir(value, cwd, root, host)))) return "ask";
+  if (words[0] === "git" && !gitRepositoryTrusted(cwd, host)) return "ask";
   return undefined;
 }
 
@@ -498,8 +554,12 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
       return true;
     }
     if (plainPrograms.has(program)) return true;
-    if (pathPrograms.has(program)) return optionsAllowed(segment) && pathArgsOk(args, dirs);
-    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs);
+    if (pathPrograms.has(program)) {
+      // R6-1: the programs here that write (`mkdir`, `touch`, `sort -o`) never write into a git directory.
+      if ((program === "mkdir" || program === "touch" || program === "sort") && args.some((arg) => [...dirs].some((dir) => inGitDir(arg.slice(arg.indexOf("=") + 1), dir, rootReal, host)))) return false;
+      return optionsAllowed(segment) && pathArgsOk(args, dirs);
+    }
+    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, host));
     if (program === "find") return findAllowed(args, dirs);
     if (packageManagers.has(program)) {
       if (!host.runtimePrograms) return false;
@@ -518,9 +578,10 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
     segments++;
     const dirs = top();
     // Redirections resolve against the directory before this segment's own cd.
-    for (const { target } of targets) {
+    for (const { kind, target } of targets) {
       if (target.text === "/dev/null") continue;
       if (!locate(target.text, dirs)) return false;
+      if (kind === "out" && [...dirs].some((dir) => inGitDir(target.text, dir, rootReal, host))) return false;
     }
     return segmentOk(segment, dirs);
   };
@@ -623,13 +684,22 @@ const __name = (fn) => fn;
 // The pre-approved prefixes (supervision.ts DEVELOPMENT_SHELL_PROGRAMS): with the switch off, only a
 // simple command of fixed words starting with one of them is left to Claude's rules.
 const prefixes = ${JSON.stringify(DEVELOPMENT_SHELL_PROGRAMS)};
-${[bashCommandAllowed, optionsAllowed, staticCommandWords, riskyWords, riskyCommand, preapprovedPrefix, argumentsStayInside, hookDecision].map((fn) => fn.toString()).join("\n")}
+${[bashCommandAllowed, optionsAllowed, inGitDir, gitRepositoryTrusted, staticCommandWords, riskyWords, riskyCommand, preapprovedPrefix, argumentsStayInside, hookDecision].map((fn) => fn.toString()).join("\n")}
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   try {
     const data = JSON.parse(input);
+    if (data && data.tool_name && data.tool_name !== "Bash") {
+      // Edit/Write/NotebookEdit (R6-1): while the switch is off, writing into a git directory asks.
+      const file = data.tool_input && (data.tool_input.file_path || data.tool_input.notebook_path);
+      const cwd = typeof data.cwd === "string" && data.cwd ? data.cwd : root;
+      if (!host.runtimePrograms && typeof file === "string" && ${inGitDir.name}(file, cwd, root || cwd, host)) {
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "Sinawi: git runs what its config and hooks say (core.fsmonitor, hooks), so writing into a .git folder needs approval while this workspace does not pre-approve programs that run code" } }));
+      }
+      return;
+    }
     const command = data && data.tool_input && typeof data.tool_input.command === "string" ? data.tool_input.command : "";
     const cwd = typeof data.cwd === "string" && data.cwd ? data.cwd : root;
     const decision = ${hookDecision.name}(command, cwd, root || "", host, prefixes);
@@ -661,5 +731,6 @@ export async function ensureBashHookScript(dataDir: string): Promise<string> {
 /** `--settings` JSON that runs the hook for Bash calls, bounded to `root`. */
 export function bashHookSettings(scriptPath: string, root: string, nodeBinary = process.execPath, runtimePrograms = false): string {
   const command = [nodeBinary, scriptPath, root, ...(runtimePrograms ? ["runtime"] : [])].map(shellQuote).join(" ");
-  return JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command, timeout: 10 }] }] } });
+  const hooks = [{ type: "command", command, timeout: 10 }];
+  return JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks }, { matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks }] } });
 }

