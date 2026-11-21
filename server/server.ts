@@ -98,6 +98,10 @@ export async function recoverStaleSessions(
 }
 
 /** `full` forces a whole snapshot: the client merges incremental events by id, so it never learns about edits or removals. */
+const WS_PING_MS = 30_000;
+/** Bytes a window may have unread before its session updates wait (M4). */
+const WS_BUFFER_LIMIT = 8 * 1024 * 1024;
+
 export function sessionStreamMessage(session: Session, lastEventId?: string, full = false) {
   const lastIndex = lastEventId && !full ? session.events.findIndex((event) => event.id === lastEventId) : -1;
   if (lastEventId && lastIndex >= 0) {
@@ -413,7 +417,7 @@ export function withWorkspaceAccounts(runner: PlannerRunner, policyFor?: Workspa
   };
 }
 
-export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean } = {}) {
+export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean; wsPingMs?: number } = {}) {
   const app = express();
   app.disable("x-powered-by");
   const smallJson = express.json({ limit: "1mb" });
@@ -446,19 +450,46 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         if (seen.size > 10000) seen.delete(seen.values().next().value!);
       }
     }
-    for (const client of websocket.clients) {
-      if (client.readyState !== WebSocket.OPEN) continue;
-      let delivered = deliveredEvents.get(client);
-      if (!delivered) {
-        delivered = new Map();
-        deliveredEvents.set(client, delivered);
-      }
-      const message = sessionStreamMessage(session, delivered.get(session.id), publishOptions?.full);
-      client.send(JSON.stringify(message));
-      const latest = session.events.at(-1)?.id;
-      if (latest) delivered.set(session.id, latest);
-    }
+    for (const client of websocket.clients) sendSession(client, session, publishOptions?.full);
   };
+  /**
+   * One session's new events to one window. A window that is not reading (a stalled WebView, a
+   * sleeping Mac) is skipped while its socket buffer is full: what it missed goes in one message
+   * once it drains (the ping tick below catches it up), instead of piling up in server memory.
+   */
+  const behind = new WeakSet<WebSocket>();
+  const sendSession = (client: WebSocket, session: Session, full?: boolean) => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    if (client.bufferedAmount > WS_BUFFER_LIMIT) { behind.add(client); return; }
+    let delivered = deliveredEvents.get(client);
+    if (!delivered) {
+      delivered = new Map();
+      deliveredEvents.set(client, delivered);
+    }
+    const message = sessionStreamMessage(session, delivered.get(session.id), full);
+    client.send(JSON.stringify(message));
+    const latest = session.events.at(-1)?.id;
+    if (latest) delivered.set(session.id, latest);
+  };
+  // Every 30s: a window that did not answer the last ping is gone (half-open after sleep or a
+  // network change) and is closed, so it no longer counts as an open app window (ao-browser,
+  // ao-computer, /api/health). A window that was behind gets what it missed.
+  const alive = new WeakSet<WebSocket>();
+  const keepalive = setInterval(() => {
+    for (const client of websocket.clients) {
+      if (!alive.has(client)) { client.terminate(); continue; }
+      alive.delete(client);
+      try { client.ping(); } catch { client.terminate(); continue; }
+      if (behind.has(client) && client.bufferedAmount <= WS_BUFFER_LIMIT) {
+        behind.delete(client);
+        for (const session of orchestra.list()) {
+          if (deliveredEvents.get(client)?.get(session.id) !== session.events.at(-1)?.id) sendSession(client, session);
+        }
+      }
+    }
+  }, options.wsPingMs ?? WS_PING_MS);
+  keepalive.unref();
+  httpServer.once("close", () => clearInterval(keepalive));
   const broadcastRemoval = (sessionId: string) => {
     for (const client of websocket.clients) {
       if (client.readyState !== WebSocket.OPEN) continue;
@@ -583,6 +614,13 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     orchestra.restore(sessions, stewards, { legacyMergePolicy: state.stewardSettings?.legacyMergePolicy, defaultWorkspaceId: state.workspaces[0]?.id ?? state.currentWorkspaceId });
     // Missed while the app was off: the first stewardTick runs or skips them (MISSED_GRACE_MS).
     orchestra.restoreSchedules(schedules);
+  });
+  // A failed start (an unreadable data file, no permission) is reported by /api/health and logged;
+  // the server stays up instead of dying on an unhandled rejection and crash-looping under launchd.
+  let startError = "";
+  ready.catch((error: unknown) => {
+    startError = error instanceof Error ? error.message : String(error);
+    console.error("[sinawi] 데이터를 불러오지 못했습니다 / could not load data:", startError);
   });
   // Start discovery even when settings were saved by an earlier app version.
   // Settings errors remain visible through the API without blocking session recovery.
@@ -731,7 +769,14 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   registerSimRoutes(app, simOptions);
   registerSimViewRoutes(app);
   if (options.browserQueue) { const stop = watchSimQueue(simOptions); httpServer.once("close", stop); }
-  app.use("/api", async (_req, _res, next) => { await ready; next(); });
+  app.use("/api", async (req, res, next) => {
+    try { await ready; }
+    catch {
+      // Health still answers (with the reason) so the app can tell the server is up but broken.
+      if (req.path !== "/health") { res.status(503).json({ error: `시나위가 데이터를 불러오지 못했습니다 / Sinawi could not load its data: ${startError}` }); return; }
+    }
+    next();
+  });
 
   terminal.registerRoutes(app);
   registerSetupRoutes(app);
@@ -1758,7 +1803,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       res.status(201).json(await orchestra.conversation(input, await loadBots(options.dataDir)));
     } catch (error) { errorResponse(res, error); }
   });
-  const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, app: "sinawi", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: envVar("SERVER_VERSION") ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });
+  const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, ...(startError ? { error: startError } : {}), app: "sinawi", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: envVar("SERVER_VERSION") ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });
   app.get("/api/health", sendHealth);
   app.get("/health", sendHealth);
   // Unknown API routes must never become a successful HTML response.
@@ -1783,13 +1828,23 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     websocket.handleUpgrade(request, socket, head, (client) => websocket.emit("connection", client, request));
   });
   websocket.on("connection", async (client) => {
-    await ready;
-    const sessions = orchestra.list();
-    client.send(JSON.stringify({ type: "sessions", sessions }));
-    deliveredEvents.set(client, new Map(sessions.flatMap((session) => {
-      const latest = session.events.at(-1)?.id;
-      return latest ? [[session.id, latest] as const] : [];
-    })));
+    alive.add(client);
+    client.on("pong", () => alive.add(client));
+    client.on("error", (error) => console.error("[sinawi] websocket:", error.message));
+    try {
+      await ready;
+      if (client.readyState !== WebSocket.OPEN) return;
+      const sessions = orchestra.list();
+      client.send(JSON.stringify({ type: "sessions", sessions }));
+      deliveredEvents.set(client, new Map(sessions.flatMap((session) => {
+        const latest = session.events.at(-1)?.id;
+        return latest ? [[session.id, latest] as const] : [];
+      })));
+    } catch (error) {
+      // The data could not be loaded (startError): tell the window instead of an unhandled rejection.
+      console.error("[sinawi] websocket connection:", error instanceof Error ? error.message : error);
+      client.close(1011, "server data unavailable");
+    }
   });
 
   const flushSessions = () => persistAllSessions(orchestra.list());
