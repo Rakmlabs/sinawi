@@ -3,6 +3,10 @@ import { envVar } from "./runtime.js";
 // Browser origins allowed to talk to the API, /ws and the terminal socket.
 // Any other loopback port (preview proxies, the user's own dev servers) is rejected.
 const DEV_PORTS = [5188, 5198];
+let developmentOrigins = true;
+
+/** The installed app (server/index.ts with a built UI) turns the Vite dev ports off: only its own window is allowed. */
+export function setDevelopmentOrigins(on: boolean) { developmentOrigins = on; }
 
 export function appPort() {
   return Number(envVar("PORT") ?? 3001);
@@ -10,7 +14,7 @@ export function appPort() {
 
 export function allowedOrigins(port = appPort()) {
   const origins = new Set(["tauri://localhost"]);
-  for (const value of [port, ...DEV_PORTS]) {
+  for (const value of [port, ...(developmentOrigins ? DEV_PORTS : [])]) {
     origins.add(`http://127.0.0.1:${value}`);
     origins.add(`http://localhost:${value}`);
   }

@@ -110,7 +110,7 @@ type McpClientPlan = { client: McpClientId; name: string; path: string; exists: 
 
 /** The connect routes (server/mcp-clients.ts) answer with a `code` for files Sinawi will not rewrite. */
 async function mcpClientApi<T>(client: McpClientId, merge?: string): Promise<T> {
-  const r = await fetch(`/api/app-mcp/clients/${client}`, merge === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ merge }) });
+  const r = await fetch(`/api/app-mcp/clients/${client}${merge === undefined ? "/plan" : ""}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(merge === undefined ? {} : { merge }) });
   const data = await r.json().catch(() => undefined);
   if (r.ok) return data as T;
   const code = data?.code;
@@ -159,7 +159,7 @@ function AppMcpSection() {
   const fail = (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason));
   useEffect(() => {
     let live = true;
-    workspaceApi<McpConnection>("/app-mcp/connection").then((next) => { if (live) setConnection(next); }, (reason) => { if (live) fail(reason); });
+    workspaceApi<McpConnection>("/app-mcp/connection", {}).then((next) => { if (live) setConnection(next); }, (reason) => { if (live) fail(reason); });
     return () => { live = false; };
   }, []);
   const rotate = () => {

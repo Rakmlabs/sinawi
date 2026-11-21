@@ -20,7 +20,7 @@ function request(app: Express, method: string, path: string, body?: unknown): Pr
     const req = new IncomingMessage(socket as never);
     req.method = method; req.url = path; req.httpVersion = "1.1"; req.httpVersionMajor = 1; req.httpVersionMinor = 1;
     const json = body === undefined ? undefined : JSON.stringify(body);
-    req.headers = { host: "127.0.0.1", ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
+    req.headers = { host: "127.0.0.1", origin: "tauri://localhost", ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
     const res = new ServerResponse(req); res.assignSocket(socket as never); res.on("error", reject); socket.on("error", reject);
     res.on("finish", () => {
       try {

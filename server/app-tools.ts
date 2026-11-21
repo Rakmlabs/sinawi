@@ -817,6 +817,8 @@ export const ROUTE_EXCLUSIONS: Record<string, string> = {
   "POST /api/lead-mcp": "MCP 엔드포인트 자체(담당 실행의 sinawi_lead).",
   "POST /api/app-mcp": "MCP 엔드포인트 자체(외부 AI용 브리지 `sinawi mcp`).",
   "GET /api/app-mcp/connection": "외부 연결 토큰을 보여 주는 설정 화면용. AI에게 토큰을 주지 않는다.",
+  "POST /api/app-mcp/connection": "GET /api/app-mcp/connection과 같다. 앱 화면이 Origin을 보내도록 POST로 묻는다.",
+  "POST /api/app-mcp/clients/:client/plan": "GET /api/app-mcp/clients/:client와 같다. 앱 화면이 Origin을 보내도록 POST로 묻는다.",
   "POST /api/app-mcp/token": "외부 연결 토큰 재발급(설정 화면 버튼). AI가 자기 연결을 바꾸면 안 된다.",
   "GET /api/app-mcp/clients/:client": "Claude Desktop·Cursor 연결 미리보기(설정 화면 버튼). 다른 앱의 구성 파일을 다루는 일이라 도구가 아니다.",
   "POST /api/app-mcp/clients/:client": "Claude Desktop·Cursor 구성 파일에 sinawi 항목을 쓴다(설정 화면에서 사용자가 확인한 뒤에만, 앱 Origin 필요). AI가 다른 AI 클라이언트의 도구 구성을 바꾸면 안 된다.",
@@ -855,6 +857,32 @@ export const ROUTE_EXCLUSIONS: Record<string, string> = {
   "GET /health": "/api/health와 같은 내용(app_status).",
   "GET /{*path}": "앱 화면(정적 파일).",
 };
+
+/**
+ * Routes only the user may use, from the app window: everything an MCP tool has to ask the user to
+ * approve, and the user's own decisions and secrets. A local program (an agent's curl) is refused
+ * (server.ts userOnlyGuard); the app's own tool runs (injectRequest) and the window pass.
+ */
+export const USER_ONLY_ROUTES: string[] = [
+  ...APP_TOOLS.filter((tool) => tool.risk === "approval").flatMap((tool) => tool.routes),
+  "GET /api/app-mcp/connection", "POST /api/app-mcp/connection", "POST /api/app-mcp/token", "GET /api/app-mcp/clients/:client", "POST /api/app-mcp/clients/:client/plan", "POST /api/app-mcp/clients/:client",
+  "POST /api/app-approvals/:id/approve", "POST /api/app-approvals/:id/reject",
+  "POST /api/permissions/:id/answer", "POST /api/computer/revoke",
+  "POST /api/workspaces/:id/accounts/:agent/login",
+];
+
+const routePattern = (route: string) => {
+  const [method, path] = route.split(" ");
+  const body = path.split("/").map((part) => part.startsWith(":") ? "[^/]+" : part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("/");
+  return { method, regex: new RegExp(`^${body}/?$`, "u") };
+};
+const USER_ONLY_PATTERNS = USER_ONLY_ROUTES.map(routePattern);
+
+/** Whether `METHOD /path` is one of USER_ONLY_ROUTES. */
+export function isUserOnlyRoute(method: string, path: string): boolean {
+  const upper = method.toUpperCase();
+  return USER_ONLY_PATTERNS.some((route) => route.method === upper && route.regex.test(path));
+}
 
 // ---------- MCP JSON-RPC ----------
 
@@ -947,11 +975,19 @@ export async function handleToolMcp(message: JsonRpcMessage, surface: ToolSurfac
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
 
+/**
+ * Marks a request the server made to itself (a tool run, an approved tool): set only by
+ * injectRequest, never present on a request that came over the network, so it cannot be forged.
+ */
+export const IN_PROCESS = Symbol("sinawi.inProcess");
+export const inProcess = (req: unknown) => Boolean(req && (req as Record<symbol, unknown>)[IN_PROCESS]);
+
 /** Runs one request through the Express app without a socket and returns its status and JSON body. */
-export function injectRequest(app: Handler, method: string, path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = 10 * 60_000): Promise<{ status: number; body: unknown }> {
+export function injectRequest(app: Handler, method: string, path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = 10 * 60_000, trusted = true): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const socket = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
     const req = new IncomingMessage(socket as never);
+    if (trusted) (req as unknown as Record<symbol, unknown>)[IN_PROCESS] = true;
     req.method = method; req.url = path; req.httpVersion = "1.1"; req.httpVersionMajor = 1; req.httpVersionMinor = 1;
     const json = body === undefined ? undefined : JSON.stringify(body);
     req.headers = { host: "127.0.0.1", ...headers, ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };

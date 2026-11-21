@@ -19,7 +19,7 @@ const seedLegacyWorkspaces = (directory: string) => saveWorkspaceState({ current
 
 
 // Exercise Express and JSON middleware without requiring a TCP listener.
-function request(app: Express, method: string, path: string, body?: unknown, origin?: string): Promise<{ status: number; body: any }> {
+function request(app: Express, method: string, path: string, body?: unknown, origin = "tauri://localhost"): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     const socket = new Duplex({ read() {}, write(chunk, _encoding, done) { chunks.push(Buffer.from(chunk)); done(); } });

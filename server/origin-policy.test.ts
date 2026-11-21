@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
+import { appContentSecurityPolicy, isAllowedOrigin, setDevelopmentOrigins } from "./origin-policy.js";
 import { isLocalOrigin } from "./server.js";
 
 test("only the app and its dev servers are allowed browser origins", () => {
@@ -13,7 +13,15 @@ test("only the app and its dev servers are allowed browser origins", () => {
   assert.equal(isAllowedOrigin("http://127.0.0.1:3011", 3011), true);
 });
 
-test("API and /ws accept non-browser clients but reject other loopback pages", () => {
+test("the installed app drops the Vite dev ports", (t) => {
+  t.after(() => setDevelopmentOrigins(true));
+  setDevelopmentOrigins(false);
+  assert.equal(isAllowedOrigin("http://127.0.0.1:5188", 3001), false);
+  assert.equal(isAllowedOrigin("http://127.0.0.1:3001", 3001), true);
+  assert.equal(isAllowedOrigin("tauri://localhost", 3001), true);
+});
+
+test("the API accepts non-browser clients but rejects other loopback pages (user-only routes: user-only-guard.test.ts)", () => {
   assert.equal(isLocalOrigin(undefined), true);
   assert.equal(isLocalOrigin("http://127.0.0.1:3001"), true);
   assert.equal(isLocalOrigin("http://127.0.0.1:61234"), false);

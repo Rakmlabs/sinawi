@@ -1,3 +1,4 @@
+import { setDevelopmentOrigins } from "./origin-policy.js";
 import { createServer } from "./server.js";
 import { accessSync } from "node:fs";
 import { resolve } from "node:path";
@@ -11,6 +12,8 @@ import { killCliProcessGroups } from "./cli.js";
 const port = Number(envVar("PORT") ?? 3001);
 const options = runtimeOptions();
 if (options.staticDir) accessSync(resolve(options.staticDir, "index.html"));
+// The installed app serves its own UI: a page on a Vite dev port is just another local page then.
+setDevelopmentOrigins(!options.staticDir);
 const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: true, worktrees: true, appMcp: true });
 void installBrowserTooling().catch((error) => console.error("ao-browser 설치 실패:", error.message));
 void installComputerTooling().catch((error) => console.error("ao-computer 설치 실패:", error.message));

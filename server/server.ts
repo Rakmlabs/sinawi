@@ -3,7 +3,7 @@ import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes, SETUP_TOOLS } from "./setup.js";
 import { BrowserBridge, QUEUE_DIR, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
 import { ComputerBridge, registerComputerRoutes, SHOT_DIR, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
-import { findTool, handleToolMcp, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
+import { findTool, handleToolMcp, inProcess, isUserOnlyRoute, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
 import { withJosa } from "./korean.js";
 import { ApprovalStore, approvalRequester, type AppApproval, type ApprovalStatus } from "./app-approvals.js";
 import { waitResult } from "./session-wait.js";
@@ -124,6 +124,22 @@ function localGuard(req: Request, res: Response, next: NextFunction) {
     return;
   }
   next();
+}
+
+/**
+ * The user's own decisions and secrets (USER_ONLY_ROUTES: approving, answering a permission, the MCP
+ * token, deleting a workspace, every tool that needs approval) only from the app window (a browser
+ * Origin of the app) or from the server itself (an approved tool's in-process run). A local program
+ * without an Origin, such as an agent's curl, gets 403 here; it can still use everything else and
+ * should go through MCP, where these become approval cards.
+ */
+const USER_ONLY_ERROR = "이 작업은 시나위 앱 화면에서만 할 수 있습니다. MCP 도구를 쓰면 승인 요청으로 올라갑니다. / Only the Sinawi app window can do this; through MCP it becomes an approval request.";
+/** The app window (its Origin) or the server's own in-process run of a tool. */
+const fromUser = (req: Request) => inProcess(req) || Boolean(req.headers.origin && isAllowedOrigin(req.headers.origin));
+
+export function userOnlyGuard(req: Request, res: Response, next: NextFunction) {
+  if (fromUser(req) || !isUserOnlyRoute(req.method, req.originalUrl.split("?")[0])) { next(); return; }
+  res.status(403).json({ error: USER_ONLY_ERROR });
 }
 
 function string(value: unknown, max = 100_000): string {
@@ -633,7 +649,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     return limitsRefresh;
   };
 
-  app.use("/api", localGuard);
+  app.use("/api", localGuard, userOnlyGuard);
   const previewProxies = registerPreviewRoutes(app, { dataDir: options.dataDir, appPort: Number(envVar("PORT") ?? 3001) });
   httpServer.once("close", () => previewProxies.close());
   const browserBridge = new BrowserBridge((command) => {
@@ -949,6 +965,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     } catch (error) { errorResponse(res, error, workspaceNotFound(error) ? 404 : 400); }
   });
   app.post("/api/workspaces", async (req, res) => {
+    // A new space's policy (full access, computer use ...) is the user's, like PATCH: see userOnlyGuard.
+    if (req.body?.settings != null && !fromUser(req)) { res.status(403).json({ error: USER_ONLY_ERROR }); return; }
     try {
       const name = workspaceName(req.body?.name);
       if (req.body?.settings != null) normalizeWorkspacePolicy(req.body.settings, true);
@@ -993,6 +1011,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try {
       const id = workspaceIdFormat(routeParam(req.params.id));
       const hasSettings = req.body?.settings != null;
+      // Renaming is open (rename_workspace); a policy (full access, computer use ...) is the user's: see userOnlyGuard.
+      if (hasSettings && !fromUser(req)) { res.status(403).json({ error: USER_ONLY_ERROR }); return; }
       // Rename, update settings (merged onto the stored ones), or both.
       const name = req.body?.name == null && hasSettings ? undefined : workspaceName(req.body?.name);
       if (hasSettings) normalizeWorkspacePolicy(req.body.settings, true);
@@ -1456,10 +1476,13 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     return { token, tokenFile: appMcpTokenPath(mcpDataDir), script: script ?? null, server: APP_MCP_SERVER, config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token) : null };
   };
   // For the settings page: how to connect Claude Desktop (shows the token, so not a tool).
-  app.get("/api/app-mcp/connection", async (_req, res) => {
+  // POST from the app (a browser sends its Origin on POST, not on a same-origin GET); GET stays for in-process callers.
+  const sendConnection = async (_req: Request, res: Response) => {
     try { res.json(await connectionPayload(await ensureAppMcpToken(mcpDataDir))); }
     catch (error) { errorResponse(res, error, 500); }
-  });
+  };
+  app.get("/api/app-mcp/connection", sendConnection);
+  app.post("/api/app-mcp/connection", sendConnection);
   app.post("/api/app-mcp/token", async (_req, res) => {
     try { res.json(await connectionPayload(await rotateAppMcpToken(mcpDataDir))); }
     catch (error) { errorResponse(res, error, 500); }
@@ -1477,12 +1500,15 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     if (error instanceof McpClientConfigError) { res.status(409).json({ error: error.message, code: error.code, path: error.path }); return; }
     errorResponse(res, error, 500);
   };
-  app.get("/api/app-mcp/clients/:client", async (req, res) => {
+  // The plan holds the token: the app asks with POST (it then sends its Origin, see userOnlyGuard).
+  const sendClientPlan = async (req: Request, res: Response) => {
     const client = routeParam(req.params.client);
     if (!isMcpClient(client)) { res.status(404).json({ error: `Unknown client ${client}` }); return; }
     try { res.json(await planMcpClient(client, await clientEntry())); }
     catch (error) { clientError(res, error); }
-  });
+  };
+  app.get("/api/app-mcp/clients/:client", sendClientPlan);
+  app.post("/api/app-mcp/clients/:client/plan", sendClientPlan);
   app.post("/api/app-mcp/clients/:client", async (req, res) => {
     const client = routeParam(req.params.client);
     if (!isMcpClient(client)) { res.status(404).json({ error: `Unknown client ${client}` }); return; }
@@ -1751,7 +1777,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
 
   httpServer.on("upgrade", (request, socket, head) => {
     if (terminal.handleUpgrade(request, socket, head)) return;
-    if (request.url !== "/ws" || !isLoopbackHost(request.headers.host) || !isLocalOrigin(request.headers.origin)) {
+    if (request.url !== "/ws" || !isLoopbackHost(request.headers.host) || !request.headers.origin || !isAllowedOrigin(request.headers.origin)) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n"); socket.destroy(); return;
     }
     websocket.handleUpgrade(request, socket, head, (client) => websocket.emit("connection", client, request));
