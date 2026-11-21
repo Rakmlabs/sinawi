@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 
+const names = ["server", "vite"];
 const children = [
   spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     stdio: "inherit",
@@ -24,16 +25,20 @@ function stop(code = 0) {
   forceExit.unref();
 }
 
-for (const child of children) {
+for (const [i, child] of children.entries()) {
   child.on("error", (error) => {
     console.error(error.message);
     stop(1);
   });
   child.on("close", (code, signal) => {
     pending.delete(child);
-    if (!closing) stop(signal ? 1 : (code ?? 1));
+    if (!closing) {
+      const info = signal ? `signal ${signal}` : `exit code ${code ?? "null"}`;
+      console.error(`[dev] ${names[i]} stopped (${info})`);
+      stop(signal ? 1 : (code ?? 1));
+    }
     if (!pending.size) clearTimeout(forceExit);
   });
 }
-process.on("SIGINT", () => stop());
-process.on("SIGTERM", () => stop());
+process.on("SIGINT", () => { console.error("[dev] received SIGINT"); stop(); });
+process.on("SIGTERM", () => { console.error("[dev] received SIGTERM"); stop(); });

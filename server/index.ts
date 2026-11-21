@@ -18,9 +18,18 @@ void installServeTooling().catch((error) => console.error("ao-serve 설치 실�
 void installSimTooling().catch((error) => console.error("ao-sim 설치 실패:", error.message));
 
 httpServer.on("error", (error: NodeJS.ErrnoException) => {
-  if (error.code === "EADDRINUSE") console.error(`포트 ${port}이 이미 사용 중입니다.`);
-  else if (error.code === "EPERM") console.error(`127.0.0.1:${port}에서 서버를 열 권한이 없습니다.`);
-  else console.error("Sinawi 서버 시작 실패:", error.message);
+  if (error.code === "EADDRINUSE") {
+    console.error(
+      `포트 ${port}이 이미 사용 중입니다 (port ${port} is already in use).\n` +
+      `설치된 Sinawi 앱이 이 포트를 사용 중일 수 있습니다 — the installed Sinawi app may be running on it.\n` +
+      `독립 개발 서버를 실행하려면 (to run an isolated dev copy):\n` +
+      `  SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev`
+    );
+  } else if (error.code === "EPERM") {
+    console.error(`127.0.0.1:${port}에서 서버를 열 권한이 없습니다.`);
+  } else {
+    console.error("Sinawi 서버 시작 실패:", error.message);
+  }
   process.exitCode = 1;
 });
 
@@ -67,3 +76,10 @@ function shutdown() {
 }
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[sinawi] unhandledRejection:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[sinawi] uncaughtException:", error);
+});

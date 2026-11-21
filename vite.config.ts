@@ -9,6 +9,9 @@ export default defineConfig({
     host: "127.0.0.1",
     port: Number(process.env.SINAWI_UI_PORT || 5188),
     strictPort: true,
+    watch: {
+      ignored: ["**/src-tauri/**"],
+    },
     proxy: {
       "/api": { target: `http://127.0.0.1:${apiPort}`, ws: true },
       "/ws": { target: `ws://127.0.0.1:${apiPort}`, ws: true },
