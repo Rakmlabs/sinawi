@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { bootTime, forgetEndedCliGroups, processStart, reapStaleCliGroups, recordCliGroup, setCliGroupLedger, stillOurs, type CliGroupEntry } from "./cli-ledger.js";
+import { bootTime, forgetEndedCliGroups, lstartMs, processStart, reapStaleCliGroups, recordCliGroup, setCliGroupLedger, stillOurs, type CliGroupEntry } from "./cli-ledger.js";
 
 const groupAlive = (pgid: number) => { try { process.kill(-pgid, 0); return true; } catch { return false; } };
 const deadPid = () => { const child = spawnSync("/bin/sh", ["-c", "echo $$"], { encoding: "utf8" }); return Number(child.stdout.trim()); };
@@ -61,6 +61,19 @@ test("a group whose leader has exited is still ours within the same boot, never 
   assert.equal(stillOurs(entry, facts(200)), false);
   assert.equal(stillOurs(entry, facts(100, { start: "Sun Nov 22 01:06:09 2026", command: "/usr/local/bin/claude -p x" })), true);
   assert.equal(stillOurs(entry, facts(100, { start: "Mon Nov 23 09:00:00 2026", command: "/usr/local/bin/claude" })), false, "the user's claude with the same PID");
+});
+
+// Third review: our group ended entirely, another took its id, and that one's leader exited too.
+test("with the leader gone, only members that started between our leader and this server's start count as ours", () => {
+  const entry: CliGroupEntry = { pgid: 4242, command: "/usr/local/bin/claude", serverPid: 1, startedAt: "", boot: 100, leaderStart: "Sun Nov 22 01:06:09 2026" };
+  const serverStart = lstartMs("Sun Nov 22 02:00:00 2026");
+  const facts = (members: Record<number, string>) => ({ boot: () => 100, command: () => undefined, start: (pid: number) => members[pid], members: () => Object.keys(members).map(Number), serverStart: () => serverStart });
+  assert.equal(stillOurs(entry, facts({ 5000: "Sun Nov 22 01:06:10 2026", 5001: "Sun Nov 22 01:30:00 2026" })), true, "our orphaned workers");
+  assert.equal(stillOurs(entry, facts({ 5000: "Sun Nov 22 03:00:00 2026" })), false, "a group that took the id after this server started");
+  assert.equal(stillOurs(entry, facts({ 5000: "Sun Nov 22 01:00:00 2026" })), false, "older than our leader: not ours");
+  assert.equal(stillOurs(entry, facts({ 5000: "Sun Nov 22 01:10:00 2026", 5001: "Sun Nov 22 03:00:00 2026" })), false, "one stranger is enough to leave it");
+  assert.equal(stillOurs(entry, facts({})), false, "no members to end");
+  assert.equal(lstartMs("Sun Nov 22 01:06:09 2026"), Date.UTC(2026, 10, 22, 1, 6, 9), "ps prints UTC (TZ=UTC), read as UTC");
 });
 
 test("a run records its group and the ledger drops it once it ends", { skip: process.platform === "win32" }, async (t) => {

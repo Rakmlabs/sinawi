@@ -84,29 +84,52 @@ export function forgetEndedCliGroups(): void {
   if (kept.length !== entries.length) write(ledger, kept);
 }
 
+/** `ps -o lstart` as processStart reads it (TZ=UTC, no zone in the text) in ms; NaN when unknown. */
+export const lstartMs = (value: string | undefined) => value ? Date.parse(`${value} UTC`) : Number.NaN;
+
 export interface ProcessFacts {
   boot: () => number | undefined;
   start: (pid: number) => string | undefined;
   command: (pid: number) => string | undefined;
+  /** Live members of a process group. */
+  members?: (pgid: number) => number[];
+  /** When this server started (ms). */
+  serverStart?: () => number;
 }
 
 const systemFacts: ProcessFacts = {
   boot: bootTime,
   start: processStart,
   command: (pid) => { try { return execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000 }).trim() || undefined; } catch { return undefined; } },
+  members: (pgid) => { try { return execFileSync("pgrep", ["-g", String(pgid)], { encoding: "utf8", timeout: 2_000 }).split(/\s+/u).map(Number).filter((pid) => pid > 0); } catch { return []; } },
+  serverStart: () => Date.now() - process.uptime() * 1_000,
 };
 
 /**
  * The group is still the one we recorded. Recorded in this same boot (a group id stays taken while
  * any member lives, so within a boot a live group with that id is still ours), and when its leader is
- * still there, that leader started when the recorded one did and runs the recorded command. An entry
+ * still there, that leader started when the recorded one did and runs the recorded command; when it is
+ * gone, every remaining member started between the recorded leader and this server's start. An entry
  * without boot or start facts (an older ledger) is never ended.
  */
 export function stillOurs(entry: CliGroupEntry, facts: ProcessFacts = systemFacts): boolean {
   const boot = facts.boot();
   if (!entry.boot || !boot || entry.boot !== boot || !entry.leaderStart) return false;
   const leader = facts.command(entry.pgid);
-  if (leader === undefined) return true;
+  if (leader === undefined) {
+    // The leader is gone, its members remain. Within a boot the id stays ours while any member lives,
+    // but if our group ended entirely and another took the id, its members started after our leader
+    // too. What tells them apart: ours started before this server did (the server that recorded them
+    // is gone); a group that took the id after we started is never ours (third review, cli-ledger edge).
+    const leaderAt = lstartMs(entry.leaderStart);
+    const startedBy = facts.serverStart?.() ?? Number.POSITIVE_INFINITY;
+    const members = facts.members?.(entry.pgid) ?? [];
+    if (!facts.members) return true;
+    return members.length > 0 && members.every((pid) => {
+      const at = lstartMs(facts.start(pid));
+      return Number.isFinite(at) && at >= leaderAt && at <= startedBy;
+    });
+  }
   return facts.start(entry.pgid) === entry.leaderStart && leader.includes(basename(entry.command));
 }
 
