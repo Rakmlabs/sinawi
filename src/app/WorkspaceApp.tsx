@@ -419,7 +419,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   };
   useEffect(() => { void load(); }, []);
   const connected = useAppSocket(onServerMessage, () => { draftStore.clear(); void load(); });
+  // A new lead owns one project: it starts only once a folder is picked, never in the home folder.
+  const leadNeedsFolder = !active && Boolean(stewardDraft && !stewardDraft.id) && (!cwd || cwd === boot.homeCwd);
   const canSendBase = Boolean(
+    !leadNeedsFolder &&
     new Set([...skills, ...messageSkills]).size <= 20 &&
     (sessionRunning || !busy) &&
     allowedAgents.length >= 1 &&
@@ -919,10 +922,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                         <RecommendationCard value={pendingRecommendation} settings={routingSettings} skills={boot.skills} editing={editingRecommendation} busy={busy} runDisabled={!canSend || Boolean(unavailableWarning)} availableAgents={teamAgents} onEdit={() => setEditingRecommendation((old) => !old)} onChange={(value) => setRecommendation({ key: routingKey, value })} onRun={() => void send(true)} />
                         <div ref={bottom} />
                       </div> : <div className="minimal-empty">
-                        {activeProject && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
+                        {activeProject && !leadNeedsFolder && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
                         {stewardDraft ? <>
                           <h2><UserCheck size={20} aria-hidden="true" /> {chosenSteward ? t("steward.threadTitle", { name: chosenSteward.name }) : t("steward.newTitle")}</h2>
                           <p className="minimal-empty-note">{chosenSteward ? t("steward.pickHint") : t("steward.newBody")}</p>
+                          {leadNeedsFolder && <button type="button" className="button primary lead-pick-folder" onClick={() => setModal("directory")}><Folder size={15} aria-hidden="true" />{t("steward.pickFolder")}</button>}
                           {stewards.length > 0 && <div className="steward-picker" role="radiogroup" aria-label={t("steward.pickTitle")}>
                             <button type="button" role="radio" aria-checked={!chosenSteward} onClick={() => setStewardDraft({})}><strong>{t("steward.pickNew")}</strong><small>{t("steward.pickNewHint")}</small></button>
                             {stewards.map((item) => <button type="button" role="radio" key={item.id} aria-checked={chosenSteward?.id === item.id} onClick={() => pickSteward(item.id)}><strong>{item.name}</strong><small>{stewardDescription(item) || "\u00a0"}</small></button>)}
