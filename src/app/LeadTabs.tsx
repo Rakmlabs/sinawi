@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { List, Plug, Plus, Search, Settings2, X } from "lucide-react";
 import { hiddenTabs, reopenRunning, saveHiddenTabs, visibleTabs } from "../lead-tree";
 import { LeadChatList } from "./LeadChatList";
+import { AgentMark } from "../AgentMark";
 import type { Session } from "../../server/types";
 import { Beat } from "../Beat";
 import { goalProgress } from "../goal-progress";
@@ -137,6 +138,7 @@ export const LeadTabs = memo(function LeadTabs({ stewardId, name, threads: allTh
           {thread.status === "running" ? <span className="lead-tab-state running" role="img" aria-label={statusLabels.running}><Beat /></span>
             : <span className={`lead-tab-state ${thread.status}`} role="img" aria-label={statusLabels[thread.status]} />}
           {via && <Plug size={12} className="lead-tab-origin" aria-label={t("origin.openedBy", { name: via })} />}
+          <AgentMark agent={thread.agent} size="small" />
           <span className="lead-tab-title">{thread.title}</span>
           {otherAgent && <small className="lead-tab-agent">{names[thread.agent] ?? thread.agent}</small>}
           {progress && <small className="lead-tab-progress">{progress.done}/{progress.total}</small>}
@@ -149,7 +151,7 @@ export const LeadTabs = memo(function LeadTabs({ stewardId, name, threads: allTh
     <span className="lead-tabs-all-wrap">
       <button type="button" className={`lead-tabs-all${listOpen ? " open" : ""}`} aria-haspopup="dialog" aria-expanded={listOpen} title={t("leadTabs.all", { n: allThreads.length })} aria-label={t("leadTabs.all", { n: allThreads.length })}
         ref={allButton} onClick={() => listOpen ? closeList() : setListOpen(true)}>
-        <List size={15} aria-hidden="true" /><span>{allThreads.length}</span>
+        <List size={15} aria-hidden="true" /><span>{t("leadTabs.allShort", { n: allThreads.length })}</span>
         {allThreads.some((thread) => thread.status === "running") && <span className="lead-tabs-all-running" aria-hidden="true" />}
       </button>
       {listOpen && <div ref={panel} className="lead-tabs-panel" role="dialog" aria-label={t("leadTabs.allTitle", { name })}

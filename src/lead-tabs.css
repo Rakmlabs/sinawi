@@ -90,9 +90,10 @@
 .lead-tab-wrap .lead-tab { padding-right: 24px; }
 .lead-tab-close {
   position: absolute; right: 5px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px;
-  background: transparent; color: var(--text-subtle); opacity: 0; cursor: pointer;
+  background: transparent; color: var(--text-subtle); opacity: 0.45; cursor: pointer;
 }
 .lead-tab-wrap:hover .lead-tab-close, .lead-tab-wrap.active .lead-tab-close, .lead-tab-close:focus-visible { opacity: 1; }
+/* Every closable tab shows its ×, faint until hovered, so closing others is discoverable (review round 2, §6). */
 .lead-tab-close:hover { background: var(--bg-inset); color: var(--text); }
 .lead-tab-rename { outline: none; box-shadow: inset 0 0 0 1px var(--border-focus); }
 
