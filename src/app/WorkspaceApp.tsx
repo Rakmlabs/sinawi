@@ -59,6 +59,7 @@ import { BotEditor } from "./BotEditor";
 import { SessionPopover } from "./SessionPopover";
 import { SETTINGS_REOPEN_KEY, SettingsWindow } from "../settings/SettingsWindow";
 import { GeneralPage, NotificationsPage, ShortcutsPage, UpdatesPage } from "../settings/AppPages";
+import { ConnectPage } from "../settings/ConnectPage";
 import { EnvironmentPage } from "../settings/EnvironmentPage";
 import { AgentsPage, ProjectsPage, RoutingPage } from "../settings/WorkspacePages";
 import { SettingsPage } from "../settings/controls";
@@ -717,6 +718,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const renderSettingsPage = (section: SettingsCategory, close: () => void) => {
     switch (section) {
       case "general": return <GeneralPage />;
+      case "connect": return <ConnectPage />;
       case "appearance": return <AppearanceSettings />;
       case "notifications": return <NotificationsPage openSystemSettings={() => { void workspaceApi("/setup/open-settings", { pane: "notifications" }).catch(() => undefined); }} />;
       case "shortcuts": return <ShortcutsPage />;

@@ -7,7 +7,7 @@ import { findTool, handleToolMcp, inProcess, isUserOnlyRoute, nameLookup, routeD
 import { withJosa } from "./korean.js";
 import { ApprovalStore, approvalRequester, type AppApproval, type ApprovalStatus } from "./app-approvals.js";
 import { waitResult } from "./session-wait.js";
-import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, connectEntry, ensureAppMcpToken, scriptClientConfig, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
+import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, clientSetups, connectEntry, ensureAppMcpToken, scriptClientConfig, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
 import { LEAD_MCP_SERVER } from "./lead-tools.js";
 import { loadSchedules, saveSchedules, type ScheduleInput } from "./schedules.js";
 import { isComputerUseAllowed } from "./workspace-policy.js";
@@ -1517,8 +1517,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   const connectionPayload = async (token: string) => {
     const script = await installAppMcpScript(mcpDataDir).catch(() => undefined);
-    // `config` runs the npm package through npx; `scriptConfig` is the offline alternative (the copy in <data>/hooks).
-    return { token, tokenFile: appMcpTokenPath(mcpDataDir), script: script ?? null, server: APP_MCP_SERVER, config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token) : null };
+    // `clients`: per-client setup running the app's copy of the bridge (<data>/hooks) with the token
+    // file. `config` is the npm package through npx, which works only once @rakmlabs/sinawi is
+    // published; `scriptConfig` is the same entry as `clients` with the token written in.
+    const tokenFile = appMcpTokenPath(mcpDataDir);
+    return { token, tokenFile, script: script ?? null, server: APP_MCP_SERVER, clients: script ? clientSetups(script, tokenFile) : [], config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token) : null };
   };
   // For the settings page: how to connect Claude Desktop (shows the token, so not a tool).
   // POST from the app (a browser sends its Origin on POST, not on a same-origin GET); GET stays for in-process callers.

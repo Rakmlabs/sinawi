@@ -113,6 +113,20 @@ test("the external MCP endpoint refuses a missing or wrong token and answers wit
   assert.equal(alternative.command, process.execPath, "the alternative runs the app's copy with Node, without npx");
   assert.equal(alternative.args[0], connection.body.script);
   assert.equal(alternative.env.SINAWI_MCP_TOKEN, token);
+  // Per-client setup: the app's copy of the bridge, the token read from its file, never written in.
+  const clients = connection.body.clients as Array<{ id: string; command?: string; config?: string }>;
+  assert.deepEqual(clients.map((client) => client.id), ["claude-code", "codex", "grok", "claude-desktop", "cursor", "other"]);
+  for (const client of clients) {
+    const text = `${client.command ?? ""}\n${client.config ?? ""}`;
+    assert.ok(text.includes(connection.body.script), client.id);
+    assert.ok(text.includes("SINAWI_MCP_TOKEN_FILE"), client.id);
+    assert.ok(!text.includes(token), `${client.id} has no token in it`);
+    assert.ok(!text.includes("npx"), `${client.id} does not need the unpublished npm package`);
+  }
+  assert.match(clients[0].command!, /^claude mcp add sinawi --scope user -e SINAWI_URL=\S+ -e '?SINAWI_MCP_TOKEN_FILE=.+ -- \S+ \S+$/u);
+  assert.match(clients[1].command!, /^codex mcp add sinawi --env /u);
+  assert.match(clients[2].command!, /^grok mcp add sinawi -e /u);
+  assert.match(clients[1].config!, /^\[mcp_servers\.sinawi\]\ncommand = /u);
   const rotated = await call("POST", "/api/app-mcp/token");
   assert.notEqual(rotated.body.token, token);
   assert.equal((await call("POST", "/api/app-mcp", rpc(2, "tools/list"), { authorization: `Bearer ${token}` })).status, 401, "old token");
@@ -339,4 +353,11 @@ test("lead tools default to the caller's workspace: list_leads lists it, create_
   assert.deepEqual(calls.slice(3).map((call) => (call.body as { workspaceId?: string }).workspaceId), ["side", "default", "default"]);
   assert.match(tool("list_leads").description, /워크스페이스 안에서 고유/u);
   assert.match(tool("get_session_lead").description, /같은 워크스페이스 안에서만/u);
+});
+
+test("shell words with spaces or quotes are quoted for a terminal", async () => {
+  const { shellWord } = await import("./app-mcp.js");
+  assert.equal(shellWord("/usr/bin/node"), "/usr/bin/node");
+  assert.equal(shellWord("/Users/me/Library/Application Support/x"), "'/Users/me/Library/Application Support/x'");
+  assert.equal(shellWord("it's"), `'it'\\''s'`);
 });

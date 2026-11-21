@@ -779,3 +779,31 @@ textarea.session-prompt {
 .setting-row .model-choice { margin: 0; padding: 0; border: 0; min-width: 0; }
 .setting-row .model-choice > legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .settings-content:focus { outline: none; }
+
+/* Settings → Connect an AI (ConnectPage.tsx) */
+.connect-intro { display: flex; gap: 14px; align-items: flex-start; padding: 4px 2px; }
+.connect-intro-icon { flex: none; margin-top: 2px; color: var(--info-fg); }
+.connect-lead { margin: 0 0 10px; color: var(--text); font-size: calc(14px * var(--font-scale)); line-height: 1.55; }
+.connect-steps { margin: 0 0 10px; padding-left: 20px; color: var(--text-secondary); line-height: 1.6; }
+.connect-steps li + li { margin-top: 4px; }
+.connect-hint { margin: 8px 0 0; color: var(--text-muted); font-size: calc(12.5px * var(--font-scale)); line-height: 1.5; }
+.connect-done { margin: 8px 0 0; color: var(--ok-fg, var(--text)); }
+.connect-clients { display: grid; gap: 12px; min-width: 0; }
+.connect-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-inset); width: fit-content; max-width: 100%; }
+.connect-tab { height: 30px; padding: 0 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-muted); font: inherit; font-size: calc(13px * var(--font-scale)); cursor: pointer; }
+.connect-tab:hover { color: var(--text-secondary); }
+.connect-tab.active { border-color: var(--border); background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow-sm, none); }
+.connect-tab:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.connect-panel { display: grid; gap: 8px; min-width: 0; }
+.connect-panel > p { margin: 0; color: var(--text-secondary); line-height: 1.55; }
+.connect-code { min-width: 0; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-inset); overflow: hidden; }
+.connect-code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
+.connect-code-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connect-code pre { margin: 0; padding: 10px 12px; max-height: 260px; overflow: auto; color: var(--text-secondary); font-family: var(--font-mono); font-size: calc(12px * var(--font-scale)); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.connect-code pre:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.connect-merge { display: block; margin-top: 8px; max-height: 260px; overflow: auto; white-space: pre; }
+.connect-details { margin-top: 10px; }
+.connect-details summary { cursor: pointer; color: var(--text-secondary); }
+.connect-details .connect-code { margin-top: 8px; }
+.connect-body { display: grid; gap: 10px; min-width: 0; }
+.connect-body > .settings-advanced-actions { justify-content: flex-start; }
