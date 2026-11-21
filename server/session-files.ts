@@ -216,7 +216,28 @@ function fail(res: Response, error: unknown) {
   res.status(status).json(body);
 }
 
-export type SessionFolders = { cwd: string; worktrees?: Array<{ path: string }> };
+export type SessionFolders = { cwd: string; worktrees?: Array<{ path: string }>; events?: Array<{ text?: string }> };
+
+/**
+ * Files in folders every session shares (browser and computer screenshots) that this session's own
+ * events mention: a chat shows its own screenshots, never another session's (L7).
+ */
+export function mentionedSharedFiles(session: SessionFolders | undefined, dirs: string[]): string[] {
+  const found = new Set<string>();
+  for (const event of session?.events ?? []) {
+    const text = event.text;
+    if (typeof text !== "string") continue;
+    for (const dir of dirs) {
+      let at = text.indexOf(dir);
+      while (at >= 0) {
+        const rest = text.slice(at).match(/^[^\s"'`<>()[\]{}]+/u)?.[0];
+        if (rest && rest.length > dir.length + 1) found.add(rest.replace(/[.,;:!?]+$/u, ""));
+        at = text.indexOf(dir, at + dir.length);
+      }
+    }
+  }
+  return [...found];
+}
 
 export type SessionFileDeps = {
   lookup?: (id: string) => SessionFolders | undefined;

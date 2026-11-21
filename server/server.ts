@@ -50,7 +50,7 @@ import { workspaceIdPattern, createCoalescedSaver, loadBots, loadGroups, loadSes
 import { discoverMcpTools, updateMcpTool, type ToolCommandRunner } from "./tools.js";
 import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, RequestOrigin, Session, SessionDraft, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
 import { randomUUID } from "node:crypto";
-import { registerSessionFileRoutes } from "./session-files.js";
+import { mentionedSharedFiles, registerSessionFileRoutes } from "./session-files.js";
 import { registerLinkPreviewRoute } from "./link-preview.js";
 import { registerWorktreeRoutes } from "./worktree-routes.js";
 import { cleanupSessionWorktrees } from "./worktrees.js";
@@ -1152,8 +1152,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   // Chat attachments and results, scoped to the session work folder (plus pasted/dropped uploads).
   registerSessionFileRoutes(app, {
     lookup: (id) => orchestra.get(id),
-    // A worker's result (a design screenshot copied into its worktree) shows in the chat too.
-    extraRoots: (session) => [previewAssetsDir(options.dataDir), ...(session?.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR],
+    // A worker's result (a design screenshot copied into its worktree) shows in the chat too; from the
+    // screenshot folders every session shares, only the files this chat's own events name.
+    extraRoots: (session) => [previewAssetsDir(options.dataDir), ...(session?.worktrees?.map((item) => item.path) ?? []), ...mentionedSharedFiles(session, [QUEUE_DIR, SHOT_DIR])],
     previewRoot: () => previewAssetsDir(options.dataDir),
     cacheDir: () => join(options.dataDir ?? join(homedir(), ".sinawi"), "file-previews"),
   });
