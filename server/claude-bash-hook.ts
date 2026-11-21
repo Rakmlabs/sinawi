@@ -13,6 +13,8 @@
  *   writing/exec flags; no `rg --pre`/follow-symlink flags); `find` only with listing primaries;
  *   npm/pnpm/yarn only `test`/`run` without prefix/global flags, and only where the workspace
  *   pre-approves programs that run code (H2, `runtime` argument);
+ * - in a chain, no step writes files before another step runs, and none writes when steps run at the
+ *   same time (`|`, `&`): the chain is judged once, before it runs (eighth review R8-1);
  * - nothing is expanded: no `$`, backticks, braces, unquoted `~` (at a word start or after `=`/`:`),
  *   unquoted glob characters (`*?[`, which bash 3.2 lets match `..`), comments, here-docs;
  * - no path argument, `cd` target or redirection target has a `..` component, absolute paths must
@@ -583,6 +585,14 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
   let previous = ""; // last unquoted character of the current word ("" at a word start)
   let pendingRedirect: "out" | "in" | undefined;
   let segments = 0;
+  // Eighth review R8-1: a chain is judged once, before it runs, so an earlier step that writes files
+  // (`printf … > sub/HEAD`) could change what a later step's check saw (`cd sub && git diff`). A chain
+  // passes only when no step writes before another step runs: only its last step may write, and with
+  // `|` or a single `&` (steps that run at the same time) no step may write.
+  let writes = false; // the current step writes
+  let wrote = false; // an earlier step wrote
+  let stepAfterWrite = false;
+  let concurrent = false;
 
   const endWord = (): boolean => {
     if (!started) return true;
@@ -605,7 +615,8 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
       if (!target || target.startsWith("-") || target.startsWith("+")) return false;
       if (host.cdpath) return false;
       const found = locate(target, dirs);
-      if (!found) return false;
+      // The folder must exist now: nothing in a chain that passes can create it.
+      if (!found || !found.every((dir) => host.exists(dir))) return false;
       // cd may or may not run (`false && cd x`, subshells, pipelines): keep every possibility.
       for (const dir of found) dirs.add(dir);
       return true;
@@ -614,12 +625,18 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
     if (pathPrograms.has(program)) {
       // R6-1: the programs here that write (`mkdir`, `touch`, `sort -o`) never write into a git directory.
       if ((program === "mkdir" || program === "touch" || program === "sort") && args.some((arg) => [...dirs].some((dir) => inGitDir(arg.slice(arg.indexOf("=") + 1), dir, rootReal, host)))) return false;
+      if (program === "mkdir" || program === "touch" || (program === "sort" && args.some((arg) => arg.startsWith("--output") || /^-[^-]*o/u.test(arg)))) writes = true;
       return optionsAllowed(segment) && pathArgsOk(args, dirs);
+    }
+    if (program === "git") {
+      // Only these leave the worktree as it was; add/commit write the index and objects.
+      if (!["status", "diff", "log", "show", "rev-parse", "ls-files", "blame"].includes(args[0] ?? "")) writes = true;
     }
     if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, rootReal, host));
     if (program === "find") return findAllowed(args, dirs);
     if (packageManagers.has(program)) {
       if (!host.runtimePrograms) return false;
+      writes = true;
       if (args[0] !== "test" && args[0] !== "run" && args[0] !== "run-script") return false;
       if (args.some((arg) => packageDenied.test(arg))) return false;
       return pathArgsOk(args.slice(1), dirs);
@@ -633,14 +650,19 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
     words = [];
     if (!segment.length) return targets.length === 0;
     segments++;
+    if (wrote) stepAfterWrite = true;
+    writes = false;
     const dirs = top();
     // Redirections resolve against the directory before this segment's own cd.
     for (const { kind, target } of targets) {
       if (target.text === "/dev/null") continue;
       if (!locate(target.text, dirs)) return false;
+      if (kind === "out") writes = true;
       if (kind === "out" && [...dirs].some((dir) => inGitDir(target.text, dir, rootReal, host))) return false;
     }
-    return segmentOk(segment, dirs);
+    const ok = segmentOk(segment, dirs);
+    if (writes) wrote = true;
+    return ok;
   };
 
   for (let index = 0; index < command.length; index++) {
@@ -688,6 +710,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
       if (char === "|" && next === "&") return false;
       if (char === ";" && next === ";") return false;
       if ((char === "&" || char === "|") && next === char) index++;
+      else if (char === "&" || char === "|") concurrent = true;
       if (!endSegment()) return false;
     } else if (char === "(") {
       if (started || words.length || redirects.length) return false;
@@ -720,6 +743,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
     }
   }
   if (!endSegment() || stack.length !== 1) return false;
+  if (stepAfterWrite || (wrote && concurrent)) return false;
   return segments > 0;
 }
 

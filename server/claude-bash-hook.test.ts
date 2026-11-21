@@ -27,26 +27,66 @@ const allowed = (command: string, cwd = root, options: Partial<HookHost> = {}) =
 
 test("compound commands of safe programs inside the worker folder are pre-approved", () => {
   for (const command of [
-    "cd src; cat a.txt > b.txt && echo ok",
+    "cd src; cat a.txt > b.txt",
     "(cd sub && wc -l a.txt)",
     "git status && git diff --stat",
     "git log --oneline -5 HEAD~3 && git show HEAD:a.txt | head -5",
-    "git add -A && git commit -m 'work: done'",
+    "git status && git commit -m 'work: done'",
     "ls -la 2>/dev/null || echo none",
     "cd 'with space' && ls",
-    "mkdir -p out/new && touch out/new/f.txt && printf 'x\\n' > out/new/g.txt",
+    "cd src && mkdir -p out/new",
     "grep -rn needle src | head -3",
     "rg -n 'a*b' src && cat a.txt",
     `cat ${root}/a.txt && ls ${root}/src`,
-    "echo hi > new.txt; true",
+    "true; echo hi > new.txt",
   ]) assert.equal(allowed(command), true, command);
 });
 
+// Eighth review R8-1: one chain wrote sub/HEAD and sub/commondir, then ran `cd sub && git diff`; the
+// hook judged the chain before it ran (no HEAD yet) and git ran diff.external. A chain now passes only
+// when no step writes before another step runs (the last step may write; with `|` or `&` none may).
+test("a step that writes before another step makes the whole chain ask", () => {
+  for (const command of [
+    // The verifier's repro (with this test's paths).
+    "printf 'ref: refs/heads/main\\n' > r8/HEAD && printf '../r8c\\n' > r8/commondir && cd r8 && git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD",
+    "cd src; cat a.txt > b.txt && echo ok", "git add -A && git commit -m x", "mkdir -p out && touch out/f.txt", "echo hi > new.txt; true", "sort -o s.txt a.txt && cat s.txt",
+    "touch x || git status", "(echo x > y) && ls", "echo x > y | cat", "cat a.txt | sort -o out.txt", "ls | head -3 && echo x > notes.txt", "ls & echo x > y", "git checkout -b x && git status",
+  ]) {
+    assert.notEqual(decide(command), "allow", command);
+    assert.equal(decide(command), "ask", command);
+  }
+  // `cd` only into a folder that exists when the chain is judged.
+  assert.equal(allowed("cd not-yet && ls"), false);
+  for (const command of ["cd src && cat a.txt > b.txt", "git status && git diff && git commit -m x", "ls && echo x > notes.txt", "true; echo hi > new.txt", "cd src && mkdir -p out"]) assert.equal(allowed(command), true, command);
+});
+
+test("the same trick over separate calls: each call is judged when it runs", () => {
+  mkdirSync(path.join(root, "r8b"), { recursive: true });
+  mkdirSync(path.join(root, "r8c", "refs", "heads"), { recursive: true });
+  mkdirSync(path.join(root, "r8c", "objects", "info"), { recursive: true });
+  // Call 1 writes the look-alike files (allowed: inside the folder, outside .git, one step at a time) …
+  for (const [command, file, text] of [
+    ["printf 'ref: refs/heads/main\\n' > r8b/HEAD", "r8b/HEAD", "ref: refs/heads/main\n"],
+    ["printf '../r8c\\n' > r8b/commondir", "r8b/commondir", "../r8c\n"],
+    ["printf '[diff]\\n\\texternal = touch M\\n' > r8c/config", "r8c/config", "[diff]\n\texternal = touch M\n"],
+  ] as const) {
+    assert.equal(decide(command), "allow", command);
+    writeFileSync(path.join(root, file), text);
+  }
+  // … and call 2, judged after those writes, asks.
+  assert.equal(decide("cd r8b && git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD"), "ask");
+  assert.equal(decide("git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD", false, path.join(root, "r8b")), "ask");
+  // Writing into .git itself asks in any call.
+  assert.equal(decide("printf '[core]\\n' >> .git/config"), "ask");
+});
+
 test("package scripts run code: approved only where the workspace pre-approves programs that run code (H2)", () => {
-  for (const command of ["cd src && npm test", "cd src && npm test 2>&1 | tail -20", "pnpm run build && echo ok"]) {
+  for (const command of ["cd src && npm test", "npm test 2>/dev/null", "cd src && pnpm run build"]) {
     assert.equal(allowed(command), false, `${command} (off, the default)`);
     assert.equal(allowed(command, root, { runtimePrograms: true }), true, `${command} (on)`);
   }
+  // R8-1: a script writes files, so it passes only as the last step and not inside a pipeline.
+  for (const command of ["cd src && npm test 2>&1 | tail -20", "pnpm run build && echo ok"]) assert.equal(allowed(command, root, { runtimePrograms: true }), false, command);
   assert.match(bashHookSettings("/hook.mjs", "/repo", "/node", true), /\/repo' 'runtime'|\/repo runtime/u);
   assert.doesNotMatch(bashHookSettings("/hook.mjs", "/repo", "/node"), /runtime/u);
 });
@@ -129,7 +169,7 @@ test("the generated hook script approves only safe commands when run by node", a
   t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const script = await ensureBashHookScript(dir);
   const run = (command: string, runtime = true) => spawnSync(process.execPath, [script, root, ...(runtime ? ["runtime"] : [])], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: root }), encoding: "utf8" });
-  const ok = run("cd src && printf 'note\\n' > note.txt && cat note.txt");
+  const ok = run("cd src && printf 'note\\n' > note.txt");
   assert.equal(ok.status, 0);
   assert.equal(JSON.parse(ok.stdout).hookSpecificOutput.permissionDecision, "allow");
   const denied = run("cd .. && rm -rf repo");
