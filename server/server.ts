@@ -1312,7 +1312,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         const message = JSON.stringify({ type: "show-session", sessionId: session.id, workspaceId: session.workspaceId });
         for (const client of windows) client.send(message);
       }
-      res.json({ ok: true, shown: here && windows.length > 0, notified: true, workspaceId: session.workspaceId, title: session.title });
+      // Honest about what happened (review R3): the notification went out; an open window got the
+      // request and decides itself; whether the user actually sees the chat is not known here.
+      res.json({ ok: true, notified: true, windowAsked: here && windows.length > 0, opensOnlyWhenIdle: true, workspaceId: session.workspaceId, title: session.title });
     } catch (error) { errorResponse(res, error, 400); }
   });
   app.post("/api/sessions/:id/merge/approve", async (req, res) => {

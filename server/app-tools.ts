@@ -371,7 +371,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "show_session", risk: "write", method: "POST", route: "/api/sessions/:id/show", surfaces: ["external"],
-    description: "사용자에게 이 채팅을 봐 달라고 알린다(알림에 '채팅 열기'). 사용자가 빈 새 채팅 화면을 두고 자리를 비웠을 때만 앱이 그 채팅으로 바로 넘어가고, 다른 채팅·설정을 보거나 입력 중이면 화면을 바꾸지 않는다.",
+    description: "사용자에게 이 채팅을 봐 달라고 알린다(알림에 '채팅 열기'). 사용자가 빈 새 채팅 화면을 두고 자리를 비웠을 때만 앱이 그 채팅으로 바로 넘어가고, 다른 채팅·설정을 보거나 입력 중이면 화면을 바꾸지 않는다. 답의 notified는 알림을 보냈다는 뜻, windowAsked는 열린 앱 창에 요청이 갔다는 뜻이다. 사용자가 실제로 봤는지는 알 수 없으니 봤다고 말하지 않는다.",
     properties: { session_id: str("채팅 ID.") }, required: ["session_id"],
     path: (args) => `/api/sessions/${seg(args, "session_id")}/show`, body: () => ({}),
   }),
