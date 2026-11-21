@@ -230,7 +230,7 @@ export function ToolsPanel({ workspaceId, cwd, initialState, initialTab = "mcp",
           })}</div>
         </section>)}
       </div>}
-      {!loading && tools && visible === 0 && <div className="tools-empty" role="status">{query ? t("tools.noResults") : t("tools.empty")}</div>}
+      {!loading && tools && visible === 0 && <div className="tools-empty" role="status">{query ? t("tools.noResults") : <><strong>{t("tools.empty")}</strong><span>{t(tab === "skills" ? "tools.emptySkillsHint" : "tools.emptyMcpHint")}</span></>}</div>}
     </div>
   </section>;
 }
