@@ -214,14 +214,16 @@ const longFlag = (program: string, flag: string) => [`${program} ${flag}*`, `${p
  * forms through the Bash hook (claude-bash-hook.ts riskyWords), and there, with the workspace switch
  * off, also for any file argument outside the folder. Patterns only see the text, so a path written
  * outside the project in an ordinary argument (ffmpeg's output file) is not caught for Grok.
+ * Abbreviated long options are matched by their shortest unambiguous prefix (`sort --co` for
+ * --compress-program, `git --upl`/`--rece` for --upload-pack/--receive-pack, fifth review R5-2).
  */
 export const RISKY_SHELL_PATTERNS = [
-  ...longFlag("rg", "--pre"), "git -c*", "git --config-env*", "git *--output*", "git *--ext-diff*", "git *--exec*", "git *--upload-pack*", "git *--receive-pack*",
+  ...longFlag("rg", "--pre"), "git -c*", "git --config-env*", "git *--output*", "git *--ext-diff*", ...longFlag("git", "--exec"), ...longFlag("git", "--upl"), ...longFlag("git", "--rece"), "GIT_*",
   ...shortFlag("git push", "f"), ...shortFlag("git push", "d"), "git push *--force*", "git push *--delete*", "git push *--mirror*", "git push *--prune*", "git push * +*", "git push * :*",
   ...shortFlag("gh api", "X"), ...shortFlag("gh api", "f"), ...shortFlag("gh api", "F"), "gh api *--method*", "gh api *--field*", "gh api *--raw-field*", "gh api *--input*",
   ...shortFlag("curl", "o"), ...shortFlag("curl", "O"), ...shortFlag("curl", "K"), ...shortFlag("curl", "T"), "curl *--output*", "curl *--remote-name*", "curl *--config*", "curl *--upload-file*", "curl *@*", "curl *file:*",
   "xcrun simctl spawn*", "trash *..*", "trash /*", "trash * /*", "trash ~*", "trash * ~*",
-  ...shortFlag("sort", "o"), "sort *--output*", "tsc *--outDir*", "tsc *--outFile*",
+  ...shortFlag("sort", "o"), "sort *--output*", ...longFlag("sort", "--co"), "tsc *--outDir*", "tsc *--outFile*",
 ] as const;
 
 /**

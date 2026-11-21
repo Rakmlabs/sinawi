@@ -55,6 +55,12 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
     assert.ok(denied(grok.args).includes(rule), rule);
     assert.ok(denied(grokOn.args).includes(rule), rule);
   }
+  // Fifth review R5-1/R5-2: options that run a program, abbreviated or not, are denied either way.
+  const matches = (rule: string, command: string) => new RegExp(`^${rule.slice(5, -1).replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, ".*")}$`, "u").test(command);
+  for (const command of ["sort --compress-program=./x a.txt", "sort -S 100K --compress-prog ./x a.txt", "sort --co=./x a.txt", "git fetch --upload-pack=./x .", "git fetch --upl=./x .", "git push --receive-pack=./x . HEAD", "git --exec-path=. status", "rg --pre=./x hi .", "rg --pre-glob '*' --pre ./x hi", "GIT_PAGER=./x git log"]) {
+    assert.ok(denied(grok.args).some((rule) => matches(rule, command)), command);
+    assert.ok(denied(grokOn.args).some((rule) => matches(rule, command)), `${command} (on)`);
+  }
   // Fourth review R4-2: text the shell only resolves when it runs ("no""de", n''ode, $(which node), chains)
   // is denied while the switch is off; real Grok 1.0.92 refused each of these forms by these rules.
   for (const rule of ["Bash(*$*)", "Bash(*`*)", "Bash(*;*)", "Bash(*|*)", "Bash(*>*)", 'Bash(*""*)', "Bash(*''*)", "Bash(*\\*)", 'Bash("*)']) {
