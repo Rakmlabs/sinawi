@@ -303,3 +303,9 @@
     animation: none;
   }
 }
+
+/* A lead's tab bar sits under the header: toasts start below it, so they never cover its
+   "전체" and "새 채팅" buttons (third review U3). */
+body:has(.lead-tabs) .notification-toasts {
+  top: calc(var(--window-header-height, 48px) + 45px + 10px);
+}
