@@ -26,12 +26,12 @@ Sinawi: a macOS app that runs the Claude Code, Codex and Grok Build CLIs as one 
 npm install
 npm run dev          # server (tsx server/index.ts) + Vite UI
 npm run typecheck    # tsc --noEmit
-npm test             # node --import tsx --test server/*.test.ts src/*.test.ts src/updates/*.test.ts
+npm test             # node --import tsx --import ./server/test-guard.ts --test server/*.test.ts src/*.test.ts src/updates/*.test.ts
 npm run build        # typecheck + vite build + bundled server
 npm run docs:ai      # regenerate the tool tables in docs/ai/for-ai*.md
 ```
 
-- One test file: `node --import tsx --test server/app-tools.test.ts`.
+- One test file: `npm run test:file -- server/app-tools.test.ts`. Always go through `npm test` or `npm run test:file`: they load `server/test-guard.ts`, which keeps tests in a temporary HOME, TMPDIR, data and queue folder, refuses port 3001 and real agent CLIs, and stops if a path resolves to the installed app's. `node --test` on its own skips it (`server/test-guard.test.ts` then fails).
 - Tests use a fake CLI runner and temporary data folders: no CLI, no network, no real app data.
 - Before you finish: `npm run typecheck`, `npm test` and `npm run build` must exit 0.
 - Changed `server/app-tools.ts` (a tool, its description, risk, surface or section)? Run `npm run docs:ai`; `server/ai-docs.test.ts` fails while the docs are stale. A new tool also needs an English line in `EN_SUMMARIES` (`server/ai-docs.ts`); a new route needs a tool or a reasoned `ROUTE_EXCLUSIONS` entry (`server/app-tools.test.ts`).
