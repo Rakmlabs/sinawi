@@ -875,13 +875,15 @@ export const USER_ONLY_ROUTES: string[] = [
 const routePattern = (route: string) => {
   const [method, path] = route.split(" ");
   const body = path.split("/").map((part) => part.startsWith(":") ? "[^/]+" : part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("/");
-  return { method, regex: new RegExp(`^${body}/?$`, "u") };
+  // Case-insensitive like Express's router, so `/API/Settings` cannot slip past the guard to the same handler.
+  return { method, regex: new RegExp(`^${body}/?$`, "iu") };
 };
 const USER_ONLY_PATTERNS = USER_ONLY_ROUTES.map(routePattern);
 
 /** Whether `METHOD /path` is one of USER_ONLY_ROUTES. */
 export function isUserOnlyRoute(method: string, path: string): boolean {
-  const upper = method.toUpperCase();
+  // Express answers HEAD with the GET handler, so a HEAD runs it too.
+  const upper = method.toUpperCase() === "HEAD" ? "GET" : method.toUpperCase();
   return USER_ONLY_PATTERNS.some((route) => route.method === upper && route.regex.test(path));
 }
 

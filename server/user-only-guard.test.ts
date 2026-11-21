@@ -19,6 +19,10 @@ test("user-only routes match their own paths and nothing else", () => {
   assert.ok(!isUserOnlyRoute("POST", "/api/app-mcp"));
   assert.ok(!isUserOnlyRoute("DELETE", "/api/sessions/x/extra"), "a parameter is one path segment");
   assert.ok(USER_ONLY_ROUTES.includes("POST /api/permissions/:id/answer"));
+  // Express routes ignore case and answer HEAD with GET, so the guard does too.
+  assert.ok(isUserOnlyRoute("GET", "/API/App-MCP/Connection"));
+  assert.ok(isUserOnlyRoute("POST", "/api/app-approvals/abc/APPROVE"));
+  assert.ok(isUserOnlyRoute("HEAD", "/api/app-mcp/connection"));
 });
 
 test("without the app's Origin a local request is refused on user-only routes; the app and in-process runs pass", async (t) => {
@@ -30,6 +34,11 @@ test("without the app's Origin a local request is refused on user-only routes; t
 
   // curl-style: no Origin.
   assert.equal((await network("GET", "/api/app-mcp/connection")).status, 403, "the MCP token is not readable");
+  assert.equal((await network("GET", "/api/app-mcp/Connection")).status, 403, "nor with the path in another case");
+  assert.equal((await network("GET", "/API/app-mcp/connection")).status, 403);
+  assert.equal((await network("HEAD", "/api/app-mcp/connection")).status, 403, "nor with HEAD");
+  assert.equal((await network("POST", "/api/app-approvals/any/APPROVE", {})).status, 403);
+  assert.equal((await network("PUT", "/api/SETTINGS", {})).status, 403);
   assert.equal((await network("POST", "/api/app-mcp/connection", {})).status, 403);
   assert.equal((await network("POST", "/api/app-approvals/any/approve", {})).status, 403, "no self-approval");
   assert.equal((await network("POST", "/api/permissions/any/answer", { allow: true })).status, 403);
