@@ -4,15 +4,15 @@
 
 # 시나위 (Sinawi)
 
-**총괄 AI 하나, Claude Code · Codex · Grok Build 워커 팀, 그리고 채팅 하나.**
+**내 AI가 Claude Code · Codex · Grok에게 코딩 일을 맡기면, 그 대화를 시나위에서 실시간으로 보고 끼어듭니다.**
 
-담당(총괄 AI)과 채팅만 하세요. 담당이 브리프와 스킬을 쓰고, 일을 병렬로 나눠 주고, MCP 도구로 앱 기능을 직접 씁니다. if문은 없습니다.
+Mac 앱이자 MCP 서버입니다. Claude Code, Codex, Grok Build, Claude Desktop, Cursor 같은 MCP 클라이언트가 시나위에 채팅을 열고, 그 채팅은 직접 읽고 말을 이어 갈 수 있는 평범한 채팅입니다. 프로젝트 담당과 직접 채팅할 수도 있습니다.
 
-[![Release](https://img.shields.io/github/v/release/Rakmlabs/sinawi?style=flat-square&color=0f7b4f)](https://github.com/Rakmlabs/sinawi/releases/latest) [![Downloads](https://img.shields.io/github/downloads/Rakmlabs/sinawi/total?style=flat-square)](https://github.com/Rakmlabs/sinawi/releases) [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square&logo=apple)](#설치) [![MCP](https://img.shields.io/badge/MCP-89%20tools-6e56cf?style=flat-square)](docs/mcp.ko.md) [![License: MIT](https://img.shields.io/github/license/Rakmlabs/sinawi?style=flat-square)](LICENSE) [![Stars](https://img.shields.io/github/stars/Rakmlabs/sinawi?style=flat-square)](https://github.com/Rakmlabs/sinawi/stargazers)
+[![Release](https://img.shields.io/github/v/release/Rakmlabs/sinawi?style=flat-square&color=0f7b4f)](https://github.com/Rakmlabs/sinawi/releases/latest) [![Downloads](https://img.shields.io/github/downloads/Rakmlabs/sinawi/total?style=flat-square)](https://github.com/Rakmlabs/sinawi/releases) [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square&logo=apple)](#설치) [![MCP](https://img.shields.io/badge/MCP-81%20tools-6e56cf?style=flat-square)](docs/mcp.ko.md) [![License: MIT](https://img.shields.io/github/license/Rakmlabs/sinawi?style=flat-square)](LICENSE) [![Stars](https://img.shields.io/github/stars/Rakmlabs/sinawi?style=flat-square)](https://github.com/Rakmlabs/sinawi/stargazers)
 
 [English](README.md) · **한국어**
 
-[다운로드](https://github.com/Rakmlabs/sinawi/releases/latest) · [동작 방식](#동작-방식) · [MCP](docs/mcp.ko.md) · [AI에게 붙여넣는 프롬프트](#ai에게-붙여넣는-프롬프트) · [AI 에이전트용](#ai-에이전트용-문서) · [협업 문의](#만든-곳-rakm)
+[다운로드](https://github.com/Rakmlabs/sinawi/releases/latest) · [내 AI 연결하기](#내-ai-연결하기-mcp) · [동작 방식](#동작-방식) · [MCP](docs/mcp.ko.md) · [AI에게 붙여넣는 프롬프트](#ai에게-붙여넣는-프롬프트) · [AI 에이전트용](#ai-에이전트용-문서) · [협업 문의](#만든-곳-rakm)
 
 <br />
 
@@ -24,11 +24,15 @@
 
 ---
 
-## 왜 만들었나
+## 어디에 쓰나
 
-가장 결과가 좋았던 방식은 코딩 에이전트 하나가 아니었습니다. **총괄 AI 하나가 프롬프트와 스킬을 쓰고 Claude, Codex에게 일을 나눠 주는 방식**이었습니다. 이걸 손으로 하면 터미널을 여러 개 띄우고 결과를 복사해 옮겨야 합니다.
+가장 결과가 좋았던 방식은 코딩 에이전트 하나가 아니었습니다. **총괄 AI 하나가 프롬프트와 스킬을 쓰고 Claude, Codex에게 일을 나눠 주는 방식**이었습니다. 그런데 AI가 MCP로 다른 AI를 부리면 총괄은 결과만 받고, 그 사이의 대화는 사람이 볼 수 없습니다. 시나위는 그 일을 화면의 채팅으로 열어서, 보고, 끼어들고, 위험한 동작은 승인할 수 있게 합니다.
 
-시나위는 그 방식을 앱으로 만든 것입니다. 이미 쓰고 있는 코딩 에이전트 CLI(**Codex**, **Claude Code**, **Grok Build**)를 한 팀으로 돌리고, 모든 과정을 실시간으로 보여 줍니다.
+이런 상황에 쓰입니다.
+
+- **Claude Desktop이나 Cursor를 지휘자로 쓸 때.** 이들은 직접 코드를 고치지 못합니다. 시나위의 `create_session`으로 Claude Code나 Codex에 일을 열면 실제 작업 대화는 시나위 채팅으로 흐르고, 거기서 "그 파일 말고 저 파일"이라고 바로 끼어들 수 있습니다.
+- **CLI 하나(Claude Code, Codex, Grok Build)를 총괄로 두고 다른 CLI에 일을 시킬 때.** 그냥 MCP로 부르면 하위 에이전트의 대화가 보이지 않습니다. 시나위에서는 작업마다 이름 붙은 채팅으로 남아 나중에 다시 읽을 수 있습니다(총괄도 `get_session`으로 읽습니다).
+- **같은 일을 여러 모델에 시켜 보고 고를 때.** 총괄이 Claude, Codex, Grok에 채팅을 하나씩 열고, 사람은 세 대화를 나란히 보며 방향이 틀어진 쪽만 바로잡습니다.
 
 이름은 정해진 악보 없이 즉흥으로 합을 맞추는 우리 음악 *시나위*에서 따왔습니다.
 
@@ -38,42 +42,42 @@
 <tr>
 <td width="50%" valign="top">
 
-### 💬 담당과 채팅만 하면 됩니다
-**담당**은 프로젝트 하나를 맡는 오래가는 채팅입니다. 계속 일을 주면, 요청을 쪼개고 구조화된 브리프(목표, 맥락, 완료 기준, 제약, 검증, 보고 형식)를 쓰고 맞는 스킬을 고릅니다.
+### 🔌 내 AI가 시나위에 일을 맡기고, 나는 봅니다
+바깥 AI가 `list_leads`로 담당을 찾고 `create_session`을 부르면, 그 담당의 새 채팅이 탭으로 열리고 AI가 고른 에이전트·모델로 일을 시작합니다. `wait_for_session`은 끝날 때까지 기다렸다가 새 메시지를 돌려주고, `send_message`로 이어 시키고, `show_session`으로 앱에 그 채팅을 띄웁니다. 바깥 AI가 보낸 메시지에는 *Grok Bot이 MCP로 보냄* 같은 배지가, 탭에는 플러그 아이콘이 붙습니다. 같은 채팅에 내가 직접 말해도 됩니다.
 
 </td>
 <td width="50%" valign="top">
+
+### 💬 담당과 직접 채팅도
+**담당**은 프로젝트 하나를 맡습니다. 담당마다 채팅이 여러 개 있고 대화 위에 탭으로 보입니다. 폴더, 지침, 노트는 함께 쓰고 기록은 채팅마다 따로입니다. 일을 주면 요청을 쪼개고 구조화된 브리프(목표, 맥락, 완료 기준, 제약, 검증, 보고 형식)를 쓰고 맞는 스킬을 고릅니다.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
 
 ### ⚡ 병렬 워커
 `delegate_task`, `check_task`, `collect_results`. 워커가 바쁘면 담당이 워커를 더 붙이고(`claude-2` 등), 각자 자기 git worktree에서 일합니다. 디자인 작업은 스크린샷과 함께 돌아옵니다.
 
 </td>
-</tr>
-<tr>
 <td valign="top">
 
 ### 🧠 if문이 아니라 AI가 판단합니다
-앱의 모든 기능이 MCP 도구(**89개**)로 열려 있습니다. 담당이 대화를 보고 무엇을 부를지 정합니다. 스킬 작성, 채팅·공간·담당 생성, 일정 만들기까지.
-
-</td>
-<td valign="top">
-
-### 🛡️ 위험한 작업은 승인 카드로
-삭제, 설정 변경, 병합, 터미널 명령(도구 28개)은 앱에서 승인해야 실행됩니다. AI가 자기 요청을 스스로 승인하는 도구는 없습니다. 담당별 병합 정책은 `auto`, `ask`, `never`.
+앱의 모든 기능이 MCP 도구(**91개**)로 열려 있습니다. 담당이 대화를 보고 무엇을 부를지 정합니다. 스킬 작성, 채팅·공간·담당 생성, 일정 만들기까지.
 
 </td>
 </tr>
 <tr>
+<td valign="top">
+
+### 🛡️ 위험한 작업은 승인 카드로
+삭제, 설정 변경, 병합, 터미널 명령(도구 30개)은 앱에서 승인해야 실행됩니다. AI가 자기 요청을 스스로 승인하는 도구는 없습니다. 담당별 병합 정책은 `auto`, `ask`, `never`.
+
+</td>
 <td valign="top">
 
 ### 🗓️ 대화하다 생기는 일정
 *"매일 아침 9시에 어제 커밋 요약해줘"*라고 하면 담당이 직접 cron 일정을 만듭니다. 한 번 또는 반복, Mac 시간대 기준, 담당 설정에서 관리합니다.
-
-</td>
-<td valign="top">
-
-### 🔌 바깥 AI도 조종할 수 있습니다
-Claude Desktop, Cursor 같은 MCP 클라이언트가 앱 전체를 다룰 수 있습니다. **설정 → 일반 → 외부 AI 연결 (MCP)**에서 Claude Desktop이나 Cursor를 버튼 하나로 연결합니다.
 
 </td>
 </tr>
@@ -100,16 +104,17 @@ flowchart LR
     L -. "schedule_create / write_skill / …" .-> S
     S -. "위험한 도구" .-> A{{승인 카드}}
     A -- 승인 --> S
-    X([Claude Desktop · Cursor 등 MCP 클라이언트]) -- "sinawi mcp (stdio 브리지)" --> S
+    X([Claude Code / Codex / Grok Build / Claude Desktop / Cursor]) -- "sinawi mcp (stdio 브리지)" --> S
 ```
 
 1. 평소처럼 담당과 채팅합니다.
 2. 앱이 MCP로 담당에게 도구를 줍니다. 무엇을 쓸지는 담당이 정합니다.
 3. 워커는 각자 worktree에서 병렬로 일하고, 시나위가 보고를 확인해 결과를 돌려줍니다.
 4. 되돌릴 수 없는 작업은 승인 카드에서 멈추고 결정을 기다립니다.
+5. 바깥 AI도 `sinawi` MCP 서버로 똑같이 씁니다. 바깥 AI가 연 채팅도 앱에 다른 채팅처럼 보입니다.
 
 > [!NOTE]
-> MCP 도구는 Claude, Codex 담당이 씁니다. **Grok 담당**은 실행마다 MCP를 붙이는 방법이 아직 없어서 텍스트 태그 방식으로 동작하고, 이 도구들은 쓸 수 없습니다.
+> MCP 도구는 Claude, Codex 담당이 씁니다. **Grok 담당**은 실행마다 MCP를 붙이는 방법이 아직 없어서 텍스트 태그 방식으로 동작하고, 이 도구들은 쓸 수 없습니다. 이건 시나위 안의 담당 이야기입니다. Grok Build를 바깥 AI로 두고 MCP로 시나위에 붙이는 것은 다른 클라이언트처럼 됩니다.
 
 ## 공간
 
@@ -124,17 +129,12 @@ flowchart LR
 
 **[최신 릴리즈](https://github.com/Rakmlabs/sinawi/releases/latest)**에서 `Sinawi_<버전>_universal.dmg`를 받아 열고 **Sinawi**를 **응용 프로그램**으로 끌어다 놓으세요.
 
-[`@rakmlabs/sinawi`](packages/sinawi) npm 패키지로 터미널에서도 설치할 수 있습니다:
-
-```sh
-npx @rakmlabs/sinawi
-```
-
-최신 릴리즈를 받아 `codesign`·`spctl`로 확인하고, 이미 있는 앱을 바꿀지 물은 뒤 엽니다(`--yes`, `--no-open`, `--help`).
-
 - Developer ID로 서명되고 Apple 공증을 받아 Gatekeeper 경고 없이 열립니다.
 - Apple Silicon과 Intel 모두 네이티브로 동작합니다.
 - 이후에는 GitHub Releases에서 자동 업데이트됩니다(재시작 시점은 직접 고릅니다).
+
+> [!NOTE]
+> npm 패키지가 게시된 뒤에는: `npx @rakmlabs/sinawi`가 최신 릴리즈를 받아 `codesign`·`spctl`로 확인하고, 이미 있는 앱을 바꿀지 물은 뒤 엽니다(`--yes`, `--no-open`, `--help`). [`@rakmlabs/sinawi`](packages/sinawi)는 아직 npm에 없으니 지금은 DMG를 쓰세요.
 
 ### 요구 사항
 
@@ -144,28 +144,51 @@ npx @rakmlabs/sinawi
 
 시나위는 로그인 셸의 `PATH`와 흔한 설치 위치에서 CLI를 찾습니다. 앱의 **설정 → 도움말 및 설정 도우미**에서 찾은 CLI와 로그인 방법을 볼 수 있습니다. API 키는 묻지도 저장하지도 않고, 각 CLI의 로그인을 그대로 씁니다.
 
-## 바깥 AI 연결 (MCP)
+## 내 AI 연결하기 (MCP)
 
-Claude Desktop, Cursor 같은 MCP 클라이언트가 작은 stdio 브리지로 앱 전체를 다룰 수 있습니다. 연결 방법은 쉬운 순서로 셋입니다.
+어떤 MCP 클라이언트든 앱에 들어 있는 작은 stdio 브리지로 시나위에 일을 맡길 수 있습니다. 보통 흐름은 이렇습니다.
 
-1. **버튼 하나.** 시나위 **설정 → 일반 → 외부 AI 연결 (MCP)**에서 **Claude Desktop에 연결** 또는 **Cursor에 연결**을 누릅니다. 시나위가 넣을 JSON을 그대로 보여 준 뒤 `~/Library/Application Support/Claude/claude_desktop_config.json` 또는 `~/.cursor/mcp.json`에 씁니다(다른 항목은 그대로, 원래 파일은 `.bak`으로 남김). 그다음 클라이언트를 다시 시작하세요. 이 항목은 시나위의 토큰 파일을 읽으므로 토큰이 복사되지 않습니다.
-2. **npx.** [`@rakmlabs/sinawi`](packages/sinawi) npm 패키지를 씁니다. 같은 화면의 **구성 복사**를 누르면 토큰이 채워진 다음 구성이 나옵니다:
+1. `list_leads`로 그 프로젝트의 담당을 찾습니다.
+2. `create_session(lead_id, prompt, title, agent, model)`이 그 담당의 새 채팅(탭)을 열고, AI가 고른 에이전트·모델로 일을 시작합니다(비우면 담당 자신의 것).
+3. `wait_for_session(session_id, after_event_id)`이 끝날 때까지 기다렸다가 새 메시지와 마지막 답을 돌려줍니다.
+4. `send_message`로 같은 채팅에 이어 시키고, `show_session`으로 앱에 그 채팅을 띄웁니다.
 
-   ```json
-   {
-     "mcpServers": {
-       "sinawi": {
-         "command": "npx",
-         "args": ["-y", "@rakmlabs/sinawi", "mcp"],
-         "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
-       }
-     }
-   }
-   ```
+이 채팅들은 시나위에서 실시간으로 보이고, 바깥 AI가 보낸 메시지에는 배지가 붙습니다. 같은 채팅에 직접 말해도 됩니다.
 
-3. **앱 안의 브리지.** npm 없이 `"command": "node", "args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`에 같은 `env`를 씁니다(클라이언트가 `node`를 못 찾으면 `which node`의 전체 경로를 쓰세요). 저장소에서는 `npm run sinawi-mcp`가 같은 파일을 실행합니다.
+**설정 → 외부 AI 연결**에는 클라이언트별 탭(Claude Code, Codex, Grok Build, Claude Desktop, Cursor, 그 밖의 MCP)이 있고, 내 Mac의 정확한 경로가 채워진 명령을 복사할 수 있습니다. Claude Desktop과 Cursor는 버튼 하나로 연결됩니다. 같은 화면에서 바깥 AI의 프롬프트나 스킬에 넣을 **바깥 AI에게 줄 사용법**도 복사할 수 있습니다.
 
-조회와 생성은 바로 실행되고, 위험한 도구는 승인 카드를 기다립니다. 자세한 안내: [docs/mcp.ko.md](docs/mcp.ko.md) · 도구 범위: [docs/mcp-coverage.md](docs/mcp-coverage.md)
+설치된 앱 기준 명령:
+
+```sh
+# Claude Code
+claude mcp add sinawi --scope user -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs
+# Codex
+codex mcp add sinawi -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs
+# Grok Build
+grok mcp add sinawi -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs
+```
+
+Claude Desktop, Cursor와 그 밖의 클라이언트:
+
+```json
+{
+  "mcpServers": {
+    "sinawi": {
+      "command": "node",
+      "args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]
+    }
+  }
+}
+```
+
+클라이언트가 `node`를 못 찾으면 `which node`의 전체 경로를 쓰세요. 같은 Mac에서는 브리지가 토큰 파일(`~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`)을 알아서 읽으므로 구성에 비밀값이 들어가지 않습니다. `SINAWI_MCP_TOKEN`은 다른 환경의 클라이언트에만 씁니다. 저장소에서는 `npm run sinawi-mcp`가 같은 브리지를 실행합니다.
+
+확인한 것: Claude Code와 Grok Build는 실제로 연결됐습니다(Grok은 도구 81개를 찾음). Codex는 구성 등록까지만 확인했고 핸드셰이크는 확인하지 않았습니다.
+
+> [!NOTE]
+> npm 패키지가 게시된 뒤에는: `node …/sinawi-mcp.mjs` 대신 `npx -y @rakmlabs/sinawi mcp`를 쓸 수 있습니다.
+
+조회와 생성은 바로 실행되고, 위험한 도구는 승인 카드를 기다립니다. 자세한 안내: [docs/mcp.ko.md](docs/mcp.ko.md) · 클라이언트별 안내: [docs/mcp-clients.md](docs/mcp-clients.md) · 도구 범위: [docs/mcp-coverage.md](docs/mcp-coverage.md)
 
 ## AI에게 붙여넣는 프롬프트
 
@@ -174,9 +197,9 @@ Claude Code, Codex처럼 Mac에서 명령을 실행할 수 있는 AI에 그대�
 **시나위 설치와 설정**
 
 ```text
-시나위(Sinawi, https://github.com/Rakmlabs/sinawi)를 설치하고 설정하는 걸 도와줘. Claude Code, Codex, Grok Build CLI를 한 팀으로 돌리는 macOS 앱이야.
+시나위(Sinawi, https://github.com/Rakmlabs/sinawi)를 설치하고 설정하는 걸 도와줘. 내 AI가 MCP로 Claude Code, Codex, Grok Build CLI에 코딩 일을 맡기고, 나는 그 채팅을 실시간으로 보는 macOS 앱이야.
 
-1. 앱을 설치해 줘. `npx @rakmlabs/sinawi`를 실행해. 최신 릴리즈를 받아 codesign·spctl로 서명을 확인하고, 이미 있는 /Applications/Sinawi.app을 바꿀지 물어본 뒤 앱을 열어 줘. 또는 https://github.com/Rakmlabs/sinawi/releases/latest 에서 최신 Sinawi_<버전>_universal.dmg를 받아 열고 Sinawi를 응용 프로그램으로 옮겨 줘. 서명·공증된 앱이야.
+1. 앱을 설치해 줘. https://github.com/Rakmlabs/sinawi/releases/latest 에서 최신 Sinawi_<버전>_universal.dmg를 받아 열고 Sinawi를 응용 프로그램으로 옮겨 줘. 서명·공증된 앱이야. (npm 설치기 `npx @rakmlabs/sinawi`는 아직 게시되지 않았어.)
 2. 로그인 셸 PATH의 Node.js를 확인해 줘(`node -v`). 24.22.1 이상을 권장하고, 22.x라면 22.23.4 이상이어야 해. Apple Silicon에서는 arm64 Node여야 해. 없거나 낮으면 설치해 줘(예: `brew install node`).
 3. Git을 확인해 줘(`git --version`, 없으면 `xcode-select --install`).
 4. 에이전트 CLI가 하나 이상 설치·로그인돼 있어야 해. 어떤 걸 쓸지 나에게 물어봐 줘:
@@ -193,15 +216,16 @@ Claude Code, Codex처럼 Mac에서 명령을 실행할 수 있는 AI에 그대�
 ```text
 이 AI 클라이언트를 MCP로 시나위(https://github.com/Rakmlabs/sinawi)에 연결해 줘.
 
-- 이 Mac에서 시나위가 켜져 있어야 해. API 주소는 http://127.0.0.1:3001 이야.
-- Claude Desktop이나 Cursor라면 가장 쉬운 방법: 나에게 시나위 → 설정 → 일반 → 외부 AI 연결 (MCP)에서 "Claude Desktop에 연결" 또는 "Cursor에 연결"을 누르라고 해 줘. 시나위가 JSON을 보여 주고 클라이언트 구성에 써(.bak을 남김). 내가 클라이언트를 다시 시작하면 "확인"으로 넘어가.
-- 아니면 이 클라이언트의 MCP 구성에 "sinawi"라는 mcpServers 항목을 직접 넣어 줘:
-  - npm으로(`@rakmlabs/sinawi`): command "npx", args ["-y", "@rakmlabs/sinawi", "mcp"]
-  - npm 없이: command "node", args ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]
-  - env: SINAWI_URL "http://127.0.0.1:3001", 그리고 시나위 → 설정 → 일반 → 외부 AI 연결 (MCP) → "구성 복사"에 있는 SINAWI_MCP_TOKEN. 토큰은 내가 붙여 넣을게. 토큰을 다시 출력하거나 커밋하지 마.
-  - Claude Code: `claude mcp add sinawi --env SINAWI_MCP_TOKEN=<토큰> -- npx -y @rakmlabs/sinawi mcp`
-  그다음 클라이언트를 다시 시작해 줘.
+- 시나위가 /Applications에 설치돼 있고 이 Mac에서 켜져 있어야 해.
+- 가장 쉬운 방법: 나에게 시나위 → 설정 → 외부 AI 연결에서 이 클라이언트의 탭을 골라 명령을 복사해 달라고 해 줘(정확한 경로가 채워져 있어). Claude Desktop이나 Cursor는 버튼 하나로 연결돼. 내가 클라이언트를 다시 시작하면 "확인"으로 넘어가.
+- 아니면 브리지를 직접 등록해 줘:
+  - Claude Code: `claude mcp add sinawi --scope user -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`
+  - Codex: `codex mcp add sinawi -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`
+  - Grok Build: `grok mcp add sinawi -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`
+  - Claude Desktop, Cursor, 그 밖의 클라이언트: mcpServers에 "sinawi" 항목, command "node", args ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]. 클라이언트가 node를 못 찾으면 `which node`의 전체 경로를 써.
+  이 Mac에서는 브리지가 시나위의 토큰 파일을 알아서 읽어. 나에게 토큰을 묻거나 구성에 넣지 마. (SINAWI_MCP_TOKEN은 다른 환경의 클라이언트에만 써.) 그다음 클라이언트를 다시 시작해 줘.
 - 확인: `sinawi` 도구 목록을 보고 `app_status`를 호출해 봐.
+- 일을 맡길 때: `list_leads` → `create_session(lead_id, prompt, title, agent, model)` → `wait_for_session(session_id, after_event_id)` → 이어 시킬 땐 `send_message` → 나에게 보여 줄 땐 `show_session`. 내가 같은 채팅에 직접 말했을 수 있으니 다음 지시 전에 새 메시지를 읽어.
 - 위험한 도구(삭제, 설정 변경, 병합, 터미널 명령)는 `pending_approval`을 돌려줘. 승인·거절은 내가 시나위의 승인 카드에서 해. 네가 직접 승인하려고 하지 마.
 - 참고: https://github.com/Rakmlabs/sinawi/blob/main/docs/ai/for-ai.ko.md
 ```
@@ -248,7 +272,9 @@ npm install
 npm run app:build
 ```
 
-앱은 `src-tauri/target/release/bundle/macos/Sinawi.app`에 만들어집니다. 직접 빌드한 앱은 공증되지 않고 서명된 업데이트도 받지 않습니다.
+앱은 `src-tauri/target/release/bundle/macos/Sinawi.app`에 만들어집니다. 직접 빌드한 앱은 공증되지 않고 서명된 업데이트도 받지 않습니다. `TAURI_SIGNING_PRIVATE_KEY`가 없으면 `npm run app:build`는 업데이터 파일만 건너뛰고 성공합니다.
+
+npm 11은 설치 스크립트(`node-pty`, `esbuild`)에 대해 경고할 수 있습니다. `package.json`에 `allowScripts`가 선언돼 있고 서버가 `node-pty` 도우미의 권한을 직접 고치므로, 이 경고는 무시해도 됩니다.
 
 개발:
 
@@ -258,7 +284,13 @@ npm run app:dev    # Tauri 창에서 같은 환경
 npm run typecheck && npm test && npm run build
 ```
 
-두 서버 모두 `127.0.0.1`에만 열립니다. `SINAWI_PORT`, `SINAWI_DATA_DIR`로 API 포트와 데이터 폴더를 바꿀 수 있습니다.
+`npm run dev`는 3001 포트를 쓰므로 설치된 시나위가 켜져 있으면 부딪힙니다. 나란히 띄우려면 일회용 데이터로 이렇게 실행하세요.
+
+```sh
+SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev
+```
+
+두 서버 모두 `127.0.0.1`에만 열립니다. `SINAWI_PORT`, `SINAWI_DATA_DIR`로 API 포트와 데이터 폴더를 바꿀 수 있고, `SINAWI_UI_PORT`는 5188과 5198만 됩니다.
 
 | 경로 | 내용 |
 |---|---|
