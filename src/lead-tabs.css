@@ -81,3 +81,4 @@
   .lead-tabs-new { width: 30px; justify-content: center; padding: 0; }
   .lead-tab { max-width: 150px; }
 }
+.lead-tab-agent { flex: none; padding: 0 6px; border-radius: 999px; background: var(--warn-tint, var(--bg-inset)); color: var(--text-secondary); font-size: calc(12px * var(--font-scale)); }

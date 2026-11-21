@@ -7,7 +7,7 @@ import { leadHue } from "../lead";
 export { threadTabs } from "../lead";
 import { t, useT } from "../i18n";
 import { originLabel } from "../origin";
-import { statusLabels } from "./labels";
+import { names, statusLabels } from "./labels";
 import "../lead-tabs.css";
 
 /** Asks the open lead chat's StewardPanel to show its settings drawer (the button lives in the tab bar). */
@@ -21,6 +21,8 @@ export type LeadTabsProps = {
   /** The chat shown now; unset while a new chat of this lead is being written. */
   activeId?: string;
   busy?: boolean;
+  /** The lead's own CLI: a chat running another one (a quota switch, an outside AI's pick) says so on its tab. */
+  leadAgent?: string;
   onSelect: (id: string) => void;
   onNew: () => void;
   onRename?: (id: string, title: string) => Promise<boolean>;
@@ -31,7 +33,7 @@ export type LeadTabsProps = {
  * (own messages and CLI session); the lead's folder, instructions, skills and notes are shared. A tab
  * opened by an outside AI over MCP shows a plug and who opened it.
  */
-export const LeadTabs = memo(function LeadTabs({ stewardId, name, threads, activeId, busy, onSelect, onNew, onRename }: LeadTabsProps) {
+export const LeadTabs = memo(function LeadTabs({ stewardId, name, threads, activeId, busy, leadAgent, onSelect, onNew, onRename }: LeadTabsProps) {
   useT();
   const list = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<{ id: string; value: string }>();
@@ -72,17 +74,20 @@ export const LeadTabs = memo(function LeadTabs({ stewardId, name, threads, activ
         const selected = thread.id === activeId;
         const progress = goalProgress(thread);
         const via = thread.origin ? originLabel(thread.origin) : "";
+        const runner = `${names[thread.agent] ?? thread.agent}${thread.model ? ` ${thread.model}` : ""}`;
+        const otherAgent = Boolean(leadAgent && thread.agent !== leadAgent);
         if (editing?.id === thread.id) return <input key={thread.id} className="lead-tab-rename" autoFocus aria-label={t("side.chatName")} maxLength={100} value={editing.value}
           onChange={(event) => setEditing({ id: thread.id, value: event.target.value })} onBlur={() => void commit()}
           onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void commit(); } if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setEditing(undefined); } }} />;
         return <button key={thread.id} type="button" role="tab" id={`lead-tab-${thread.id}`} aria-selected={selected} tabIndex={selected || (!activeId && thread === threads.at(-1)) ? 0 : -1}
           className={`lead-tab${selected ? " active" : ""} ${thread.status}`}
-          title={[thread.title, statusLabels[thread.status], via && t("origin.openedBy", { name: via }), onRename ? t("leadTabs.renameHint") : ""].filter(Boolean).join(" · ")}
+          title={[thread.title, statusLabels[thread.status], runner, via && t("origin.openedBy", { name: via }), onRename ? t("leadTabs.renameHint") : ""].filter(Boolean).join(" · ")}
           onClick={() => onSelect(thread.id)} onDoubleClick={() => onRename && setEditing({ id: thread.id, value: thread.title })}>
           {thread.status === "running" ? <span className="lead-tab-state running" role="img" aria-label={statusLabels.running}><Beat /></span>
             : <span className={`lead-tab-state ${thread.status}`} role="img" aria-label={statusLabels[thread.status]} />}
           {via && <Plug size={12} className="lead-tab-origin" aria-label={t("origin.openedBy", { name: via })} />}
           <span className="lead-tab-title">{thread.title}</span>
+          {otherAgent && <small className="lead-tab-agent">{names[thread.agent] ?? thread.agent}</small>}
           {progress && <small className="lead-tab-progress">{progress.done}/{progress.total}</small>}
         </button>;
       })}
