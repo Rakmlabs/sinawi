@@ -221,6 +221,10 @@ fn app_exe() -> String {
     std::env::current_exe().ok().and_then(|path| fs::canonicalize(path).ok()).map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// Only an app bundle installs the LaunchAgent. A bare `cargo build` binary (src-tauri/target/…) is a
+/// production build too, and once replaced the user's installed server with a branch's when run.
+fn runs_from_app_bundle(exe: &str) -> bool { exe.contains(".app/Contents/MacOS/") }
+
 /// The node binary an installed plist launches (first ProgramArguments string).
 fn plist_node(contents: &str) -> Option<String> {
     let rest = &contents[contents.find("<key>ProgramArguments</key>")?..];
@@ -388,6 +392,10 @@ pub fn ensure(layout: Layout) -> Result<(), String> {
     if !home_matches_account(&home, account_home().as_deref()) {
         return Err(format!("HOME ({home}) is not this account's home folder; not touching the {LABEL} LaunchAgent"));
     }
+    let exe = app_exe();
+    if !runs_from_app_bundle(&exe) {
+        return Err(format!("{exe} is not inside an app bundle; not touching the {LABEL} LaunchAgent"));
+    }
     let version = bundled_version(&layout);
     if loaded(&legacy_target()) {
         // A pre-rename server still owns port 3001. If it has running sessions, keep using it
@@ -511,6 +519,13 @@ mod tests {
         assert!(move_legacy_dir(&old2, &empty, "logs").unwrap().contains("moved"));
         assert!(empty.join("a").is_file());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_an_app_bundle_installs_the_agent() {
+        assert!(runs_from_app_bundle("/Applications/Sinawi.app/Contents/MacOS/sinawi"));
+        assert!(!runs_from_app_bundle("/Users/me/sinawi/src-tauri/target/debug/sinawi"));
+        assert!(!runs_from_app_bundle(""));
     }
 
     #[test]
