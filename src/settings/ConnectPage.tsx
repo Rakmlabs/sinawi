@@ -27,9 +27,13 @@ type McpConnection = { token: string; tokenFile: string; script: string | null; 
 export function SeenClients({ seen }: { seen: McpSeen[] | undefined }) {
   if (!seen) return null;
   if (!seen.length) return <p className="connect-seen none" role="status">{t("set.connect.seenNone")}</p>;
-  return <ul className="connect-seen" aria-label={t("set.connect.seenLabel")}>
-    {seen.map((item) => <li key={item.client}><span className="connect-seen-dot" aria-hidden="true" /><strong>{item.client}</strong> {t("set.connect.seenAt", { ago: agoLabel(item.at), n: item.calls })}</li>)}
-  </ul>;
+  return <>
+    <ul className="connect-seen" aria-label={t("set.connect.seenLabel")} aria-describedby="connect-seen-note">
+      {seen.map((item) => <li key={item.client}><span className="connect-seen-dot" aria-hidden="true" /><strong>“{item.client}”</strong> {t("set.connect.seenAt", { ago: agoLabel(item.at), n: item.calls })}</li>)}
+    </ul>
+    {/* The name is self-reported (x-sinawi-client / clientInfo): say so instead of showing it as fact (third review N10). */}
+    <p className="connect-hint" id="connect-seen-note">{t("set.connect.seenNote")}</p>
+  </>;
 }
 type OneClick = "claude" | "cursor";
 type McpClientPlan = { client: OneClick; name: string; path: string; exists: boolean; replaces: boolean; upToDate: boolean; merge: string };
