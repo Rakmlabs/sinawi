@@ -1031,3 +1031,12 @@ body,
   .composer-list-hint { display: none; }
 }
 .composer textarea.list-line { tab-size: 2; }
+
+/* The composer's own width decides, not the window's: with the sidebar open a 900px window leaves the
+   composer ~590px, and the bottom row used to cut the folder name and the approval picker to one letter. */
+.composer { container: composer / inline-size; }
+@container composer (max-width: 680px) {
+  .composer-bottom { flex-wrap: wrap; row-gap: 6px; }
+  .composer-bottom .permission-picker { width: 104px; min-width: 104px; }
+  .composer-bottom .directory-button { max-width: 45%; min-width: 72px; }
+}
