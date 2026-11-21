@@ -224,9 +224,13 @@ const leadMarked = (text: string) => LEAD_SKILL_MARK.test(/^---\n([\s\S]*?)\n---
  * another, a new chat of an existing lead). The folder is compared as the file system sees it
  * (device and inode of its real path), so another spelling (`/USERS/me` on a case-insensitive disk,
  * `$HOME/.`, a symlink to the home folder) is the same folder. It must be an existing absolute folder.
+ * Returns the real path it checked; callers keep that value, not the spelling they were given, so a
+ * symlink swapped after the check cannot move the lead (fourth review F2).
  */
-export function assertLeadFolder(cwd: string | undefined, home = homedir()): void {
-  if (!cwd) return;
+export function assertLeadFolder(cwd: string, home?: string): string;
+export function assertLeadFolder(cwd: string | undefined, home?: string): string | undefined;
+export function assertLeadFolder(cwd: string | undefined, home = homedir()): string | undefined {
+  if (!cwd) return undefined;
   const refuse = (folder: string) => new Error(`담당은 프로젝트 폴더에서 일합니다. 홈 폴더나 / (${folder})는 담당 폴더가 될 수 없으니 프로젝트 폴더를 고르세요.`);
   if (!isAbsolute(cwd)) throw new Error(`담당 폴더는 절대 경로여야 합니다: ${cwd}`);
   let real: string;
@@ -248,6 +252,7 @@ export function assertLeadFolder(cwd: string | undefined, home = homedir()): voi
     walk = parent;
   }
   if (real === "/" || (mine && above.has(mine))) throw refuse(real);
+  return real;
 }
 
 export class Orchestra {
@@ -612,8 +617,6 @@ export class Orchestra {
       input = { ...input, agent: input.agent || fallback.agent, ...(input.workers?.length ? {} : { workers: fallback.workers, workerConfigs: undefined }) };
     }
     if (!entity && input.steward?.name?.trim()) this.assertStewardNameFree(input.steward.name.trim().slice(0, 80), undefined, input.workspaceId ?? "personal");
-    // A new lead, or a new chat of a lead opened in another folder (that folder joins the lead's list below).
-    if (input.steward) assertLeadFolder(input.cwd);
     const workspaceId = input.workspaceId ?? "personal";
     // No first message: an empty chat that waits for one (followup starts its first turn).
     const empty = !input.prompt.trim();
@@ -634,7 +637,9 @@ export class Orchestra {
     // A new thread of a lead opens in the lead's first folder unless the user picked another.
     const folder = input.cwd || entity?.cwds[0];
     if (!folder) throw new Error("작업 폴더가 올바르지 않습니다.");
-    const cwd = resolve(folder);
+    // A new lead, or a new chat of a lead (in another folder, which joins the lead's list below, or in
+    // the lead's own folder, checked again in case it was changed since): the checked real path is used.
+    const cwd = input.steward ? assertLeadFolder(folder) : resolve(folder);
     if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
     const selectedSkills = [...new Set([...(input.skills ?? []), ...mediaSkills(input.prompt, await enabledPublicSkills(cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), workspaceId).disabledSkills, this.accountsOf(workspaceId)))])];
     const session: Session = {
@@ -2024,6 +2029,8 @@ export class Orchestra {
     const enabled = patch.enabled ?? Boolean(session.steward);
     const destination = existing?.workspaceId ?? session.workspaceId;
     const enabledName = newName || existing?.name || basename(session.cwd) || session.cwd;
+    // A chat that becomes a lead keeps to the lead-folder rule too (fourth review F1).
+    const leadFolder = enabled && !session.steward ? assertLeadFolder(session.cwd) : undefined;
     if (enabled && !session.steward) {
       this.assertStewardNameFree(enabledName, existing?.id, destination);
       if (existing?.workspaceId && existing.workspaceId !== session.workspaceId && session.status === "running") {
@@ -2044,6 +2051,7 @@ export class Orchestra {
         ...(existing ? { id: existing.id, name: existing.name } : newName ? { name: newName } : {}),
       };
       session.goal ??= freshGoal();
+      if (leadFolder) session.cwd = leadFolder;
       this.adoptSteward(session);
       delete session.disabledStewardId;
       this.event(session, session.agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
@@ -2225,7 +2233,7 @@ export class Orchestra {
     const name = input.name.trim().slice(0, 80);
     if (!name) throw new Error("담당 이름이 필요합니다.");
     this.assertStewardNameFree(name, undefined, input.workspaceId);
-    for (const cwd of input.cwds ?? []) assertLeadFolder(cwd);
+    if (input.cwds) input = { ...input, cwds: input.cwds.map((cwd) => assertLeadFolder(cwd)) };
     const now = new Date().toISOString();
     const base: Steward = { id: randomUUID(), name, agent: input.agent ?? "claude", skills: [], systemPrompt: "", workers: [], mergePolicy: DEFAULT_MERGE_POLICY, cwds: [], ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), createdAt: now };
     const steward = applyStewardPatch(base, { ...input, name }, now);
@@ -2245,7 +2253,7 @@ export class Orchestra {
     if (patch.name !== undefined && !name) throw new Error("담당 이름이 필요합니다.");
     const destination = workspaceId ?? current.workspaceId;
     this.assertStewardNameFree(name ?? current.name, id, destination);
-    for (const cwd of patch.cwds ?? []) assertLeadFolder(cwd);
+    if (patch.cwds) patch = { ...patch, cwds: patch.cwds.map((cwd) => assertLeadFolder(cwd)) };
     if (workspaceId) {
       for (const session of this.stewardThreads(id)) if (session.status === "running") this.assertSessionPolicy({ ...session, workspaceId });
     }
