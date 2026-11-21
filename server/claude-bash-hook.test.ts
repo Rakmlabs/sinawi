@@ -227,6 +227,15 @@ test("find that only lists is allowed without a card; find that acts or follows 
   }
 });
 
+// R6-2: tsconfig's outDir wrote JS outside the folder under the plain `tsc` rule. R6-3: paths inside
+// ffmpeg filter values and gh's download folder were not checked.
+test("tsc passes only with --noEmit; ffmpeg filter paths and gh download folders outside ask", () => {
+  for (const command of ["tsc", "tsc -p tsconfig.json", "tsc -p . --noEmit", "tsc --build", "ffmpeg -i a.mp4 -af ametadata=mode=print:file=/tmp/m.txt -f null -", "ffmpeg -i a.mp4 -vf vidstabdetect=result=/tmp/t.trf -f null -", "ffmpeg -i a.mp4 -vf \"movie=~/x.png\" out.mp4", "gh run download 1 -D /tmp/x", "gh run download 1 --dir=/tmp/x", "gh run download 1 --dir ../x"]) {
+    assert.equal(decide(command), "ask", command);
+  }
+  for (const command of ["tsc --noEmit", "tsc --noEmit -p tsconfig.json", "ffmpeg -i https://e.com/a.mp4 out.mp4", "ffmpeg -i a.mp4 -vf scale=640:-1 out.mp4", "gh run download 1 -D out"]) assert.notEqual(decide(command), "ask", command);
+});
+
 test("simple commands of pre-approved programs inside the folder are left to Claude's rules, or allowed", () => {
   for (const command of ["git status", "git log --oneline -5 HEAD~3", "git diff --stat", "git commit -m x", "git commit -m \"fix: ../ and $ stay text\"".replace("$ ", ""), "git checkout -b fix/x", "rg -n 'a b' src", "rg --files", "ls -la src", "cat a.txt", "curl -s 'https://example.com/a?b=1'", "gh pr view 7 --json title", "gh api repos/a/b", "gh api /repos/a/b/pulls", "xcrun simctl list devices", "sort -o out.txt a.txt", "tsc --noEmit -p .", "git log --format=\"%h %s\"", "jq .name package.json", "ffmpeg -i a.mp4 out.mp4"]) {
     assert.notEqual(decide(command), "ask", command);
