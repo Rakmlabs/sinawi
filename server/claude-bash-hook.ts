@@ -395,7 +395,13 @@ export function inGitDir(target: string, cwd: string, root: string, host: HookHo
  * - every config file git reads (`git config --list --show-origin`: includes, includeIf,
  *   GIT_CONFIG_GLOBAL/SYSTEM) is outside `root` or inside a `.git` folder, none comes from the
  *   command line or environment (GIT_CONFIG_PARAMETERS/COUNT), and `core.hooksPath` is not a folder
- *   inside `root` outside `.git` (husky's `.husky`: its scripts are ordinary project files).
+ *   inside `root` outside `.git` (husky's `.husky`: its scripts are ordinary project files) — unless
+ *   the git command (`args`, the words after `git`) runs none of the hooks found there (R10-1). From
+ *   githooks(5) and tried with git 2.43 and Apple git 2.54: `log`, `show`, `rev-parse`, `ls-files`,
+ *   `blame` and a `branch` that only lists run no hook; `status` and `diff` refresh the index and run
+ *   `post-index-change` when it exists; everything else (commit, merge, checkout, rebase, am, a ref
+ *   update's `reference-transaction`, `gc --auto`'s `pre-auto-gc` …) is not judged and asks. The
+ *   folder is looked at when the command is judged: a hook written later is judged with the next call.
  *
  * Anything git cannot answer (no repository, safe.directory refusal, no git) is not trusted.
  * Not covered: config that names a program inside the folder (`filter.x.clean = ./clean.sh`, an alias
@@ -403,7 +409,7 @@ export function inGitDir(target: string, cwd: string, root: string, host: HookHo
  *
  * Self-contained on purpose (its source goes into the hook script).
  */
-export function gitRepositoryTrusted(dir: string, root: string, host: HookHost): boolean {
+export function gitRepositoryTrusted(dir: string, root: string, host: HookHost, args: readonly string[] = []): boolean {
   if (!host.git) return false;
   let current = dir;
   try { current = host.realpath(host.resolve(dir)); } catch { return false; }
@@ -446,7 +452,14 @@ export function gitRepositoryTrusted(dir: string, root: string, host: HookHost):
     const entry = fields[at + 1]!;
     if (!origin.startsWith("file:") || !safe(origin.slice(5), current)) return false;
     const newline = entry.indexOf("\n");
-    if (newline > 0 && entry.slice(0, newline).toLowerCase() === "core.hookspath" && !safe(entry.slice(newline + 1), topLevel || current)) return false;
+    if (newline > 0 && entry.slice(0, newline).toLowerCase() === "core.hookspath" && !safe(entry.slice(newline + 1), topLevel || current)) {
+      const listing = ["--show-current", "--list", "-l", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--no-color"];
+      const hooks = ["log", "show", "rev-parse", "ls-files", "blame"].includes(args[0] ?? "") || (args[0] === "branch" && args.slice(1).every((arg) => listing.includes(arg))) ? []
+        : args[0] === "status" || args[0] === "diff" ? ["post-index-change"] : undefined;
+      const folder = host.resolve(topLevel || current, entry.slice(newline + 1));
+      // Any entry by that name (a file, a link, even a dangling one) counts as a hook.
+      if (!hooks || hooks.some((name) => host.exists(host.join(folder, name)))) return false;
+    }
   }
   return true;
 }
@@ -483,7 +496,7 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
   // R6-1: writes into a git directory, and git in a folder that only looks like a repository.
   const readers = ["git", "cat", "head", "tail", "ls", "rg", "wc", "jq", "file", "stat", "du", "lsof", "echo", "pwd", "ffprobe"];
   if (!readers.includes(words[0]!) && args.some((arg) => [arg, arg.slice(arg.indexOf("=") + 1), arg.replace(/^@/u, "")].some((value) => inGitDir(value, cwd, root, host)))) return "ask";
-  if (words[0] === "git" && !gitRepositoryTrusted(cwd, root, host)) return "ask";
+  if (words[0] === "git" && !gitRepositoryTrusted(cwd, root, host, words.slice(1))) return "ask";
   return undefined;
 }
 
@@ -640,7 +653,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
         writes = false;
       }
     }
-    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, rootReal, host));
+    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, rootReal, host, args));
     if (program === "find") return findAllowed(args, dirs);
     if (packageManagers.has(program)) {
       if (!host.runtimePrograms) return false;

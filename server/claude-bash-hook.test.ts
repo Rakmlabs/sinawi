@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
@@ -298,6 +298,67 @@ test("find that only lists is allowed without a card; find that acts or follows 
   for (const command of ["find . -exec rm {} ;", "find . -name x -delete", "find . -execdir ls {} +", "find . -ok ls {} ;", "find -L . -name x", "find . -follow", "find . -fprint /tmp/x", "find . -fls x", "find .. -name x", "find /etc -name x", "find link -name x", "find . -newer /etc/hosts", "find . -name *.ts"]) {
     assert.notEqual(decide(command), "allow", command);
     assert.equal(decide(command), "ask", command);
+  }
+});
+
+// Tenth review R10-1: a hooks folder inside the project (husky) made every git command ask, `git status`
+// too. A git command that runs none of the hooks in that folder passes; which command runs which hook
+// is githooks(5), and the second test checks it against the git on this machine.
+const HOOK_NAMES = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update", "proc-receive", "post-receive", "post-update", "reference-transaction", "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate", "fsmonitor-watchman", "post-index-change"];
+const HOOK_FREE = ["git log --oneline -3", "git log -p -1", "git show HEAD", "git show --stat", "git rev-parse HEAD", "git ls-files", "git blame a.txt", "git branch --show-current", "git branch -vv"];
+const huskyRepo = (name: string, hooks: readonly string[]) => {
+  const dir = path.join(root, name);
+  mkdirSync(path.join(dir, ".husky", "_"), { recursive: true });
+  const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir, encoding: "utf8" });
+  run("init", "-q");
+  writeFileSync(path.join(dir, "a.txt"), "a\n");
+  run("add", "a.txt");
+  run("commit", "-q", "-m", "init");
+  for (const hook of hooks) writeFileSync(path.join(dir, ".husky", "_", hook), `#!/bin/sh\necho ${hook} >> "${path.join(dir, "MARKS")}"\n`, { mode: 0o755 });
+  run("config", "core.hooksPath", ".husky/_");
+  return dir;
+};
+
+test("with a hooks folder inside the project, git commands that run none of its hooks pass", () => {
+  // husky 9 writes these into .husky/_ (no post-index-change).
+  const husky = huskyRepo("husky10", ["pre-commit", "commit-msg", "prepare-commit-msg", "post-commit", "post-checkout", "post-merge", "pre-push", "pre-rebase", "post-rewrite", "pre-auto-gc", "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-merge-commit"]);
+  for (const command of [...HOOK_FREE, "git status", "git status --short", "git diff", "git diff --stat", "git status && git diff && git log --oneline -3"]) assert.notEqual(decide(command, false, husky), "ask", command);
+  assert.equal(decide("cd husky10 && git status && git log --oneline -1"), "allow");
+  // Commands that run hooks (commit, checkout, ref updates, merges, gc) ask as before.
+  for (const command of ["git add -A", "git commit -m x", "git add -A && git commit -m x", "git checkout -b x", "git switch -c x", "git branch x", "git branch -d x", "git merge x", "git rebase main", "git stash", "git tag v1", "git reset --hard", "git gc"]) assert.equal(decide(command, false, husky), "ask", command);
+  // A post-index-change hook there (a file or a dangling link): status and diff ask, log still passes.
+  writeFileSync(path.join(husky, ".husky", "_", "post-index-change"), "#!/bin/sh\n", { mode: 0o755 });
+  for (const command of ["git status", "git diff", "git status && git log"]) assert.equal(decide(command, false, husky), "ask", command);
+  assert.notEqual(decide("git log --oneline -3", false, husky), "ask");
+  rmSync(path.join(husky, ".husky", "_", "post-index-change"));
+  symlinkSync(path.join(base, "outside", "nothing"), path.join(husky, ".husky", "_", "post-index-change"));
+  assert.equal(decide("git status", false, husky), "ask");
+  // Written in the same chain: the write comes before another step. In an earlier call: judged now.
+  rmSync(path.join(husky, ".husky", "_", "post-index-change"));
+  assert.equal(decide("printf x > .husky/_/post-index-change && git status", false, husky), "ask");
+});
+
+test("the git commands that pass run no hook from the hooks folder on this machine's git", () => {
+  const repo = huskyRepo("hooked10", HOOK_NAMES);
+  const marks = path.join(repo, "MARKS");
+  const read = () => { try { return readFileSync(marks, "utf8").trim(); } catch { return ""; } };
+  // An index older than the file makes status and diff refresh (and write) the index.
+  let hours = 0;
+  const stale = () => { const when = new Date(Date.now() - ++hours * 3_600_000); utimesSync(path.join(repo, "a.txt"), when, when); };
+  for (const command of HOOK_FREE) {
+    stale();
+    rmSync(marks, { force: true });
+    const words = command.split(" ");
+    assert.equal(spawnSync(words[0]!, words.slice(1), { cwd: repo }).status, 0, command);
+    assert.equal(read(), "", `${command} ran a hook`);
+  }
+  // Why status and diff are judged by post-index-change: they run it.
+  for (const command of ["status", "diff"]) {
+    stale();
+    rmSync(marks, { force: true });
+    spawnSync("git", [command], { cwd: repo });
+    assert.equal(read(), "post-index-change", `git ${command}`);
+    assert.equal(decide(`git ${command}`, false, repo), "ask");
   }
 });
 
