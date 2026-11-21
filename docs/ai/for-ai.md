@@ -106,7 +106,7 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 | Tool | Surface | Approval | Summary |
 |---|---|---|---|
 | `list_sessions` | lead, external | no (read) | Chats: ID, title, status, agent, folder, their lead and who opened them; lead_id lists one lead's chats. |
-| `get_session` | lead, external | no (read) | One chat with its recent messages and events (answers, tool runs, errors); after_event_id returns only newer ones. |
+| `get_session` | lead, external | no (read) | One chat with its recent messages and events (answers, tool runs, errors); after_event_id returns only newer ones, before_event_id pages back (old events of a long chat come from its archive). cursorLost: true means the id was not found and the latest came back. |
 | `get_session_summary` | lead, external | no (read) | A chat at a glance: status, the lead's last answer, checklist progress, pending merge, lead info. |
 | `create_session` | lead, external | no | Open a new chat (the user watches it live in the app); with a prompt it starts working, without one it stays empty. With lead_id it opens a new chat (tab) of that lead sharing its folder, instructions and memory; agent/model then pick that chat's CLI and model. |
 | `send_message` | lead, external | no | Send a follow-up message to a chat (starts the next turn). A running chat refuses it: wait_for_session first. |

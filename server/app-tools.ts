@@ -181,13 +181,6 @@ function eventRow(event: Row) {
   return defined({ id: event.id, type: event.type, role: event.role, agent: event.agent, workerId: event.workerId, time: event.time, text: clip(event.text, 4_000), sentBy: via ? `${via.client} (${via.kind})` : undefined });
 }
 
-/** Events after `afterId` (all of them when it is unknown or unset), for a caller reading a chat bit by bit. */
-function eventsAfter(events: Row[], afterId: unknown): Row[] {
-  if (typeof afterId !== "string" || !afterId) return events;
-  const index = events.findIndex((event) => event.id === afterId);
-  return index < 0 ? events : events.slice(index + 1);
-}
-
 /** Drops MCP servers' launch details (command, args, URL) from a /api/tools payload, wherever the rows sit. */
 export function withoutLaunchDetails(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutLaunchDetails);
@@ -291,14 +284,17 @@ const APP: AppTool[] = [
     },
   }),
   routeTool({
-    name: "get_session", risk: "read", method: "GET", route: "/api/sessions",
-    description: "채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. after_event_id를 주면 그 뒤에 생긴 것만 준다(앞서 읽은 마지막 이벤트 ID).",
-    properties: { session_id: str("채팅 ID."), limit: num("최근 이벤트 몇 개 (기본 30, 최대 200)."), after_event_id: str("이 이벤트 뒤의 것만 (이전 응답의 마지막 이벤트 ID).") }, required: ["session_id"],
-    pick: (output, args) => {
-      const session = (output as Row[]).find((item) => item.id === args.session_id);
-      if (!session) throw new Error("세션을 찾을 수 없습니다.");
-      const limit = Math.min(200, Math.max(1, Number(args.limit) || 30));
-      return { ...sessionRow(session), events: eventsAfter(session.events as Row[] ?? [], args.after_event_id).slice(-limit).map(eventRow) };
+    name: "get_session", risk: "read", method: "GET", route: "/api/sessions/:id/events",
+    description: "채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. after_event_id를 주면 그 뒤에 생긴 것만, before_event_id를 주면 그보다 앞의 것을 준다(긴 채팅의 오래된 이벤트는 보관 파일에서 읽는다). cursorLost가 true면 준 ID를 찾지 못해 최근 것을 준 것이다.",
+    properties: {
+      session_id: str("채팅 ID."), limit: num("이벤트 몇 개 (기본 30, 최대 200)."),
+      after_event_id: str("이 이벤트 뒤의 것만 (이전 응답의 마지막 이벤트 ID)."),
+      before_event_id: str("이 이벤트보다 앞의 것 (더 오래된 기록을 거슬러 읽을 때, 이전 응답의 첫 이벤트 ID)."),
+    }, required: ["session_id"],
+    path: (args) => `/api/sessions/${seg(args, "session_id")}/events${query({ limit: args.limit, after: args.after_event_id, before: args.before_event_id })}`,
+    pick: (output) => {
+      const session = output as Row;
+      return { ...sessionRow(session), events: (session.events as Row[] ?? []).map(eventRow), ...(session.archivedEvents ? { archivedEvents: session.archivedEvents } : {}), ...(session.cursorLost ? { cursorLost: true } : {}), ...(session.skipped ? { skipped: session.skipped } : {}) };
     },
   }),
   routeTool({

@@ -1,4 +1,5 @@
 import { installAccountSkills } from "./account-tooling.js";
+import { archiveEvents, eventsBefore, eventsSince, removeArchivedEvents } from "./event-archive.js";
 import { originLabel } from "../src/origin.js";
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes, SETUP_TOOLS } from "./setup.js";
@@ -574,6 +575,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   }, allowedFor, options.dataDir, (session) => fallbackContext(session.workspaceId),
   (prompt) => routing.loadSettings().then((settings) => mediaRouteRequired(prompt, settings.rules)), options.inactivityTimeoutMs, policyFor);
   // Per-worker git worktrees (server/worktrees.ts). Opt-in so tests and embedders never create branches.
+  orchestra.archive = (sessionId, events) => { void archiveEvents(sessionId, events, options.dataDir).catch((error) => console.error("이벤트 보관 실패:", error.message)); };
   if (options.worktrees) orchestra.worktreeDataDir = options.dataDir ?? join(homedir(), ".sinawi");
   // Leads' notes, transcripts and the user's preferences live in the data folder the stores use
   // (SINAWI_DATA_DIR when set), never in ~/.sinawi behind a custom one's back.
@@ -1246,6 +1248,22 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   // An outside orchestrator waiting for a chat's turn (wait_for_session): answers when the chat is no
   // longer working (Orchestra.isWorking) or at the timeout, with the lines said since `after`.
+  // One chat's events, paged: `after` resumes where a reader left off (an id since trimmed into the
+  // archive still works), `before` reads further back into the archive (review M5).
+  app.get("/api/sessions/:id/events", async (req, res) => {
+    try {
+      await ready;
+      const session = orchestra.get(routeParam(req.params.id));
+      if (!session) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 30));
+      const before = typeof req.query.before === "string" && req.query.before ? req.query.before : undefined;
+      const after = typeof req.query.after === "string" && req.query.after ? req.query.after : undefined;
+      const { events: _events, ...rest } = session;
+      if (before) { res.json({ ...rest, events: await eventsBefore(session, before, limit, options.dataDir) }); return; }
+      const since = await eventsSince(session, after, options.dataDir);
+      res.json({ ...rest, events: since.events.slice(-limit), ...(since.found ? {} : { cursorLost: true }), skipped: Math.max(0, since.events.length - limit) });
+    } catch (error) { errorResponse(res, error, 400); }
+  });
   app.get("/api/sessions/:id/wait", async (req, res) => {
     try {
       await ready;
@@ -1266,7 +1284,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       if (!session) { res.status(404).json({ error: "세션이 지워졌습니다." }); return; }
       if (gone) return;
       const after = typeof req.query.after === "string" ? req.query.after : undefined;
-      res.json(waitResult(session, orchestra.isWorking(id), after, orchestra.stewardOf(session)));
+      const since = await eventsSince(session, after, options.dataDir);
+      res.json(waitResult(session, orchestra.isWorking(id), after, orchestra.stewardOf(session), undefined, since));
     } catch (error) { errorResponse(res, error, 400); }
   });
   // Brings a chat to the front of the app window (show_session): an outside AI shows the user its work.
@@ -1654,6 +1673,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       if (target?.status === "running") throw new Error("실행 중인 세션은 삭제할 수 없습니다.");
       const cleanup = req.query.worktrees === "remove" && target?.worktrees?.length ? await cleanupSessionWorktrees(target.worktrees) : undefined;
       await orchestra.remove(routeParam(req.params.id));
+      await removeArchivedEvents(routeParam(req.params.id), options.dataDir).catch(() => undefined);
       await persistSessions(orchestra.list());
       if (cleanup) res.json(cleanup);
       else res.status(204).end();

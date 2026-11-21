@@ -55,7 +55,7 @@ export const EN_SUMMARIES: Record<string, string> = {
   get_setup_status: "Machine readiness: Node/Git/agent CLIs installed, macOS permissions.",
   list_workspaces: "Workspaces, the current one, per-workspace defaults (folder, team, allowed agents), policy and running chats.",
   list_sessions: "Chats: ID, title, status, agent, folder, their lead and who opened them; lead_id lists one lead's chats.",
-  get_session: "One chat with its recent messages and events (answers, tool runs, errors); after_event_id returns only newer ones.",
+  get_session: "One chat with its recent messages and events (answers, tool runs, errors); after_event_id returns only newer ones, before_event_id pages back (old events of a long chat come from its archive). cursorLost: true means the id was not found and the latest came back.",
   get_session_summary: "A chat at a glance: status, the lead's last answer, checklist progress, pending merge, lead info.",
   create_session: "Open a new chat (the user watches it live in the app); with a prompt it starts working, without one it stays empty. With lead_id it opens a new chat (tab) of that lead sharing its folder, instructions and memory; agent/model then pick that chat's CLI and model.",
   send_message: "Send a follow-up message to a chat (starts the next turn). A running chat refuses it: wait_for_session first.",

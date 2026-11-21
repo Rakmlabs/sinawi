@@ -108,6 +108,8 @@ export interface Session {
   /** Where each `workerSessionIds` entry came from (same rule as `cliSessionAgent`). Missing entries are legacy. */
   workerSessionOrigins?: Record<string, ResumeOrigin>;
   events: SessionEvent[];
+  /** Events trimmed out of `events` into sessions/archive/<id>.jsonl (server/event-archive.ts). */
+  archivedEvents?: number;
   groupId?: string;
   skills?: string[];
   systemPrompt?: string;

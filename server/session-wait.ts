@@ -30,11 +30,12 @@ function fromLabel(event: SessionEvent): string {
  * last answer, its checklist, and the conversation lines after `afterId` (all of them, newest last,
  * when it is unset or no longer in the chat). `working` is Orchestra.isWorking.
  */
-export function waitResult(session: Session, working: boolean, afterId?: string, steward?: Steward, maxMessages = 30) {
+/** `since`: the events after `afterId`, archive included (server/event-archive.ts eventsSince). */
+export function waitResult(session: Session, working: boolean, afterId?: string, steward?: Steward, maxMessages = 30, since?: { events: SessionEvent[]; found: boolean }) {
   const summary = sessionSummary(session, steward);
   const events = session.events;
   const start = afterId ? events.findIndex((event) => event.id === afterId) + 1 : 0;
-  const lines = events.slice(start).filter(conversationLine);
+  const lines = (since?.events ?? events.slice(start)).filter(conversationLine);
   const messages: WaitMessage[] = lines.slice(-maxMessages).map((event) => ({
     id: event.id, from: fromLabel(event), time: event.time,
     text: event.text.length > MAX_MESSAGE_CHARS ? `${event.text.slice(0, MAX_MESSAGE_CHARS)}…` : event.text,
@@ -46,6 +47,8 @@ export function waitResult(session: Session, working: boolean, afterId?: string,
     lastAnswer: summary.lastAnswer, checklist: summary.checklist, pendingMerge: summary.pendingMerge,
     ...(summary.steward ? { lead: { id: summary.steward.id, name: summary.steward.name } } : {}),
     messages, skipped: Math.max(0, lines.length - messages.length),
+    // The id given is in neither the chat nor its archive: these are the latest messages, not "since".
+    ...(since && !since.found ? { cursorLost: true } : {}),
     lastEventId: events.at(-1)?.id ?? null,
     next: done
       ? (summary.pendingMerge ? "끝났습니다. 담당이 끝낸 브랜치가 사용자의 병합 승인을 기다립니다(앱의 병합 카드)." : "끝났습니다. 이어서 시킬 일은 send_message로 같은 채팅에 보내세요.")

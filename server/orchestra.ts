@@ -278,6 +278,8 @@ export class Orchestra {
    * session folder; the server sets it so workers in a git repository get their own worktree.
    */
   worktreeDataDir?: string;
+  /** Where trimmed events go (server/event-archive.ts); unset in tests that do not care. */
+  archive?: (sessionId: string, events: SessionEvent[]) => void;
   /** Throttle state for heartbeats: last inactivity re-arm and last client publish per session. */
   private heartbeats = new Map<string, { touched: number; published: number }>();
   /** How often a quiet-but-alive run tells clients it is still alive. */
@@ -540,7 +542,13 @@ export class Orchestra {
     if (type === "delegation" && metadata.taskStatus === "running") event.delegationId = id;
     session.events.push(event);
     this.eventOrder.set(event, ++this.eventCount);
-    trimEvents(session.events, maxEvents);
+    const dropped: SessionEvent[] = [];
+    trimEvents(session.events, maxEvents, dropped);
+    if (dropped.length) {
+      // Kept, not lost: the archive is what `before`/`after` readers page through (review M5).
+      session.archivedEvents = (session.archivedEvents ?? 0) + dropped.length;
+      this.archive?.(session.id, dropped);
+    }
     this.lastEventAt.set(session.id, Date.now());
     this.touchInactivityTimer(session);
     this.broadcast(session);

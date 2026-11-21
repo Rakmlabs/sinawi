@@ -106,7 +106,7 @@ npm 패키지 `@rakmlabs/sinawi`는 **아직 게시 전**입니다(`npx`가 404)
 | 도구 | 표면 | 승인 | 설명 |
 |---|---|---|---|
 | `list_sessions` | 담당·외부 | 아니오(읽기) | 채팅(세션) 목록: ID, 제목, 상태(running/done/error/stopped), 에이전트, 폴더, 담당 여부. 내용은 get_session이나 get_session_summary로 본다. |
-| `get_session` | 담당·외부 | 아니오(읽기) | 채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. after_event_id를 주면 그 뒤에 생긴 것만 준다(앞서 읽은 마지막 이벤트 ID). |
+| `get_session` | 담당·외부 | 아니오(읽기) | 채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. after_event_id를 주면 그 뒤에 생긴 것만, before_event_id를 주면 그보다 앞의 것을 준다(긴 채팅의 오래된 이벤트는 보관 파일에서 읽는다). cursorLost가 true면 준 ID를 찾지 못해 최근 것을 준 것이다. |
 | `get_session_summary` | 담당·외부 | 아니오(읽기) | 채팅 한눈에 보기: 상태, 담당의 마지막 답, 체크리스트 진행, 승인 기다리는 병합, 담당 정보. |
 | `create_session` | 담당·외부 | 아니오 | 새 채팅을 연다. 사용자는 시나위 화면에서 이 채팅을 실시간으로 보고 이어서 말할 수 있다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 채팅(탭)으로 열면 폴더·워크스페이스·지침·기억(노트)은 담당 것을 함께 쓰고, agent·model을 주면 이 채팅만 그 CLI·모델로 돌린다(비우면 담당의 CLI). 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 결과는 wait_for_session으로 기다린다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다. |
 | `send_message` | 담당·외부 | 아니오 | 채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 실행 중인 채팅에는 보낼 수 없다(먼저 wait_for_session). 결과는 wait_for_session, get_session_summary, get_session으로 확인한다. |
