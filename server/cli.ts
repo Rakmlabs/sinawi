@@ -1,6 +1,6 @@
 import { ensurePermissionServerScript, PERMISSION_TOOL, PROMPT_TIMEOUT_MS, permissionMcpConfig, registerRunActivity, unregisterRunActivity } from "./permission-prompts.js";
 import { claudeLeadServer, codexLeadArgs, ensureLeadServerScript, LEAD_MCP_RULE, LEAD_MCP_SERVER, LEAD_TOOL_TIMEOUT_MS, leadMcpLaunch, type LeadMcpLaunch } from "./lead-tools.js";
-import { cliChildEnv, preapprovedPrograms, RISKY_SHELL_PATTERNS } from "./supervision.js";
+import { cliChildEnv, GROK_UNREADABLE_PATTERNS, preapprovedPrograms, RISKY_SHELL_PATTERNS } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
 import { forgetEndedCliGroups, recordCliGroup } from "./cli-ledger.js";
 import { envVar } from "./runtime.js";
@@ -233,6 +233,8 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     // does not keep it from running code (third review N3, H2-c): with the switch off, those programs
     // and the shells and wrappers that would start them are denied outright.
     if (!options.runtimePrograms) for (const program of GROK_RUNTIME_DENIED) args.push("--deny", `Bash(${program}:*)`);
+    // Fourth review R4-2: with the switch off, command text the shell only resolves when it runs.
+    if (!options.runtimePrograms) for (const pattern of GROK_UNREADABLE_PATTERNS) args.push("--deny", `Bash(${pattern})`);
     for (const pattern of RISKY_SHELL_PATTERNS) args.push("--deny", `Bash(${pattern})`);
     args.push("--rules", grokHeadlessRules(options.runtimePrograms));
   }

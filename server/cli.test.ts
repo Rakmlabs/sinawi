@@ -50,6 +50,17 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
   for (const rule of ["Bash(node:*)", "Bash(bash:*)", "Bash(env:*)", "Bash(python3:*)", "Bash(rg *--pre*)", "Bash(curl * -o*)", "Bash(gh api * -X*)", "Bash(git push *--force*)", "Bash(xcrun simctl spawn*)"]) assert.ok(denied(grok.args).includes(rule), rule);
   assert.ok(!denied(grokOn.args).includes("Bash(node:*)"), "the workspace's opt-in lifts the code-runner denials");
   assert.ok(denied(grokOn.args).includes("Bash(rg *--pre*)"), "risky forms stay denied");
+  // Fourth review R4-1: a flag as the first argument (`sort -o <outside>` ran under `sort * -o*` alone).
+  for (const rule of ["Bash(sort -o*)", "Bash(gh api -X*)", "Bash(gh api -f*)", "Bash(curl -o*)", "Bash(curl -O*)", "Bash(git push -f*)"]) {
+    assert.ok(denied(grok.args).includes(rule), rule);
+    assert.ok(denied(grokOn.args).includes(rule), rule);
+  }
+  // Fourth review R4-2: text the shell only resolves when it runs ("no""de", n''ode, $(which node), chains)
+  // is denied while the switch is off; real Grok 1.0.92 refused each of these forms by these rules.
+  for (const rule of ["Bash(*$*)", "Bash(*`*)", "Bash(*;*)", "Bash(*|*)", "Bash(*>*)", 'Bash(*""*)', "Bash(*''*)", "Bash(*\\*)", 'Bash("*)']) {
+    assert.ok(denied(grok.args).includes(rule), rule);
+    assert.ok(!denied(grokOn.args).includes(rule), `${rule}: lifted by the workspace's opt-in`);
+  }
   assert.ok(!rules.includes("Bash(xcrun simctl:*)") && rules.includes("Bash(xcrun simctl list:*)"), "simctl by subcommand, never spawn");
   assert.equal(denied(buildInvocation({ agent: "grok", prompt: "fix", cwd: "/tmp/project", fullAccess: true }).args).length, 0, "full access denies nothing extra");
 });

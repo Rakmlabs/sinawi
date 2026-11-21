@@ -192,26 +192,47 @@ export const DEVELOPMENT_SHELL_PROGRAMS = [
  * `run`/`exec`/`dlx` and every script or install hook), `find` (`-exec`) and `ao-serve start` (any
  * command, outside a CLI's sandbox). Pre-approved only where the workspace turns it on
  * (WorkspacePolicy.runtimePrograms). Off, Claude's Bash hook answers "ask" for them even in Claude's
- * own auto mode (claude-bash-hook.ts runsCodeCommand), Grok is denied them and the shells that would
+ * own auto mode (claude-bash-hook.ts hookDecision), Grok is denied them and the shells that would
  * wrap them (cli.ts GROK_RUNTIME_DENIED), Codex runs them only inside its sandbox, and the server
  * refuses `ao-serve start` from a run that cannot ask (serve-tool.ts).
  */
 export const RUNTIME_SHELL_PROGRAMS = ["node", "npx", "python3", "npm", "pnpm", "yarn", "find", "ao-serve start"] as const;
 
 /**
+ * Deny patterns for a short flag of `program`, as the first argument (`sort -o x`, which the fourth
+ * review ran outside the project under `sort * -o*` alone) or a later one. A flag inside a cluster
+ * (`curl -so x`) is not caught: `*` also spans spaces, so a cluster pattern would match ordinary URLs.
+ */
+const shortFlag = (program: string, flag: string) => [`${program} -${flag}*`, `${program} * -${flag}*`];
+/** Deny patterns for a long option of `program` (`--output`, `--output=x`), wherever it sits. */
+const longFlag = (program: string, flag: string) => [`${program} ${flag}*`, `${program} *${flag}*`];
+
+/**
  * Forms of pre-approved programs that act outside the project or run code (third review H2-b, H2-c),
  * as permission patterns (`*` anywhere). Grok denies them outright: unlike Claude Code it ran
  * `rg --pre ./x` and `curl -o <outside>` under the plain prefix rules. Claude asks for the same
- * forms through the Bash hook (claude-bash-hook.ts riskyCommand). Patterns only see the text, so a
- * path written outside the project in an ordinary argument (ffmpeg's output file) is not caught.
+ * forms through the Bash hook (claude-bash-hook.ts riskyWords), and there, with the workspace switch
+ * off, also for any file argument outside the folder. Patterns only see the text, so a path written
+ * outside the project in an ordinary argument (ffmpeg's output file) is not caught for Grok.
  */
 export const RISKY_SHELL_PATTERNS = [
-  "rg *--pre*", "git -c*", "git --config-env*", "git *--output*", "git *--ext-diff*", "git *--exec*", "git *--upload-pack*", "git *--receive-pack*",
-  "git push -f*", "git push * -f*", "git push *--force*", "git push -d*", "git push * -d*", "git push *--delete*", "git push *--mirror*", "git push *--prune*", "git push * +*", "git push * :*",
-  "gh api * -X*", "gh api *--method*", "gh api * -f *", "gh api * -F *", "gh api *--field*", "gh api *--raw-field*", "gh api *--input*",
-  "curl * -o*", "curl * -O*", "curl *--output*", "curl *--remote-name*", "curl * -K*", "curl *--config*", "curl * -T*", "curl *--upload-file*", "curl *@*",
-  "xcrun simctl spawn*", "trash *..*", "trash /*", "trash * /*", "trash ~*", "trash * ~*", "sort * -o*", "sort *--output*", "tsc *--outDir*", "tsc *--outFile*",
+  ...longFlag("rg", "--pre"), "git -c*", "git --config-env*", "git *--output*", "git *--ext-diff*", "git *--exec*", "git *--upload-pack*", "git *--receive-pack*",
+  ...shortFlag("git push", "f"), ...shortFlag("git push", "d"), "git push *--force*", "git push *--delete*", "git push *--mirror*", "git push *--prune*", "git push * +*", "git push * :*",
+  ...shortFlag("gh api", "X"), ...shortFlag("gh api", "f"), ...shortFlag("gh api", "F"), "gh api *--method*", "gh api *--field*", "gh api *--raw-field*", "gh api *--input*",
+  ...shortFlag("curl", "o"), ...shortFlag("curl", "O"), ...shortFlag("curl", "K"), ...shortFlag("curl", "T"), "curl *--output*", "curl *--remote-name*", "curl *--config*", "curl *--upload-file*", "curl *@*", "curl *file:*",
+  "xcrun simctl spawn*", "trash *..*", "trash /*", "trash * /*", "trash ~*", "trash * ~*",
+  ...shortFlag("sort", "o"), "sort *--output*", "tsc *--outDir*", "tsc *--outFile*",
 ] as const;
+
+/**
+ * What Grok is denied while the workspace does not pre-approve programs that run code, besides those
+ * programs (cli.ts GROK_RUNTIME_DENIED): command text whose program or arguments the shell decides
+ * only when it runs (fourth review R4-2: `"no""de"`, `n''ode`, `$(which node)`). Variables and
+ * substitutions (`$`, backticks), chains, pipes and redirections (`;&|<>`), backslashes, quotes glued
+ * together (`""`, `''`) and a command that starts with a quote. Grok decides the rest of what is not
+ * pre-approved with its own classifier (it has no mode that refuses without cancelling the run).
+ */
+export const GROK_UNREADABLE_PATTERNS = ["*$*", "*`*", "*;*", "*&*", "*|*", "*>*", "*<*", "*\\*", '*""*', "*''*", '"*', "'*", "{*"] as const;
 
 /** The programs an "auto" run may start without asking. */
 export function preapprovedPrograms(runtimePrograms = false): string[] {
