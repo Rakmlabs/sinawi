@@ -15,7 +15,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc --noEmit && vite build && npm run build:server",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-timeout=240000 server/*.test.ts src/*.test.ts src/updates/*.test.ts",
+    "test": "node --import tsx --import ./server/test-guard.ts --test --test-timeout=240000 server/*.test.ts src/*.test.ts src/updates/*.test.ts",
     "preview": "vite preview --host 127.0.0.1",
     "build:server": "node scripts/build-server.mjs",
     "start": "node src-tauri/resources/server.cjs start",
