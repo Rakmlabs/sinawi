@@ -57,3 +57,15 @@ test("a window the server could not confirm is marked, so the sidebar says why i
   stop();
   assert.equal(calls, 2);
 });
+
+// Fourth review R4-4: the key socket closes connections beyond its concurrent peer checks; the window
+// asks again instead of staying without a key.
+test("a refused key request is tried again a few times", async () => {
+  let calls = 0;
+  const win = { __TAURI_INTERNALS__: { invoke: async () => { calls += 1; if (calls < 3) throw new Error("the server refused"); return "fresh-key"; } } };
+  assert.equal(await loadAppKey(true, win as never, [1, 1, 1]), "fresh-key");
+  assert.equal(calls, 3);
+  calls = -10;
+  assert.equal(await loadAppKey(true, win as never, [1, 1]), undefined, "gives up after the last wait");
+  assert.equal(calls, -7);
+});

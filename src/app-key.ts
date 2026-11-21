@@ -52,16 +52,27 @@ function fromLink(win: KeyWindow): string | undefined {
   try { return win.sessionStorage?.getItem(STORED) || undefined; } catch { return undefined; }
 }
 
-/** The key, asking the app binary again when `refresh` (the server restarted with a new one). */
-export function loadAppKey(refresh = false, win: KeyWindow = typeof window === "undefined" ? {} : window): Promise<string | undefined> {
+/**
+ * The key, asking the app binary again when `refresh` (the server restarted with a new one). A refused
+ * ask is tried again after `retryMs`: the key socket closes connections beyond its few concurrent peer
+ * checks, so a burst from another program could otherwise leave the window without its key (fourth
+ * review R4-4).
+ */
+export function loadAppKey(refresh = false, win: KeyWindow = typeof window === "undefined" ? {} : window, retryMs: readonly number[] = [250, 750, 2_000]): Promise<string | undefined> {
   if (loading && !refresh) return loading;
   loading = (async () => {
     const invoke = win.__TAURI_INTERNALS__?.invoke;
     if (!invoke) return settle(fromLink(win));
-    try {
-      const value = await invoke("app_key");
-      return settle(typeof value === "string" && value ? value : undefined);
-    } catch { return settle(undefined); }
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const value = await invoke("app_key");
+        return settle(typeof value === "string" && value ? value : undefined);
+      } catch {
+        const wait = retryMs[attempt];
+        if (wait === undefined) return settle(undefined);
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+    }
   })();
   return loading;
 }
