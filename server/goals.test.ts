@@ -206,7 +206,7 @@ test("writing to the commander again retries a goal whose merge failed and the g
   const orchestra = new Orchestra(undefined, runner);
   orchestra.worktreeDataDir = dataDir;
   const commander = await orchestra.create({ prompt: "둘 다 해", agent: "codex", workers: ["claude"], cwd: repo, commander: true });
-  await waitFor(() => commander.commander!.goals.length === 2 && commander.commander!.goals.every((goal) => goal.state === "blocked") && commander.status === "done" && commander.commander!.reported === true, 15_000);
+  await waitFor(() => commander.commander!.goals.length === 2 && commander.commander!.goals.every((goal) => goal.state === "blocked") && commander.status === "done" && commander.commander!.reported === true && !orchestra.isWorking(commander.id), 15_000);
   git(repo, "checkout", "-q", "main");
   await orchestra.followup(commander.id, "다시 해");
   await waitFor(() => commander.commander!.goals.every((goal) => goal.state === "merged"), 15_000);

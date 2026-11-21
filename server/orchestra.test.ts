@@ -616,7 +616,7 @@ test("an inactive run is aborted and reported as an error", async () => {
   );
   const session = await orchestra.create({ prompt: "Silent task", agent: "codex", workers: ["claude"], cwd: process.cwd() });
 
-  await waitUntilSettled(session);
+  await waitUntilSettled(session, orchestra);
 
   assert.equal(observedAbort, true);
   assert.equal(session.status, "error");
@@ -790,11 +790,12 @@ test("company bot conversations reject Codex before starting a CLI", async () =>
   assert.equal(calls, 0);
 });
 
-async function waitUntilSettled(session: { status: string }) {
+/** With `orchestra`, also waits out the moment between create() returning and the run flipping to running. */
+async function waitUntilSettled(session: { id?: string; status: string }, orchestra?: Orchestra) {
   await new Promise<void>((resolve, reject) => {
     const deadline = setTimeout(() => reject(new Error("session timeout")), 1_000);
     const poll = () => {
-      if (session.status !== "running") { clearTimeout(deadline); resolve(); }
+      if (session.status !== "running" && !(orchestra && session.id && orchestra.isWorking(session.id))) { clearTimeout(deadline); resolve(); }
       else setTimeout(poll, 5);
     };
     poll();
