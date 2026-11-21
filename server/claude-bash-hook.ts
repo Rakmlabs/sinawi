@@ -519,25 +519,29 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
   if (!command) return undefined;
   const words = staticCommandWords(command);
   if (words ? riskyWords(words) : riskyCommand(command)) return "ask";
+  // Chains: bashCommandAllowed checks .git writes and paths of its own steps itself.
   if (root && bashCommandAllowed(command, cwd, root, host)) return "allow";
-  // gh names API paths (`/repos/x`), not files: its files are `@FILE` values and download folders.
-  const ghFiles = (args: string[]) => args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : /^-D./u.test(arg) ? [arg.slice(2)] : []);
-  if (words?.[0] === "gh") {
-    // riskyWords passed, so this gh reads (P8-1). `-R`/`--repo` before the subcommand moves after it:
-    // every spelling of the same read gets the same answer, with the switch on or off.
-    const moved = [...words];
-    while (moved[2] === "-R" || moved[2] === "--repo" || moved[2]?.startsWith("--repo=") || /^-R./u.test(moved[2] ?? "")) moved.push(...moved.splice(2, moved[2] === "-R" || moved[2] === "--repo" ? 2 : 1));
-    return preapprovedPrefix(moved, prefixes) && optionsAllowed(moved) && argumentsStayInside(ghFiles(moved.slice(2)), cwd, root, host) ? "allow" : "ask";
-  }
-  if (host.runtimePrograms) return undefined;
-  if (!words) return "ask";
-  const length = preapprovedPrefix(words, prefixes);
-  if (!length || !optionsAllowed(words)) return "ask";
-  const args = words.slice(length);
-  if (!argumentsStayInside(args, cwd, root, host)) return "ask";
-  // R6-1: writes into a git directory, and git in a folder that only looks like a repository.
+  if (!words) return host.runtimePrograms ? undefined : "ask";
+  // gh: `-R`/`--repo` before the subcommand moves after it, so every spelling of a read gets the same
+  // answer (P8-1). gh names API paths (`/repos/x`), not files: its files are `@FILE` values and
+  // download folders.
+  const gh = words[0] === "gh";
+  const normalized = [...words];
+  if (gh) while (normalized[2] === "-R" || normalized[2] === "--repo" || normalized[2]?.startsWith("--repo=") || /^-R./u.test(normalized[2] ?? "")) normalized.push(...normalized.splice(2, normalized[2] === "-R" || normalized[2] === "--repo" ? 2 : 1));
+  const length = preapprovedPrefix(normalized, prefixes);
+  const args = normalized.slice(gh ? 2 : length || 1);
+  const files = gh ? args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : /^-D./u.test(arg) ? [arg.slice(2)] : []) : args;
+  // Checks every program gets, before any program's own rule (PR #8 review P8-3: the gh rule answered
+  // "allow" first and skipped them, so `gh run download -D .git/hooks` passed). R6-1: a write into a
+  // git directory asks, with the switch on too.
   const readers = ["git", "cat", "head", "tail", "ls", "rg", "wc", "jq", "file", "stat", "du", "lsof", "echo", "pwd", "ffprobe"];
-  if (!readers.includes(words[0]!) && args.some((arg) => [arg, arg.slice(arg.indexOf("=") + 1), arg.replace(/^@/u, "")].some((value) => inGitDir(value, cwd, root, host)))) return "ask";
+  if (!readers.includes(words[0]!) && files.some((arg) => [arg, arg.slice(arg.indexOf("=") + 1), arg.replace(/^@/u, "")].some((value) => inGitDir(value, cwd, root, host)))) return "ask";
+  const inside = argumentsStayInside(files, cwd, root, host);
+  // gh that riskyWords let through reads (P8-1): pre-approved here, with the switch on or off.
+  if (gh) return length && optionsAllowed(normalized) && inside ? "allow" : "ask";
+  if (host.runtimePrograms) return undefined;
+  if (!length || !optionsAllowed(words) || !inside) return "ask";
+  // R6-1: git in a folder that only looks like a repository.
   if (words[0] === "git" && !gitRepositoryTrusted(cwd, root, host, words.slice(1))) return "ask";
   return undefined;
 }

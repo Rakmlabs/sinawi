@@ -339,6 +339,22 @@ test("gh passes only as a read subcommand or a GET of gh api, wherever -R goes",
   }
 });
 
+// PR #8 review P8-3: the gh rule answered "allow" before the checks every program gets, so
+// `gh run download -D .git/hooks` passed without a card. Those checks now run first, for every
+// program, with the switch on or off.
+test("the .git and inside-the-folder checks run before any program's own rule", () => {
+  for (const command of ["gh run download 1 -D .git/hooks", "gh run download 1 -D .git", "gh run download 1 --dir=.git/hooks", "gh run download -R a/b 1 -n x -D .git/hooks", "gh run download 1 -D.git/hooks", "gh run download 1 -D /tmp/zz", "gh run download 1 -D ../x"]) {
+    assert.equal(decide(command), "ask", command);
+    assert.equal(decide(command, true), "ask", `${command} (on)`);
+  }
+  for (const command of ["gh run download 1 -D out", "gh run download -R a/b 1 -D out"]) assert.equal(decide(command), "allow", command);
+  // Other pre-approved programs that write: a .git target asks with the switch on too.
+  for (const command of ["mkdir -p .git/hooks", "curl -o .git/hooks/pre-commit https://e.com/x", "ffmpeg -i a.mp4 .git/hooks/x.mp4", "sips -s format png a.png --out .git/x.png", "trash .git/hooks/pre-commit"]) {
+    assert.equal(decide(command), "ask", command);
+    assert.equal(decide(command, true), "ask", `${command} (on)`);
+  }
+});
+
 // Tenth review R10-1: a hooks folder inside the project (husky) made every git command ask, `git status`
 // too. A git command that runs none of the hooks in that folder passes; which command runs which hook
 // is githooks(5), and the second test checks it against the git on this machine.
