@@ -28,3 +28,17 @@ export function runtimeOptions(args = process.argv.slice(2), env: NodeJS.Process
     } : {}),
   };
 }
+
+/** The port the app and a plain `npm run dev` use. */
+export const DEFAULT_PORT = 3001;
+
+/**
+ * A second copy next to the app (another port, or SINAWI_ISOLATED=1) keeps to its own data folder: it
+ * does not watch the shared browser/computer/serve queues in /tmp (it would take the app's commands)
+ * nor rewrite ~/.local/bin/ao-* and the CLIs' skills in the home folder (review L6).
+ */
+export function isolatedRun(port: number, env: NodeJS.ProcessEnv = process.env): boolean {
+  const flag = envVar("ISOLATED", env);
+  if (flag === "0") return false;
+  return flag === "1" || port !== DEFAULT_PORT;
+}

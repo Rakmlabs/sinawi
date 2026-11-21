@@ -40,3 +40,11 @@ test("npm run dev hands the server its environment, SINAWI_DATA_DIR and SINAWI_P
   // No `env:` option means the child inherits process.env as it is.
   assert.doesNotMatch(server[1], /\benv\s*:/u);
 });
+
+test("a copy on another port (or SINAWI_ISOLATED=1) stays off the shared queues and the home folder (review L6)", async () => {
+  const { isolatedRun } = await import("./runtime");
+  assert.equal(isolatedRun(3001, {}), false, "the app and a plain dev run");
+  assert.equal(isolatedRun(3011, {}), true);
+  assert.equal(isolatedRun(3001, { SINAWI_ISOLATED: "1" }), true);
+  assert.equal(isolatedRun(3011, { SINAWI_ISOLATED: "0" }), false, "an explicit opt-out");
+});

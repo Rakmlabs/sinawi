@@ -2,7 +2,7 @@ import { setDevelopmentOrigins } from "./origin-policy.js";
 import { createServer } from "./server.js";
 import { accessSync } from "node:fs";
 import { resolve } from "node:path";
-import { dataDirFor, envVar, runtimeOptions } from "./runtime.js";
+import { DEFAULT_PORT, dataDirFor, envVar, isolatedRun, runtimeOptions } from "./runtime.js";
 import { installBrowserTooling } from "./browser-bridge.js";
 import { installComputerTooling } from "./computer-bridge.js";
 import { installServeTooling } from "./serve-tool.js";
@@ -14,7 +14,9 @@ import { initAppKey } from "./app-key.js";
 
 // First: the app window's key leaves process.env before anything (a CLI) could inherit it.
 initAppKey();
-const port = Number(envVar("PORT") ?? 3001);
+const port = Number(envVar("PORT") ?? DEFAULT_PORT);
+const isolated = isolatedRun(port);
+if (isolated) console.log(`독립 실행: 공용 브라우저·컴퓨터 큐를 보지 않고 홈 폴더 도구를 설치하지 않습니다 / isolated: no shared queues, no home-folder installs (SINAWI_ISOLATED=0 to opt out)`);
 const options = runtimeOptions();
 if (options.staticDir) accessSync(resolve(options.staticDir, "index.html"));
 // The installed app serves its own UI: a page on a Vite dev port is just another local page then.
@@ -23,11 +25,13 @@ setDevelopmentOrigins(!options.staticDir);
 setCliGroupLedger(join(dataDirFor(options.dataDir), "cli-groups.json"));
 const reaped = reapStaleCliGroups();
 if (reaped.length) console.log(`이전 서버가 남긴 CLI ${reaped.length}개를 정리했습니다 / ended ${reaped.length} CLI group(s) a previous server left running`);
-const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: true, worktrees: true, appMcp: true });
-void installBrowserTooling().catch((error) => console.error("ao-browser 설치 실패:", error.message));
-void installComputerTooling().catch((error) => console.error("ao-computer 설치 실패:", error.message));
-void installServeTooling().catch((error) => console.error("ao-serve 설치 실패:", error.message));
-void installSimTooling().catch((error) => console.error("ao-sim 설치 실패:", error.message));
+const { httpServer, websocket, orchestra, terminal, flushSessions } = createServer({ ...options, browserQueue: !isolated, worktrees: true, appMcp: true });
+if (!isolated) {
+  void installBrowserTooling().catch((error) => console.error("ao-browser 설치 실패:", error.message));
+  void installComputerTooling().catch((error) => console.error("ao-computer 설치 실패:", error.message));
+  void installServeTooling().catch((error) => console.error("ao-serve 설치 실패:", error.message));
+  void installSimTooling().catch((error) => console.error("ao-sim 설치 실패:", error.message));
+}
 
 httpServer.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") {
