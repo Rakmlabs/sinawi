@@ -1265,6 +1265,7 @@ export class Orchestra {
       // Review/planning runs are read-only but must still be able to read files to verify (see readTools).
       agent, prompt, cwd, model, reasoningEffort, readOnly, readTools: readOnly, resumeSessionId, signal: runSignal,
       ...(permissionMode === "full" ? { fullAccess: true } : {}),
+      ...(policy?.runtimePrograms ? { runtimePrograms: true } : {}),
       extraDirs,
       ...(worktreeRoot ? { readOnlyDirs: [worktreeRoot] } : {}),
       // The lead's own writable run carries its tools (lead-tools.ts); reviews and plans do not.

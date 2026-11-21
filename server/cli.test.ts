@@ -17,7 +17,8 @@ test("buildInvocation passes Claude effort and omits unsupported Grok effort", (
 });
 
 test("buildInvocation grants non-read-only Claude and Grok runs only the common development commands", () => {
-  const commands = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof", "trash"];
+  // node, npx and python3 run any code: pre-approved only where the workspace allows it (H2).
+  const commands = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof", "trash"];
   const rules = commands.map((command) => `Bash(${command}:*)`);
 
   const claude = buildInvocation({ agent: "claude", prompt: "fix", cwd: "/tmp/project" });
@@ -30,6 +31,15 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
   assert.deepEqual(grok.args.filter((_value, index) => grok.args[index - 1] === "--allow"), rules);
   assert.equal(grok.args.includes("--always-approve"), false);
   assert.equal(grok.args.includes("bypassPermissions"), false);
+  assert.match(grok.args[grok.args.indexOf("--rules") + 1], /node, npx and python3 are not pre-approved here/u);
+
+  // The workspace's opt-in adds them, for both CLIs.
+  const runtime = [...rules, "Bash(node:*)", "Bash(npx:*)", "Bash(python3:*)"];
+  const claudeOn = buildInvocation({ agent: "claude", prompt: "fix", cwd: "/tmp/project", runtimePrograms: true });
+  assert.deepEqual(claudeOn.args.slice(claudeOn.args.indexOf("--allowedTools") + 1, claudeOn.args.indexOf("--allowedTools") + 1 + runtime.length), runtime);
+  const grokOn = buildInvocation({ agent: "grok", prompt: "fix", cwd: "/tmp/project", runtimePrograms: true });
+  assert.deepEqual(grokOn.args.filter((_value, index) => grokOn.args[index - 1] === "--allow"), runtime);
+  assert.match(grokOn.args[grokOn.args.indexOf("--rules") + 1], /python3/u);
 });
 
 test("buildInvocation enforces a tool-free read-only profile for every planner CLI", () => {

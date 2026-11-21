@@ -321,7 +321,7 @@ No. It uses each CLI's own login. Your prompts, selected skills and files the ag
 **Is it a sandbox?**
 No. *Plan* is read-only, and *Full access* turns off the CLIs' own sandboxes, so it is off unless a workspace allows it.
 
-What *Auto* actually allows: file edits and ordinary commands run without asking. Claude and Grok get `git`, `npm`, `node`, `npx`, `python3`, `curl`, `ao-serve` and others pre-approved, so a command run through one of them (`node -e "..."`) is not asked about and can reach files outside the project folder. `ao-serve` is meant for dev servers but starts shell commands with the app server's rights; even inside Codex's `workspace-write` sandbox, a command sent through the `ao-serve` queue runs outside it. Use *Plan* for repositories or prompts you do not trust.
+What *Auto* actually allows: file edits and ordinary commands run without asking. Claude and Grok get `git`, `npm`, `curl`, `ao-serve` and others pre-approved. The interpreters `node`, `npx` and `python3` run any code and can reach files outside the project folder, so they ask like any other command unless you turn on **Settings › Workspaces › Pre-approve node, npx and python3 in auto mode** (off by default; when one asks, its approval card links there). `ao-serve` is meant for dev servers but starts shell commands with the app server's rights; even inside Codex's `workspace-write` sandbox, a command sent through the `ao-serve` queue runs outside it. Use *Plan* for repositories or prompts you do not trust.
 
 Approval cards guard the MCP tools. An agent with a shell can still call most of Sinawi's local HTTP API (reading, opening chats), but the user's own requests (approving, answering a permission, changing settings, the MCP token) only work from the app window.
 

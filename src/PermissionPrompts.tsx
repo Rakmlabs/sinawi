@@ -2,6 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { ShieldQuestion } from "lucide-react";
 import { APP_ERROR_EVENT } from "./link-open";
 import { t } from "./i18n";
+import { openSettings } from "./settings/settings-nav";
+
+/** A shell command that starts one of the interpreters the workspace no longer pre-approves (H2). */
+export function isRuntimeCommand(detail: string): boolean {
+  return /^(?:Bash\()?\s*(?:node|npx|python3)\b/u.test(detail.trim());
+}
 
 export type PermissionRequest = { id: string; sessionId: string; workspaceId: string; agent: string; toolName: string; detail: string; createdAt: string };
 /** The server's `permissions` WebSocket message, re-sent as a window event. */
@@ -56,6 +62,7 @@ export function PermissionPrompts({ workspaceId, activeSessionId, sessionTitle, 
             )}
           </div>
           <code className="perm-detail">{item.detail}</code>
+          {isRuntimeCommand(item.detail) && <p className="perm-meta perm-hint">{t("perm.runtimeHint")} <button type="button" className="link-button" onClick={() => openSettings("workspaces", "ws-runtime-programs")}>{t("perm.runtimeOpen")}</button></p>}
           <div className="perm-actions">
             <button type="button" className="perm-deny" disabled={answering === item.id} onClick={() => void answer(item.id, false)}>{t("perm.deny")}</button>
             <button type="button" className="perm-allow" disabled={answering === item.id} onClick={() => void answer(item.id, true)} autoFocus={item.sessionId === activeSessionId}>{t("perm.allow")}</button>

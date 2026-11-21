@@ -176,11 +176,24 @@ ${COMPUTER_CORE}`;
  * Programs pre-approved for headless Claude (`--allowedTools`) and Grok (`--allow`).
  * A Grok command outside this list cancels the whole run, because nobody can approve a prompt.
  */
-export const DEVELOPMENT_SHELL_PROGRAMS = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof", "trash"] as const;
+export const DEVELOPMENT_SHELL_PROGRAMS = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof", "trash"] as const;
+
+/**
+ * Interpreters that run any code, outside the project too (H2): pre-approved only where the
+ * workspace turns it on (WorkspacePolicy.runtimePrograms). Off, they ask like any other command.
+ */
+export const RUNTIME_SHELL_PROGRAMS = ["node", "npx", "python3"] as const;
+
+/** The programs an "auto" run may start without asking. */
+export function preapprovedPrograms(runtimePrograms = false): string[] {
+  return [...DEVELOPMENT_SHELL_PROGRAMS, ...(runtimePrograms ? RUNTIME_SHELL_PROGRAMS : [])];
+}
 
 /** Harness-specific corrections appended after the shared rules. */
 export function cliNotes(agent: AgentId, role: "orchestrator" | "worker"): string {
-  const programs = DEVELOPMENT_SHELL_PROGRAMS.join(", ");
+  // Static per agent and role (switching agents swaps this text): node, npx and python3 depend on the
+  // workspace, so the run's own rules say whether they are allowed (cli.ts grokHeadlessRules).
+  const programs = `${DEVELOPMENT_SHELL_PROGRAMS.join(", ")} (node, npx, python3은 이 실행의 규칙에 허용으로 적혀 있을 때만)`;
   const notes: Record<AgentId, Record<"orchestrator" | "worker", string>> = {
     codex: {
       orchestrator: `## Codex 총괄
@@ -219,7 +232,7 @@ export function cliNotes(agent: AgentId, role: "orchestrator" | "worker"): strin
       worker: `## Grok 작업자
 - 이 실행은 헤드리스다. 승인 창은 없고, 미리 허용되지 않은 셸 명령은 실행 전체를 취소한다.
 - 허용된 프로그램만 쓴다: ${programs}. 각 호출은 그중 하나로 시작하는 명령 하나다.
-- cd, &&, ||, ;, 변수 대입, $(...), 반복문, bash -c 는 쓰지 않는다. 경로는 절대 경로나 작업 폴더 기준 상대 경로로 쓴다. 긴 로직은 .py로 저장한 뒤 python3로 한 번 실행한다.
+- cd, &&, ||, ;, 변수 대입, $(...), 반복문, bash -c 는 쓰지 않는다. 경로는 절대 경로나 작업 폴더 기준 상대 경로로 쓴다. 긴 로직은 python3가 허용된 실행에서만 .py로 저장해 한 번 실행한다.
 - 명령이 거부되거나 취소되면 다른 형태로 재시도하지 않는다. 즉시 막힘으로 보고하고, 거부된 명령과 이유를 증거에 적는다.
 - 도구 결과는 한 번만 읽고 반복해서 옮기지 않는다. 보고는 상태, 한 일, 증거, 남은 문제 네 줄을 빠짐없이 쓴다.`,
     },

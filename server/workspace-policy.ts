@@ -75,7 +75,7 @@ export function normalizeWorkspacePolicy(value: unknown, strict = false, base: W
     return structuredClone(base);
   }
   const input = value as Record<string, unknown>;
-  const flag = (key: "mediaGeneration" | "computerUse" | "grokMcp" | "fullAccess", label: string): boolean => {
+  const flag = (key: "mediaGeneration" | "computerUse" | "grokMcp" | "fullAccess" | "runtimePrograms", label: string): boolean => {
     if (input[key] == null) return base[key] ?? false;
     if (typeof input[key] === "boolean") return input[key] as boolean;
     if (strict) throw new WorkspacePolicyInputError(`${label} 설정이 올바르지 않습니다.`);
@@ -93,6 +93,7 @@ export function normalizeWorkspacePolicy(value: unknown, strict = false, base: W
     computerUse: flag("computerUse", "컴퓨터 조작"),
     grokMcp: flag("grokMcp", "Grok MCP 도구"),
     ...(flag("fullAccess", "전체 권한") ? { fullAccess: true } : {}),
+    ...(flag("runtimePrograms", "node·npx·python3 미리 허용") ? { runtimePrograms: true } : {}),
     blockedTools: input.blockedTools === undefined ? [...base.blockedTools] : toolList(input.blockedTools, strict, "차단 도구"),
     authAlertTools: input.authAlertTools === undefined ? [...base.authAlertTools] : toolList(input.authAlertTools, strict, "인증 알림 도구"),
     ...(mediaPrompt ? { mediaPrompt } : {}),

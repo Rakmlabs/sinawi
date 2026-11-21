@@ -326,6 +326,11 @@ export interface WorkspacePolicy {
    * Read-only review runs are not affected.
    */
   fullAccess?: boolean;
+  /**
+   * Opt-in, set by the user: "auto" runs start node, npx and python3 without asking. They run any code,
+   * outside the project too (audit H2), so it starts off and those commands ask like any other.
+   */
+  runtimePrograms?: boolean;
   /** Grok may call MCP tools at all. Off adds a blanket MCP deny to every Grok run. */
   grokMcp: boolean;
   /**

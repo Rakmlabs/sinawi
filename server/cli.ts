@@ -1,6 +1,6 @@
 import { ensurePermissionServerScript, PERMISSION_TOOL, PROMPT_TIMEOUT_MS, permissionMcpConfig, registerRunActivity, unregisterRunActivity } from "./permission-prompts.js";
 import { claudeLeadServer, codexLeadArgs, ensureLeadServerScript, LEAD_MCP_RULE, LEAD_MCP_SERVER, LEAD_TOOL_TIMEOUT_MS, leadMcpLaunch, type LeadMcpLaunch } from "./lead-tools.js";
-import { cliChildEnv, DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
+import { cliChildEnv, preapprovedPrograms } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
 import { forgetEndedCliGroups, recordCliGroup } from "./cli-ledger.js";
 import { envVar } from "./runtime.js";
@@ -49,6 +49,8 @@ export interface RunCliOptions {
   readTools?: boolean;
   /** No approval prompts for this run (the workspace's opt-in "full access"); ignored when read-only. */
   fullAccess?: boolean;
+  /** "auto" runs start node, npx and python3 without asking (the workspace's opt-in, WorkspacePolicy.runtimePrograms). */
+  runtimePrograms?: boolean;
   resumeSessionId?: string;
   blockedMcp?: string[];
   /** MCP servers the workspace locks off; Grok also gets them disabled in the project config. */
@@ -109,7 +111,8 @@ function cliName(agent: AgentId): string {
   return configured || resolveCli(agent) || agent;
 }
 
-const developmentBashRules = DEVELOPMENT_SHELL_PROGRAMS.map((command) => `Bash(${command}:*)`);
+/** `Bash(program:*)` rules for what an "auto" run starts without asking (node/npx/python3 only where the workspace allows). */
+const developmentBashRules = (runtimePrograms?: boolean) => preapprovedPrograms(runtimePrograms).map((command) => `Bash(${command}:*)`);
 /** Read-only verification profile (see RunCliOptions.readTools). Plan mode still refuses edits. */
 export const CLAUDE_READ_TOOLS = ["Read", "Grep", "Glob", "Bash"] as const;
 export const GROK_READ_TOOLS = "read_file,list_dir,grep";
@@ -123,14 +126,15 @@ export const GROK_MCP_TOOLS = "search_tool,use_tool";
  */
 export const CLAUDE_READ_ONLY_BASH_RULES = ["git diff", "git status", "git log", "git show", "ls", "cat", "rg", "wc", "head", "tail"].map((command) => `Bash(${command}:*)`);
 export const CLAUDE_READ_ONLY_BASH_DENY = ["--output", "--ext-diff", "--textconv", "--pre"].map((flag) => `Bash(*${flag}*)`);
-const developmentCommandNames = developmentBashRules.map((rule) => rule.slice(5, -3));
 /** Nobody can approve a prompt in headless mode: a non-pre-approved shell command cancels the whole run. */
-export const grokHeadlessRules = [
-  "You run headless; nobody can approve permission prompts. A shell command that is not pre-approved CANCELS YOUR WHOLE RUN.",
-  `Pre-approved programs: ${developmentCommandNames.join(", ")}.`,
-  "Each run_terminal_command must be ONE simple command that starts with one of those programs: no `cd`, no `&&`/`;`/`||` chains, no `VAR=value` assignments, no `$(...)`, no for/while loops, no `bash -c`.",
-  "Use absolute paths or paths relative to the working directory instead of cd. Split multi-step work into several separate tool calls; write longer logic to a .py file and run it with python3.",
-].join(" ");
+export function grokHeadlessRules(runtimePrograms?: boolean): string {
+  return [
+    "You run headless; nobody can approve permission prompts. A shell command that is not pre-approved CANCELS YOUR WHOLE RUN.",
+    `Pre-approved programs: ${preapprovedPrograms(runtimePrograms).join(", ")}.`,
+    "Each run_terminal_command must be ONE simple command that starts with one of those programs: no `cd`, no `&&`/`;`/`||` chains, no `VAR=value` assignments, no `$(...)`, no for/while loops, no `bash -c`.",
+    `Use absolute paths or paths relative to the working directory instead of cd. Split multi-step work into several separate tool calls${runtimePrograms ? "; write longer logic to a .py file and run it with python3" : "; node, npx and python3 are not pre-approved here (the user can allow them in the workspace settings)"}.`,
+  ].join(" ");
+}
 
 /**
  * The CLI's own end-of-turn line (Claude `result`, Grok `end`). `claude -p` keeps running after it
@@ -178,7 +182,7 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     else if (full) args.push("--dangerously-skip-permissions");
     // Sinawi's "auto": Claude Code's own auto mode where available, so ordinary commands (a loop,
     // `cd x && git log`) run without a question; only what it judges risky reaches the user.
-    else args.push("--permission-mode", options.claudeFlags?.has(CLAUDE_AUTO_MODE) ? "auto" : "acceptEdits", "--allowedTools", ...developmentBashRules);
+    else args.push("--permission-mode", options.claudeFlags?.has(CLAUDE_AUTO_MODE) ? "auto" : "acceptEdits", "--allowedTools", ...developmentBashRules(options.runtimePrograms));
     if (!readOnly && !full && options.claudeSettings && supports("--settings")) args.push("--settings", options.claudeSettings);
     for (const dir of extraDirs) args.push("--add-dir", dir);
     for (const dir of new Set(options.readOnlyDirs ?? [])) {
@@ -214,8 +218,8 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     // Headless Grok cancels the whole run when a command isn't pre-allowed (e.g. `cd x && ffprobe`);
     // "auto" lets its safety classifier approve routine commands while deny rules still apply.
     args.push("--permission-mode", "auto");
-    for (const rule of developmentBashRules) args.push("--allow", rule);
-    args.push("--rules", grokHeadlessRules);
+    for (const rule of developmentBashRules(options.runtimePrograms)) args.push("--allow", rule);
+    args.push("--rules", grokHeadlessRules(options.runtimePrograms));
   }
   for (const pattern of blockedMcp ?? []) args.push("--deny", pattern);
   if (resumeSessionId) args.push("--resume", resumeSessionId);

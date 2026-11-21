@@ -11,3 +11,5 @@
 .perm-actions button:disabled { opacity: .6; cursor: default; }
 .perm-meta { color: var(--text-muted); font-size: var(--text-title); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .perm-id { font-family: var(--font-mono); opacity: .75; }
+.perm-hint { white-space: normal; }
+.perm-hint .link-button { padding: 0; border: 0; background: none; color: var(--accent-fg, var(--accent)); font: inherit; text-decoration: underline; cursor: pointer; }
