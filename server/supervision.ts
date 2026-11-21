@@ -181,7 +181,7 @@ ${COMPUTER_CORE}`;
  */
 export const DEVELOPMENT_SHELL_PROGRAMS = [
   "git status", "git diff", "git log", "git show", "git add", "git commit", "git rev-parse", "git ls-files", "git blame", "git branch",
-  "git checkout", "git switch", "git restore", "git rm", "git mv", "git stash", "git merge", "git fetch", "git pull", "git push", "git worktree", "git tag", "git remote",
+  "git checkout", "git switch", "git restore", "git rm", "git mv", "git stash", "git merge", "git worktree", "git tag", "git remote",
   "gh pr", "gh issue", "gh repo view", "gh run", "gh api", "gh auth status", "gh search",
   "ls", "cat", "rg", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq",
   "ao-computer", "xcrun simctl list", "xcrun simctl boot", "xcrun simctl shutdown", "xcrun simctl io", "xcrun simctl install", "xcrun simctl uninstall", "xcrun simctl launch", "xcrun simctl terminate", "xcrun simctl get_app_container", "xcrun simctl status_bar", "xcrun simctl ui", "ao-serve list", "ao-serve logs", "ao-serve stop", "ao-sim", "curl", "lsof", "trash",
