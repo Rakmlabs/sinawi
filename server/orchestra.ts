@@ -227,6 +227,8 @@ export class Orchestra {
   private starting = new Set<string>();
   /** Lead chats whose turn ended and whose merge and next step are still being worked out. */
   private settling = new Set<string>();
+  /** The lead's end-of-turn merge in flight per chat: the next turn waits for it (L8). */
+  private settlingDone = new Map<string, Promise<void>>();
   /** Goals that had stopped before the user's current message: restored when the turn was only an answer. */
   private goalPaused = new Map<string, { stopped: string; outcome?: NonNullable<Session["goal"]>["outcome"]; checklist: string }>();
   /** Goal sessions whose running turn the app opened itself. */
@@ -1485,6 +1487,10 @@ export class Orchestra {
   }
 
   async followup(id: string, prompt: string, skills: string[] = [], settings: ConversationSettings = {}, alreadyLogged = false): Promise<Session> {
+    // The lead's merge after the last turn finishes first: a new turn's worker must not reuse a
+    // worktree while it is being merged and removed (L8).
+    const settling = this.settlingDone.get(id);
+    if (settling) await settling;
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     // A second message while the first is still starting (it awaits before the status flips) would
@@ -1900,12 +1906,13 @@ export class Orchestra {
     // A project lead's work goes into the main checkout before anything else starts.
     if (session.steward) {
       this.settling.add(session.id);
-      void this.stewardTurnEnded(session, "done")
+      const done = this.stewardTurnEnded(session, "done")
         .catch((error) => this.event(session, session.agent, "warning", error instanceof Error ? error.message : String(error)))
         .finally(() => {
           try { if (session.status !== "running") this.afterFinish(session); }
-          finally { this.settling.delete(session.id); }
+          finally { this.settling.delete(session.id); this.settlingDone.delete(session.id); }
         });
+      this.settlingDone.set(session.id, done.then(() => undefined, () => undefined));
       return;
     }
     this.afterFinish(session);

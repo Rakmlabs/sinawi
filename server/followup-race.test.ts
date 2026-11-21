@@ -28,3 +28,28 @@ test("concurrent follow-ups: the second is refused, the first reaches the CLI", 
   assert.ok(prompts.some((prompt) => prompt.includes("MESSAGE-ONE")));
   assert.ok(!prompts.some((prompt) => prompt.includes("MESSAGE-TWO")));
 });
+
+test("a new turn waits for the lead's end-of-turn merge to finish (L8)", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sinawi-settle-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const started: number[] = [];
+  const runner = async (options: any) => {
+    started.push(Date.now());
+    options.onLine({ type: "message", text: "ok", finalText: "ok" });
+    return { exitCode: 0, finalText: "ok" };
+  };
+  const orchestra = new Orchestra(undefined, runner as never, undefined, undefined, undefined, undefined, dir);
+  const session = await orchestra.create({ prompt: "", agent: "claude", workers: [], cwd: dir } as never);
+  let mergeDone = 0;
+  let release!: () => void;
+  const merging = new Promise<void>((resolve) => { release = () => { mergeDone = Date.now(); resolve(); }; });
+  (orchestra as unknown as { settlingDone: Map<string, Promise<void>> }).settlingDone.set(session.id, merging);
+  const next = orchestra.followup(session.id, "NEXT");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(started.length, 0, "no CLI run while the merge is in flight");
+  release();
+  (orchestra as unknown as { settlingDone: Map<string, Promise<void>> }).settlingDone.delete(session.id);
+  await next;
+  for (let i = 0; i < 100 && orchestra.isWorking(session.id); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(started.length >= 1 && started[0] >= mergeDone, "the turn started after the merge");
+});
