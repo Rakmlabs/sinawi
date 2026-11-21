@@ -1,25 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { IFRAME_SANDBOX, previewTargetOrigin, trustedPreviewSender } from "./browser-messages";
+import { connectPreview, IFRAME_SANDBOX, previewTargetOrigin } from "./browser-messages";
 
-const own = {};
-const other = {};
-const frames = new Map([["a", { contentWindow: own }], ["b", { contentWindow: {} }]]);
 const tabs = [
   { id: "a", proxied: true, proxyOrigin: "http://127.0.0.1:51001" },
   { id: "b", proxied: false },
 ];
-const data = { source: "orchestra-preview", type: "location" };
 
-test("preview messages are accepted only from our own iframe at its proxy origin", () => {
-  assert.equal(trustedPreviewSender({ data, origin: "http://127.0.0.1:51001", source: own }, frames, tabs), "a");
-  assert.equal(trustedPreviewSender({ data, origin: "http://127.0.0.1:51001", source: other }, frames, tabs), undefined, "foreign window");
-  assert.equal(trustedPreviewSender({ data, origin: "http://127.0.0.1:51001", source: null }, frames, tabs), undefined, "no source");
-  assert.equal(trustedPreviewSender({ data, origin: "https://evil.example", source: own }, frames, tabs), undefined, "navigated away");
-  assert.equal(trustedPreviewSender({ data, origin: "null", source: own }, frames, tabs), undefined, "opaque origin");
-  assert.equal(trustedPreviewSender({ data: { ...data, source: "x" }, origin: "http://127.0.0.1:51001", source: own }, frames, tabs), undefined, "untagged");
-  assert.equal(trustedPreviewSender({ data: "text", origin: "http://127.0.0.1:51001", source: own }, frames, tabs), undefined, "non-object");
-  assert.equal(trustedPreviewSender({ data: { ...data, type: "agent-stop" }, origin: "https://site.example", source: frames.get("b")!.contentWindow }, frames, tabs), undefined, "external (unproxied) tab");
+test("a preview frame gets a private channel; only its messages reach the app (L6)", async () => {
+  const sent: Array<{ message: unknown; targetOrigin: string; transfer?: unknown[] }> = [];
+  const frame = { postMessage: (message: unknown, targetOrigin: string, transfer?: unknown[]) => { sent.push({ message, targetOrigin, transfer }); } };
+  const heard: unknown[] = [];
+  const port = connectPreview(frame, "http://127.0.0.1:51001", (data) => heard.push(data));
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].message, { source: "orchestra-parent", type: "connect" });
+  assert.equal(sent[0].targetOrigin, "http://127.0.0.1:51001");
+  const injected = sent[0].transfer![0] as MessagePort;
+  // The injected script's end: tagged messages come through, anything else is dropped.
+  injected.postMessage({ source: "orchestra-preview", type: "location", href: "http://x/" });
+  injected.postMessage({ source: "page", type: "agent-result" });
+  injected.postMessage("text");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(heard, [{ source: "orchestra-preview", type: "location", href: "http://x/" }]);
+  // Commands go the other way over the same channel.
+  const commands: unknown[] = [];
+  injected.onmessage = (event) => commands.push(event.data);
+  port.postMessage({ source: "orchestra-parent", type: "ping" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(commands, [{ source: "orchestra-parent", type: "ping" }]);
+  port.close(); injected.close();
 });
 
 test("app-to-frame messages target the proxy origin only", () => {
