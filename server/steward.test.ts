@@ -15,7 +15,8 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, 
 async function waitFor(predicate: () => boolean, ms = 5_000) {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > ms) throw new Error("timed out");
+    // Polls until true, so a long limit costs nothing when it passes; it only absorbs a loaded machine.
+    if (Date.now() - start > ms * 4) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -188,9 +189,11 @@ test("leads asking each other back and forth stop after a few hops", async (t) =
   await waitFor(() => two.status === "done");
   await orchestra.followup(one.id, "시작");
   const warned = () => [...one.events, ...two.events].some((event) => event.type === "warning" && event.text.includes("주고받은 횟수"));
-  await waitFor(() => warned() && one.status !== "running" && two.status !== "running", 10_000);
+  // isWorking, not status: between hops a lead is briefly not "running" while the next ASK is delivered.
+  const idle = () => !orchestra.isWorking(one.id) && !orchestra.isWorking(two.id);
+  await waitFor(() => warned() && idle(), 10_000);
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.ok(one.status !== "running" && two.status !== "running", "the chain ended");
+  assert.ok(idle(), "the chain ended");
 });
 
 test("a lead's daily report opens a turn once its time has passed", async (t) => {

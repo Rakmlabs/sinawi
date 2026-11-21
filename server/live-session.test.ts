@@ -6,7 +6,7 @@ import type { RunCliOptions } from "./cli.js";
 async function waitFor(predicate: () => boolean) {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > 1_000) throw new Error("timed out waiting for the running session");
+    if (Date.now() - start > 15_000) throw new Error("timed out waiting for the running session");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }

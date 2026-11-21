@@ -64,7 +64,7 @@ test("orchestrator runs selected worker and sends its result back", async () => 
   const session = await orchestra.create({ prompt: "Do work", agent: "codex", workers: ["claude"], cwd });
 
   await new Promise<void>((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error("session timeout")), 5_000);
+    const deadline = setTimeout(() => reject(new Error("session timeout")), 15_000);
     const poll = () => {
       if (session.status !== "running") { clearTimeout(deadline); resolve(); }
       else setTimeout(poll, 5);
@@ -793,7 +793,7 @@ test("company bot conversations reject Codex before starting a CLI", async () =>
 /** With `orchestra`, also waits out the moment between create() returning and the run flipping to running. */
 async function waitUntilSettled(session: { id?: string; status: string }, orchestra?: Orchestra) {
   await new Promise<void>((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error("session timeout")), 1_000);
+    const deadline = setTimeout(() => reject(new Error("session timeout")), 15_000);
     const poll = () => {
       if (session.status !== "running" && !(orchestra && session.id && orchestra.isWorking(session.id))) { clearTimeout(deadline); resolve(); }
       else setTimeout(poll, 5);

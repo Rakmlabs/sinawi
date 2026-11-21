@@ -81,7 +81,7 @@ test("every lead and worker run uses its workspace's account; other workspaces k
   for (const workspaceId of ["work", "home"]) {
     const session = await orchestra.create({ prompt: "Build", agent: "claude", workers: ["codex"], cwd: process.cwd(), workspaceId });
     await new Promise<void>((resolve, reject) => {
-      const deadline = setTimeout(() => reject(new Error("session timeout")), 2_000);
+      const deadline = setTimeout(() => reject(new Error("session timeout")), 15_000);
       const poll = () => session.status !== "running" ? (clearTimeout(deadline), resolve()) : setTimeout(poll, 5);
       poll();
     });

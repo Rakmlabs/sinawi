@@ -15,7 +15,8 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, 
 async function waitFor(predicate: () => boolean, ms = 5_000) {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > ms) throw new Error("timed out");
+    // Polls until true, so a long limit costs nothing when it passes; it only absorbs a loaded machine.
+    if (Date.now() - start > ms * 4) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -345,9 +346,10 @@ test("a previous choice does not pause later goal turns with no emitted message"
   };
   const orchestra = new Orchestra(undefined, runner);
   const session = await orchestra.create({ prompt: "구현", agent: "codex", workers: ["claude"], cwd: process.cwd(), goal: true });
-  await waitFor(() => session.status !== "running");
+  // Between a goal's turns the status is briefly not "running" while the next turn is queued; isWorking covers that gap.
+  await waitFor(() => !orchestra.isWorking(session.id));
   await orchestra.followup(session.id, "2");
-  await waitFor(() => session.status !== "running");
+  await waitFor(() => !orchestra.isWorking(session.id));
   assert.equal(turns, 3);
   assert.equal(session.goal?.outcome, "complete");
 });

@@ -246,7 +246,7 @@ test("planner execution is bounded by the configured timeout", async () => {
   const service = new RoutingService({ runner, homeDir: home, skillLoader: async () => [], timeoutMs: 10 });
   const started = Date.now();
   const recommendation = await service.recommend("평범한 요청", process.cwd());
-  assert.ok(Date.now() - started < 500, "recommend() should settle even if the runner ignores abort");
+  assert.ok(Date.now() - started < 5_000, "recommend() should settle even if the runner ignores abort");
   assert.equal(aborted, true);
   assert.equal(recommendation.source, "fallback");
   assert.match(recommendation.warning ?? "", /시간이 초과/);

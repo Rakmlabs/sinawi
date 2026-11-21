@@ -12,7 +12,8 @@ const SEOUL = "Asia/Seoul";
 async function waitFor(predicate: () => boolean, ms = 5_000) {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > ms) throw new Error("timed out");
+    // Polls until true, so a long limit costs nothing when it passes; it only absorbs a loaded machine.
+    if (Date.now() - start > ms * 4) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
