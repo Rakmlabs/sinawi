@@ -113,6 +113,9 @@ async function hasUncommitted(path: string): Promise<boolean> {
   return Boolean((await tryGit(path, ["status", "--porcelain", "--untracked-files=normal"]))?.trim());
 }
 
+/** How a git operation in progress is called in a Korean sentence (review L4: no bare "merge"/"rebase"). */
+const GIT_OPERATION_NAMES: Record<string, string> = { merge: "병합(merge)", "cherry-pick": "커밋 가져오기(cherry-pick)", revert: "되돌리기(revert)", rebase: "리베이스(rebase)" };
+
 /**
  * Returns the name of a git operation in progress in the checkout at `repoRoot`, or undefined when
  * the working tree is idle. Checks MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD, REBASE_HEAD files and
@@ -446,7 +449,7 @@ export async function mergeWorktree(info: WorktreeInfo, message: string): Promis
     // Running git merge while MERGE_HEAD exists fails, and the subsequent --abort would wipe the
     // user's own in-progress merge resolution.
     const inProgress = await inProgressOperation(info.repoRoot);
-    if (inProgress) return { ok: false, into, text: `메인 폴더에서 ${inProgress} 작업이 진행 중이라 병합하지 않았습니다. 작업을 완료하거나 중단한 뒤 다시 시도하세요. 브랜치 \`${info.branch}\`는 그대로입니다.` };
+    if (inProgress) return { ok: false, into, text: `메인 폴더에서 ${GIT_OPERATION_NAMES[inProgress] ?? inProgress} 작업이 진행 중이라 병합하지 않았습니다. 작업을 완료하거나 중단한 뒤 다시 시도하세요. 브랜치 \`${info.branch}\`는 그대로입니다.` };
     // The user's uncommitted edits: git merge keeps them (it refuses when they would be overwritten),
     // but `git merge --abort` may not bring them back, so a failed merge is then left for the user.
     const dirty = await hasUncommitted(info.repoRoot);

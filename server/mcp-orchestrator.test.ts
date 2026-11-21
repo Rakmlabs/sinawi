@@ -80,13 +80,13 @@ test("an outside orchestrator opens a lead's chat with its own model, waits for 
   assert.equal(done.done, true, JSON.stringify(done));
   assert.equal(done.status, "done");
   assert.match(done.lastAnswer, /답: /u);
-  assert.equal(done.messages[0].from, "grok-bot");
+  assert.equal(done.messages[0].from, "Grok Bot", "the name the app shows");
   assert.ok(done.messages.some((message: { from: string }) => message.from === "claude"));
 
   await mcp("send_message", { session_id: opened.id, prompt: "그럼 고쳐줘" });
   const next = await mcp("wait_for_session", { session_id: opened.id, timeout_sec: 30, after_event_id: done.lastEventId });
   assert.equal(next.done, true);
-  assert.deepEqual(next.messages.map((message: { from: string }) => message.from), ["grok-bot", "claude"], "only what was said after the last read");
+  assert.deepEqual(next.messages.map((message: { from: string }) => message.from), ["Grok Bot", "claude"], "only what was said after the last read");
   assert.match(next.lastAnswer, /그럼 고쳐줘/u);
 
   // The user keeps talking in the same chat from the app: no origin on that message.

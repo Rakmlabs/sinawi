@@ -1,3 +1,4 @@
+import { originLabel } from "../src/origin.js";
 import type { Session, SessionEvent } from "./types.js";
 import { sessionSummary } from "./steward.js";
 import type { Steward } from "./types.js";
@@ -21,7 +22,8 @@ function conversationLine(event: SessionEvent): boolean {
 }
 
 function fromLabel(event: SessionEvent): string {
-  if (event.agent === "user") return event.metadata?.via ? event.metadata.via.client : "user";
+  // The name the app shows (Grok Bot, Codex), not the client's raw id (review L4).
+  if (event.agent === "user") return event.metadata?.via ? originLabel(event.metadata.via) : "user";
   return event.type === "message" ? event.agent : `${event.agent} (${event.type})`;
 }
 

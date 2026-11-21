@@ -335,7 +335,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
   const searchKey = mac ? "⌘K" : "Ctrl+K";
   const footerItems: MenuItem[] = [
     { kind: "action", label: t("side.settings"), icon: <Settings2 size={15} />, meta: <kbd>{mac ? "⌘," : "Ctrl+,"}</kbd>, onSelect: () => props.onSettings ? props.onSettings() : onNavigate("routing") },
-    { kind: "action", label: t("header.tools"), icon: <Wrench size={15} />, meta: <kbd>{mac ? "⌘⇧T" : "F3"}</kbd>, onSelect: () => onNavigate("tools") },
+    { kind: "action", label: t("header.tools"), icon: <Wrench size={15} />, meta: <kbd>F3</kbd>, onSelect: () => onNavigate("tools") },
     { kind: "action", label: t("side.bots"), icon: <Bot size={15} />, onSelect: () => onNavigate("bots") },
     { kind: "action", label: t("side.skills"), icon: <WandSparkles size={15} />, onSelect: onSkills },
     ...(props.onUsage ? [{ kind: "action" as const, label: t("side.usage"), icon: <BarChart3 size={15} />, onSelect: props.onUsage }] : []),

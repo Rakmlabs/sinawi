@@ -1494,7 +1494,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const workspaceName = workspaceState.workspaces.find((item) => item.id === caller.workspaceId)?.name;
     return {
       // A lead by its name; an outside AI by its MCP client's name (Claude Code, Codex, Grok ...).
-      ...(session?.steward ? { requester: stewardName(session) } : caller.surface === "external" && caller.origin?.client && caller.origin.client !== "MCP" ? { requester: caller.origin.client } : {}),
+      ...(session?.steward ? { requester: stewardName(session) } : caller.surface === "external" && caller.origin?.client && caller.origin.client !== "MCP" ? { requester: originLabel(caller.origin) } : {}),
       ...(session?.title ? { sessionTitle: session.title } : {}),
       ...(workspaceName ? { workspaceName } : {}),
     };
