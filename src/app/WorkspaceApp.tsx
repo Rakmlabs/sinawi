@@ -444,7 +444,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     connected,
   );
   const canSend = Boolean((prompt.trim() || attachments.some((item) => item.kind === "element" || item.screenshotPath)) && canSendBase && attachmentsReady);
-  const { bottom, chatBody, showChatBottom, scrollToChatBottom, chatScrollHandlers } = useChatScroll({
+  const { bottom, chatBody, showChatBottom, hasAbove, scrollToChatBottom, chatScrollHandlers } = useChatScroll({
     resetKey: [selected, workerSelection?.taskId],
     followKey: [active?.events.at(-1)?.id, active?.events.at(-1)?.text, pendingRecommendation, editingRecommendation],
     observeKey: [selected, workerSelection?.taskId, active?.events.length],
@@ -928,7 +928,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     onSelect={sidebarHandlers.onSelect} onSelectWorker={sidebarHandlers.onSelectWorker} onNew={() => sidebarHandlers.onNewStewardThread(tabStewardId)} onRename={sidebarHandlers.onRenameSession} />}
                   {active && active.status !== "running" && <QuotaReturnBanner active={active} threshold={quotaThreshold} allowedAgents={allowedAgents} busy={busy}
                     onReturn={(eventId) => void sessionAction(`/sessions/${active.id}/quota/return`, { eventId })} />}
-                  <div ref={chatBody} className={`chat-body ${(!active && !pendingRecommendation) || (emptyChat && !selectedWorker) ? "empty-chat" : ""}`} {...chatScrollHandlers}>
+                  <div ref={chatBody} className={`chat-body ${(!active && !pendingRecommendation) || (emptyChat && !selectedWorker) ? "empty-chat" : ""}${hasAbove ? " has-above" : ""}`} {...chatScrollHandlers}>
                     {selectedWorker ? <><WorkerThread key={`${active?.id}-${selectedWorker.id}`} worker={selectedWorker} draftKey={active?.status === "running" ? draftKey(active.id, selectedWorker.id) : undefined} /><div ref={bottom} /></> : !active ? (
                       pendingRecommendation ? <div className="messages routing-message">
                         <div className="message user-message"><div className="message-author"><strong>{t("names.user")}</strong></div><div className="message-text">{prompt}</div></div>

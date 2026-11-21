@@ -1040,3 +1040,10 @@ body,
   .composer-bottom .permission-picker { width: 104px; min-width: 104px; }
   .composer-bottom .directory-button { max-width: 45%; min-width: 72px; }
 }
+
+/* Opened at the bottom, a chat's earlier messages sit above the view: fade the top edge so the first
+   visible message reads as "more above", not as a clipped bubble (review round 2, §6). */
+.chat-body.has-above {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 40px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 40px);
+}
