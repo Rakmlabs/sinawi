@@ -49,7 +49,7 @@ test("a step that writes before another step makes the whole chain ask", () => {
   for (const command of [
     // The verifier's repro (with this test's paths).
     "printf 'ref: refs/heads/main\\n' > r8/HEAD && printf '../r8c\\n' > r8/commondir && cd r8 && git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD",
-    "cd src; cat a.txt > b.txt && echo ok", "git add -A && git commit -m x", "mkdir -p out && touch out/f.txt", "echo hi > new.txt; true", "sort -o s.txt a.txt && cat s.txt",
+    "cd src; cat a.txt > b.txt && echo ok", "mkdir -p out && touch out/f.txt", "echo hi > new.txt; true", "sort -o s.txt a.txt && cat s.txt",
     "touch x || git status", "(echo x > y) && ls", "echo x > y | cat", "cat a.txt | sort -o out.txt", "ls | head -3 && echo x > notes.txt", "ls & echo x > y", "git checkout -b x && git status", "git branch x && git status", "git branch -d x; ls",
   ]) {
     assert.notEqual(decide(command), "allow", command);
@@ -58,6 +58,38 @@ test("a step that writes before another step makes the whole chain ask", () => {
   // `cd` only into a folder that exists when the chain is judged.
   assert.equal(allowed("cd not-yet && ls"), false);
   for (const command of ["cd src && cat a.txt > b.txt", "git status && git diff && git commit -m x", "pwd && git status --short && git branch --show-current && ls -la && cat a.txt", "git branch -vv && git log --oneline -3", "ls && echo x > notes.txt", "true; echo hi > new.txt", "cd src && mkdir -p out"]) assert.equal(allowed(command), true, command);
+});
+
+// Ninth review R9-1: add and commit write only inside the git directory, so `git add … && git commit …`
+// runs without a card; the hooks commit runs stay under the repository check.
+test("git add and commit may be steps of a chain; the hooks commit runs are still checked", () => {
+  mkdirSync(path.join(root, "hooks"), { recursive: true });
+  // The same write alone (the last step) passes; it is ordering, not the path, that asks below.
+  assert.equal(decide("printf x > hooks/pre-commit"), "allow");
+  for (const command of ["git add -A && git commit -m x", "git add a.txt && git commit -m 'x' && git log --oneline -3", "git status && git add a.txt && git commit -m x", "git commit -am x && git status"]) assert.equal(decide(command), "allow", command);
+  for (const command of [
+    // A hook written in the same chain: the write comes before another step.
+    "printf '#!/bin/sh\\ntouch M\\n' > hooks/pre-commit && git add -A && git commit -m x",
+    // Into .git/hooks: a .git write asks anywhere.
+    "printf '#!/bin/sh\\ntouch M\\n' > .git/hooks/pre-commit && git commit -m x",
+    "git add -A && git commit -m x && printf x > .git/hooks/pre-commit",
+    // checkout still changes the worktree.
+    "git checkout -b x && git add -A && git commit -m x",
+    "git add -A & echo x > y",
+  ]) assert.equal(decide(command), "ask", command);
+  // A hooks folder inside the project (husky): commit asks, chained or not.
+  const husky = path.join(root, "husky9");
+  mkdirSync(husky, { recursive: true });
+  spawnSync("git", ["init", "-q"], { cwd: husky });
+  spawnSync("git", ["config", "core.hooksPath", ".husky"], { cwd: husky });
+  for (const command of ["git add -A && git commit -m x", "git commit -m x"]) assert.equal(decide(command, false, husky), "ask", command);
+  assert.equal(decide("cd husky9 && git add -A && git commit -m x"), "ask");
+  // A look-alike git directory written by an earlier call: the commit's folder is not trusted.
+  const fake = path.join(root, "r9");
+  mkdirSync(fake, { recursive: true });
+  writeFileSync(path.join(fake, "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(path.join(fake, "commondir"), "../r8c\n");
+  assert.equal(decide("cd r9 && git add -A && git commit -m x"), "ask");
 });
 
 test("the same trick over separate calls: each call is judged when it runs", () => {

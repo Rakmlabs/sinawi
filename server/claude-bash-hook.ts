@@ -13,8 +13,9 @@
  *   writing/exec flags; no `rg --pre`/follow-symlink flags); `find` only with listing primaries;
  *   npm/pnpm/yarn only `test`/`run` without prefix/global flags, and only where the workspace
  *   pre-approves programs that run code (H2, `runtime` argument);
- * - in a chain, no step writes files before another step runs, and none writes when steps run at the
- *   same time (`|`, `&`): the chain is judged once, before it runs (eighth review R8-1);
+ * - in a chain, no step writes files in the working folder before another step runs, and none writes
+ *   when steps run at the same time (`|`, `&`): the chain is judged once, before it runs (eighth review
+ *   R8-1). git add and commit write only inside the git directory and may be any step (R9-1);
  * - nothing is expanded: no `$`, backticks, braces, unquoted `~` (at a word start or after `=`/`:`),
  *   unquoted glob characters (`*?[`, which bash 3.2 lets match `..`), comments, here-docs;
  * - no path argument, `cd` target or redirection target has a `..` component, absolute paths must
@@ -629,8 +630,10 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
       return optionsAllowed(segment) && pathArgsOk(args, dirs);
     }
     if (program === "git") {
-      // Only these leave the worktree as it was; add/commit write the index and objects.
-      if (!["status", "diff", "log", "show", "rev-parse", "ls-files", "blame"].includes(args[0] ?? "")) writes = true;
+      // These leave the worktree as it was. add and commit write only inside the git directory (index,
+      // objects, refs), which no later step's judgment reads; the hooks commit runs are where
+      // gitRepositoryTrusted already looks (core.hooksPath inside the project asks, .git writes ask).
+      if (!["status", "diff", "log", "show", "rev-parse", "ls-files", "blame", "add", "commit"].includes(args[0] ?? "")) writes = true;
       // `git branch` that only lists (`--show-current`, `-a`, `-vv`) reads; with a name it creates or changes one.
       if (args[0] === "branch") {
         if (!args.slice(1).every((arg) => ["--show-current", "--list", "-l", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--no-color"].includes(arg))) return false;
