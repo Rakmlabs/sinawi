@@ -10,7 +10,7 @@
  * What an "allow" decision guarantees (checked statically, before the command runs):
  * - every segment's program is one of a small fixed set (bashCommandAllowed), and uses only the
  *   subcommands and options listed for it (optionsAllowed: no git global options, `-c`, `config` or
- *   writing/exec flags; no `rg --pre`/follow-symlink flags);
+ *   writing/exec flags; no `rg --pre`/follow-symlink flags); `find` only with listing primaries;
  *   npm/pnpm/yarn only `test`/`run` without prefix/global flags, and only where the workspace
  *   pre-approves programs that run code (H2, `runtime` argument);
  * - nothing is expanded: no `$`, backticks, braces, unquoted `~` (at a word start or after `=`/`:`),
@@ -429,6 +429,30 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
     }
     return true;
   };
+  /**
+   * `find` that only lists (fifth review R5-3: most of Claude's cards were plain listings). Start
+   * paths and `-newer`/`-samefile` files must stay inside; only listed primaries pass, so -exec,
+   * -execdir, -ok, -okdir, -delete, -fprint*, -fls and symlink following (-L, -follow) do not.
+   */
+  const findAllowed = (args: string[], dirs: Set<string>): boolean => {
+    const flags = new Set(["-H", "-P", "-E", "-x", "-s", "-d"]);
+    const bare = new Set(["-print", "-print0", "-prune", "-depth", "-empty", "-not", "!", "(", ")", "-o", "-a", "-and", "-or", "-true", "-false", "-ls", "-xdev", "-mount", "-readable", "-writable", "-executable", "-nouser", "-nogroup", "-quit"]);
+    const valued = new Set(["-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-type", "-maxdepth", "-mindepth", "-mtime", "-mmin", "-atime", "-amin", "-ctime", "-cmin", "-size", "-perm", "-user", "-group", "-uid", "-gid", "-regex", "-iregex", "-links", "-inum", "-newermt", "-printf", "-regextype"]);
+    const files = new Set(["-newer", "-samefile", "-anewer", "-cnewer"]);
+    let at = 0;
+    while (at < args.length && flags.has(args[at]!)) at++;
+    for (; at < args.length && !args[at]!.startsWith("-") && args[at] !== "!" && args[at] !== "("; at++) {
+      if (!locate(args[at]!, dirs)) return false;
+    }
+    for (; at < args.length; at++) {
+      const word = args[at]!;
+      if (bare.has(word)) continue;
+      if (valued.has(word) && at + 1 < args.length) { at++; continue; }
+      if (files.has(word) && at + 1 < args.length && locate(args[at + 1]!, dirs)) { at++; continue; }
+      return false;
+    }
+    return true;
+  };
 
   interface Word { text: string; glob: boolean }
   const stack: Set<string>[] = [new Set([cwdReal])];
@@ -471,6 +495,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
     if (plainPrograms.has(program)) return true;
     if (pathPrograms.has(program)) return optionsAllowed(segment) && pathArgsOk(args, dirs);
     if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs);
+    if (program === "find") return findAllowed(args, dirs);
     if (packageManagers.has(program)) {
       if (!host.runtimePrograms) return false;
       if (args[0] !== "test" && args[0] !== "run" && args[0] !== "run-script") return false;
