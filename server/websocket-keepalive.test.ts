@@ -19,18 +19,34 @@ async function start(t: test.TestContext, directory: string) {
   return { created, port: (created.httpServer.address() as { port: number }).port };
 }
 
-const connect = (port: number, autoPong: boolean) => new Promise<WebSocket>((resolve, reject) => {
+/**
+ * Opens a window socket. `until: "message"` waits for the first sessions message (the server has the
+ * window and its data); `"open"` only for the upgrade. A socket that does not answer pings may be cut
+ * before the server, still loading its data under load, sends anything: waiting for a message then
+ * never ended and hung the whole run for 18 minutes (third review N5). Closing early or taking longer
+ * than 10 s now rejects.
+ */
+const connect = (port: number, autoPong: boolean, until: "open" | "message" = "message") => new Promise<WebSocket>((resolve, reject) => {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, [`sinawi-app.${appKey()}`], { headers: { origin: ORIGIN }, autoPong });
-  socket.once("message", () => resolve(socket));
-  socket.once("error", reject);
+  const timer = setTimeout(() => { socket.terminate(); reject(new Error(`no ${until} within 10 s`)); }, 10_000);
+  const done = (value: WebSocket | Error) => { clearTimeout(timer); if (value instanceof Error) reject(value); else resolve(value); };
+  socket.once(until, () => done(socket));
+  socket.once("error", (error) => done(error));
+  socket.once("close", (code) => done(new Error(`closed (${code}) before ${until}`)));
 });
 
-test("a window that stops answering pings is closed; one that answers stays", async (t) => {
+/** Resolves with the close code, or rejects after `ms`. */
+const closeCode = (socket: WebSocket, ms = 10_000) => new Promise<number>((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error(`socket still open after ${ms} ms`)), ms);
+  socket.once("close", (code) => { clearTimeout(timer); resolve(code); });
+});
+
+test("a window that stops answering pings is closed; one that answers stays", { timeout: 30_000 }, async (t) => {
   const { created, port } = await start(t, await mkdtemp(join(tmpdir(), "sinawi-ws-keepalive-")));
   const live = await connect(port, true);
-  const dead = await connect(port, false);
-  const closed = new Promise<number>((resolve) => dead.once("close", resolve));
-  assert.equal(await closed, 1006, "terminated by the server");
+  // The silent window is cut by the keepalive whether or not its first message got through.
+  const dead = await connect(port, false, "open");
+  assert.equal(await closeCode(dead), 1006, "terminated by the server");
   await new Promise((resolve) => setTimeout(resolve, 400));
   assert.equal(live.readyState, WebSocket.OPEN);
   const health = await injectRequest(created.app as never, "GET", "/api/health") as { body: { windows: number } };
@@ -38,7 +54,7 @@ test("a window that stops answering pings is closed; one that answers stays", as
   live.close();
 });
 
-test("unreadable data keeps the server up: /api/health says why and a window is closed, not crashed", async (t) => {
+test("unreadable data keeps the server up: /api/health says why and a window is closed, not crashed", { timeout: 30_000 }, async (t) => {
   const parent = await mkdtemp(join(tmpdir(), "sinawi-start-error-"));
   const blocker = join(parent, "not-a-folder");
   await writeFile(blocker, "");
@@ -50,11 +66,10 @@ test("unreadable data keeps the server up: /api/health says why and a window is 
   assert.equal(health.body.ok, true, "still recognisable as Sinawi by the app");
   assert.match(health.body.error ?? "", /ENOTDIR|not a directory/iu);
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, [`sinawi-app.${appKey()}`], { headers: { origin: ORIGIN } });
-  const code = await new Promise<number>((resolve) => socket.once("close", resolve));
-  assert.equal(code, 1011);
+  assert.equal(await closeCode(socket), 1011);
 });
 
-test("a window that fell behind gets an edited event again once it drains, not only new ones", async (t) => {
+test("a window that fell behind gets an edited event again once it drains, not only new ones", { timeout: 30_000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "sinawi-ws-behind-"));
   const options = { dataDir: directory, modelHomeDir: directory, availableAgents: ["claude" as const], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [], wsPingMs: 150, wsBufferLimit: 8 * 1024 * 1024 };
   const created = createServer(options);
