@@ -8,7 +8,8 @@ import test from "node:test";
 import express from "express";
 import { clearComputerTokens, issueComputerToken } from "./computer-tokens.js";
 import { DevServerManager, devServerEnv, portOpen } from "./dev-servers.js";
-import { parseServeArgv, registerServeRoutes, SERVE_CLI_SOURCE } from "./serve-tool.js";
+import { CODE_RUNS_OFF, handleServe, parseServeArgv, registerServeRoutes, SERVE_CLI_SOURCE } from "./serve-tool.js";
+import { mayStartCode } from "./cli.js";
 
 async function freePort(): Promise<number> {
   return new Promise((resolve) => {
@@ -168,4 +169,21 @@ test("a dev server's log is cut to its newest part when it grows past the cap, a
   assert.ok(marker >= 0 && marker < 1024, "new lines are appended after the kept part, not written over it");
   assert.ok(after.length > trimmed.length, "the log keeps growing after the cut");
   assert.ok(!after.includes("\u0000"), "no hole of zero bytes");
+});
+
+// H2: ao-serve start runs any command outside the CLI's sandbox; Codex in auto mode reaches it through
+// the file queue, so the server itself refuses a run that was not given that right.
+test("ao-serve start is refused for a run that may not start code, and list still works", async () => {
+  let started = 0;
+  const manager = { start: async () => { started++; throw new Error("must not start"); }, list: () => [] } as unknown as DevServerManager;
+  const token = issueComputerToken({ sessionId: "s-h2", workspaceId: "default", agent: "codex", codeRuns: mayStartCode({ agent: "codex" }) });
+  const refused = await handleServe(manager, "start", { token, name: "x", command: "sh -c id" });
+  assert.deepEqual(refused, { ok: false, error: CODE_RUNS_OFF });
+  assert.equal(started, 0);
+  assert.deepEqual(await handleServe(manager, "list", { token }), { ok: true, result: [] });
+  assert.equal(mayStartCode({ agent: "codex", runtimePrograms: true }), true, "the workspace's opt-in");
+  assert.equal(mayStartCode({ agent: "codex", fullAccess: true }), true);
+  assert.equal(mayStartCode({ agent: "grok" }), false);
+  assert.equal(mayStartCode({ agent: "claude" }), true, "Claude asks the user for each command");
+  assert.equal(mayStartCode({ agent: "claude", readOnly: true }), false);
 });

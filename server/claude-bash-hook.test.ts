@@ -24,10 +24,8 @@ const allowed = (command: string, cwd = root, options: Partial<HookHost> = {}) =
 
 test("compound commands of safe programs inside the worker folder are pre-approved", () => {
   for (const command of [
-    "cd src && npm test",
     "cd src; cat a.txt > b.txt && echo ok",
     "(cd sub && wc -l a.txt)",
-    "cd src && npm test 2>&1 | tail -20",
     "git status && git diff --stat",
     "git log --oneline -5 HEAD~3 && git show HEAD:a.txt | head -5",
     "git add -A && git commit -m 'work: done'",
@@ -39,6 +37,15 @@ test("compound commands of safe programs inside the worker folder are pre-approv
     `cat ${root}/a.txt && ls ${root}/src`,
     "echo hi > new.txt; true",
   ]) assert.equal(allowed(command), true, command);
+});
+
+test("package scripts run code: approved only where the workspace pre-approves programs that run code (H2)", () => {
+  for (const command of ["cd src && npm test", "cd src && npm test 2>&1 | tail -20", "pnpm run build && echo ok"]) {
+    assert.equal(allowed(command), false, `${command} (off, the default)`);
+    assert.equal(allowed(command, root, { runtimePrograms: true }), true, `${command} (on)`);
+  }
+  assert.match(bashHookSettings("/hook.mjs", "/repo", "/node", true), /\/repo' 'runtime'|\/repo runtime/u);
+  assert.doesNotMatch(bashHookSettings("/hook.mjs", "/repo", "/node"), /runtime/u);
 });
 
 test("verified bypasses get no decision", () => {

@@ -14,6 +14,8 @@ const TOKEN_MESSAGE = "ao-serve는 Sinawi가 실행한 세션 안에서만 쓸 �
 
 const brief = (server: DevServerView) => ({ name: server.name, alive: server.alive, port: server.port, command: server.command, cwd: server.cwd, log: server.log, startedAt: server.startedAt });
 
+export const CODE_RUNS_OFF = "이 작업 공간은 자동 모드에서 코드를 실행하는 명령(ao-serve start 포함)을 미리 허용하지 않습니다. 사용자가 설정 › 작업 공간 › 규칙에서 켤 수 있습니다. 서버가 필요하면 사용자에게 띄워 달라고 요청하세요.";
+
 export async function handleServe(manager: DevServerManager, op: string, body: Record<string, unknown>): Promise<ServeOut> {
   if (!(SERVE_OPS as readonly string[]).includes(op)) return { ok: false, error: `알 수 없는 명령: ${op}` };
   const run = resolveComputerToken(body.token);
@@ -21,6 +23,7 @@ export async function handleServe(manager: DevServerManager, op: string, body: R
   const name = typeof body.name === "string" ? body.name : "";
   switch (op as ServeOp) {
     case "start": {
+      if (run.codeRuns === false) return { ok: false, error: CODE_RUNS_OFF };
       const port = Number(body.port);
       const result = await manager.start(run.sessionId, {
         name,

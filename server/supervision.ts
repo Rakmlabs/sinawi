@@ -173,16 +173,28 @@ ${BROWSER_CORE}
 ${COMPUTER_CORE}`;
 
 /**
- * Programs pre-approved for headless Claude (`--allowedTools`) and Grok (`--allow`).
- * A Grok command outside this list cancels the whole run, because nobody can approve a prompt.
+ * Programs pre-approved for headless Claude (`--allowedTools`) and Grok (`--allow`), as command
+ * prefixes. A Grok command outside this list cancels the whole run, because nobody can approve a prompt.
+ * None of them runs code given on its command line (H2): git and gh by subcommand only, so
+ * `git -c core.fsmonitor=…`, git aliases and gh extensions are not covered. What git hooks or the
+ * project's own config run on commit is not covered by this list either (README, *auto* mode).
  */
-export const DEVELOPMENT_SHELL_PROGRAMS = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof", "trash"] as const;
+export const DEVELOPMENT_SHELL_PROGRAMS = [
+  "git status", "git diff", "git log", "git show", "git add", "git commit", "git rev-parse", "git ls-files", "git blame", "git branch",
+  "git checkout", "git switch", "git restore", "git rm", "git mv", "git stash", "git merge", "git fetch", "git pull", "git push", "git worktree", "git tag", "git remote",
+  "gh pr", "gh issue", "gh repo view", "gh run", "gh api", "gh auth status", "gh search",
+  "ls", "cat", "rg", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq",
+  "ao-computer", "xcrun simctl", "ao-serve list", "ao-serve logs", "ao-serve stop", "ao-sim", "curl", "lsof", "trash",
+] as const;
 
 /**
- * Interpreters that run any code, outside the project too (H2): pre-approved only where the
- * workspace turns it on (WorkspacePolicy.runtimePrograms). Off, they ask like any other command.
+ * Programs that run any code, outside the project too (H2): interpreters, package managers (their
+ * `run`/`exec`/`dlx` and every script or install hook), `find` (`-exec`) and `ao-serve start` (any
+ * command, outside a CLI's sandbox). Pre-approved only where the workspace turns it on
+ * (WorkspacePolicy.runtimePrograms). Off, Claude asks for each, Grok does not use them, and the server
+ * refuses `ao-serve start` from a run that cannot ask (serve-tool.ts).
  */
-export const RUNTIME_SHELL_PROGRAMS = ["node", "npx", "python3"] as const;
+export const RUNTIME_SHELL_PROGRAMS = ["node", "npx", "python3", "npm", "pnpm", "yarn", "find", "ao-serve start"] as const;
 
 /** The programs an "auto" run may start without asking. */
 export function preapprovedPrograms(runtimePrograms = false): string[] {
@@ -193,7 +205,7 @@ export function preapprovedPrograms(runtimePrograms = false): string[] {
 export function cliNotes(agent: AgentId, role: "orchestrator" | "worker"): string {
   // Static per agent and role (switching agents swaps this text): node, npx and python3 depend on the
   // workspace, so the run's own rules say whether they are allowed (cli.ts grokHeadlessRules).
-  const programs = `${DEVELOPMENT_SHELL_PROGRAMS.join(", ")} (node, npx, python3은 이 실행의 규칙에 허용으로 적혀 있을 때만)`;
+  const programs = `${DEVELOPMENT_SHELL_PROGRAMS.join(", ")} (${RUNTIME_SHELL_PROGRAMS.join(", ")}은 이 실행의 규칙에 허용으로 적혀 있을 때만. 아니면 파일 찾기는 rg --files·ls로 한다)`;
   const notes: Record<AgentId, Record<"orchestrator" | "worker", string>> = {
     codex: {
       orchestrator: `## Codex 총괄

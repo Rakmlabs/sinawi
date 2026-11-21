@@ -132,7 +132,7 @@ export function grokHeadlessRules(runtimePrograms?: boolean): string {
     "You run headless; nobody can approve permission prompts. A shell command that is not pre-approved CANCELS YOUR WHOLE RUN.",
     `Pre-approved programs: ${preapprovedPrograms(runtimePrograms).join(", ")}.`,
     "Each run_terminal_command must be ONE simple command that starts with one of those programs: no `cd`, no `&&`/`;`/`||` chains, no `VAR=value` assignments, no `$(...)`, no for/while loops, no `bash -c`.",
-    `Use absolute paths or paths relative to the working directory instead of cd. Split multi-step work into several separate tool calls${runtimePrograms ? "; write longer logic to a .py file and run it with python3" : "; node, npx and python3 are not pre-approved here (the user can allow them in the workspace settings)"}.`,
+    `Use absolute paths or paths relative to the working directory instead of cd. Split multi-step work into several separate tool calls${runtimePrograms ? "; write longer logic to a .py file and run it with python3" : "; node, npx, python3, npm, pnpm, yarn, find and ao-serve start are not pre-approved here (the user can allow them in the workspace settings): list files with rg --files or ls, and say in your answer which command the user should run"}.`,
   ].join(" ");
 }
 
@@ -278,7 +278,7 @@ export async function prepareCliInvocation(
   // Writable Claude runs get the Bash pre-approval hook, bounded to their own folder (see claude-bash-hook.ts).
   if (options.agent === "claude" && !options.readOnly && !options.fullAccess && !options.claudeSettings && options.usageContext?.dataDir) {
     const script = await ensureBashHookScript(options.usageContext.dataDir).catch(() => undefined);
-    if (script) options = { ...options, claudeSettings: bashHookSettings(script, options.cwd) };
+    if (script) options = { ...options, claudeSettings: bashHookSettings(script, options.cwd, undefined, options.runtimePrograms) };
   }
   const locked = [...new Set(options.lockedMcp ?? [])];
   if (!locked.length) return buildInvocation(options);
@@ -622,9 +622,19 @@ export function accountEnv(agent: AgentId, dir: string | undefined): Record<stri
   return dir ? { [ACCOUNT_ENV[agent]]: dir } : {};
 }
 
+/**
+ * Whether a run may have the server start any command for it (`ao-serve start`, H2), which happens
+ * outside the CLI's own sandbox: full access, the workspace's opt-in, or Claude (which asks the user
+ * for each command not pre-approved) may; Codex and Grok in "auto" without the opt-in, and read-only
+ * runs, may not.
+ */
+export function mayStartCode(options: Pick<RunCliOptions, "agent" | "fullAccess" | "readOnly" | "runtimePrograms">): boolean {
+  return Boolean(options.fullAccess || (!options.readOnly && (options.runtimePrograms || options.agent === "claude")));
+}
+
 export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
   // SINAWI_SESSION_ID (display) + a per-run SINAWI_COMPUTER_TOKEN: ao-computer is attributed by the token only.
-  const computerEnv = computerRunEnv(options.agent, options.usageContext);
+  const computerEnv = computerRunEnv(options.agent, options.usageContext, process.env, mayStartCode(options));
   const token = computerEnv.SINAWI_COMPUTER_TOKEN;
   // Writable Claude runs ask the user through the app when a tool needs permission (permission-prompts.ts).
   if (options.agent === "claude" && token && !options.readOnly && !options.fullAccess && !options.permissionMcp && options.usageContext?.dataDir) {

@@ -15,13 +15,21 @@ import type { AgentId } from "./types.js";
  * `owner`: who in the session is running (the lead, or one worker). Stable across that one's
  * turns, so its browser tab stays its own while other sessions and workers get theirs.
  */
-export type ComputerRun = { sessionId: string; workspaceId: string; agent: AgentId; owner: string; issuedAt: number; expiresAt: number };
+export type ComputerRun = {
+  sessionId: string; workspaceId: string; agent: AgentId; owner: string; issuedAt: number; expiresAt: number;
+  /**
+   * Whether this run may start any command through `ao-serve start` (H2). False for a run that cannot
+   * ask the user per command and was not given that right: Codex's sandbox does not cover what the
+   * server starts for it, so the server itself refuses.
+   */
+  codeRuns?: boolean;
+};
 
 const RUN_TTL_MS = 12 * 60 * 60_000;
 const MAX_RUNS = 2_000;
 const runs = new Map<string, ComputerRun>();
 
-export function issueComputerToken(run: { sessionId: string; workspaceId: string; agent: AgentId; owner?: string }, now = Date.now(), ttlMs = RUN_TTL_MS): string {
+export function issueComputerToken(run: { sessionId: string; workspaceId: string; agent: AgentId; owner?: string; codeRuns?: boolean }, now = Date.now(), ttlMs = RUN_TTL_MS): string {
   for (const [token, entry] of runs) if (entry.expiresAt <= now) runs.delete(token);
   while (runs.size >= MAX_RUNS) runs.delete(runs.keys().next().value as string);
   const token = randomBytes(24).toString("base64url");
@@ -80,14 +88,14 @@ export function computerDir(): string {
  * display, and the shared directory. `TMPDIR` is filled in when the server has none, so a
  * sandboxed CLI (Codex workspace-write allows `$TMPDIR`) can write the queue there.
  */
-export function computerRunEnv(agent: AgentId, context: { sessionId?: string; workspaceId?: string; role?: string; workerId?: string } | undefined, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+export function computerRunEnv(agent: AgentId, context: { sessionId?: string; workspaceId?: string; role?: string; workerId?: string } | undefined, env: NodeJS.ProcessEnv = process.env, codeRuns = true): Record<string, string> {
   if (!context?.sessionId) return {};
   const out: Record<string, string> = { SINAWI_SESSION_ID: context.sessionId, SINAWI_COMPUTER_DIR: computerDir() };
   if (!env.TMPDIR && process.platform === "darwin") { const tmp = darwinUserTempDir(); if (tmp) out.TMPDIR = tmp; }
   // Router/status helper runs never need the screen.
   if (context.workspaceId && context.role !== "router" && context.role !== "status") {
     const owner = `${context.sessionId}:${context.workerId ?? context.role ?? ""}`;
-    out.SINAWI_COMPUTER_TOKEN = issueComputerToken({ sessionId: context.sessionId, workspaceId: context.workspaceId, agent, owner });
+    out.SINAWI_COMPUTER_TOKEN = issueComputerToken({ sessionId: context.sessionId, workspaceId: context.workspaceId, agent, owner, codeRuns });
   }
   return out;
 }

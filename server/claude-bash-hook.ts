@@ -8,7 +8,8 @@
  * What an "allow" decision guarantees (checked statically, before the command runs):
  * - every segment's program is one of a small fixed set (SAFE_PROGRAMS below), with per-program
  *   argument checks: no git global options, `-c`, `config` or writing/exec flags; no
- *   `rg --pre`/follow-symlink flags; npm/pnpm/yarn only `test`/`run` without prefix/global flags;
+ *   `rg --pre`/follow-symlink flags; npm/pnpm/yarn only `test`/`run` without prefix/global flags, and
+ *   only where the workspace pre-approves programs that run code (H2, `runtime` argument);
  * - nothing is expanded: no `$`, backticks, braces, unquoted `~` (at a word start or after `=`/`:`),
  *   unquoted glob characters (`*?[`, which bash 3.2 lets match `..`), comments, here-docs;
  * - no path argument, `cd` target or redirection target has a `..` component, absolute paths must
@@ -44,6 +45,8 @@ export interface HookHost {
   exists(path: string): boolean;
   /** CDPATH of the hook's environment; a non-empty value makes `cd` unpredictable, so cd is refused. */
   cdpath?: string;
+  /** The workspace pre-approves programs that run code (npm/pnpm/yarn scripts): WorkspacePolicy.runtimePrograms. */
+  runtimePrograms?: boolean;
 }
 
 export function nodeHookHost(): HookHost {
@@ -170,6 +173,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
       return pathArgsOk(args.slice(1), dirs);
     }
     if (packageManagers.has(program)) {
+      if (!host.runtimePrograms) return false;
       if (args[0] !== "test" && args[0] !== "run" && args[0] !== "run-script") return false;
       if (args.some((arg) => packageDenied.test(arg))) return false;
       return pathArgsOk(args.slice(1), dirs);
@@ -282,6 +286,7 @@ const host = {
   realpath: (p) => fs.realpathSync(p),
   exists: (p) => { try { fs.lstatSync(p); return true; } catch { return false; } },
   cdpath: process.env.CDPATH || "",
+  runtimePrograms: process.argv[3] === "runtime",
 };
 const root = process.argv[2];
 // Transpilers with keepNames (tsx/esbuild) wrap inner functions in __name(); make it a no-op here.
@@ -317,7 +322,7 @@ export async function ensureBashHookScript(dataDir: string): Promise<string> {
 }
 
 /** `--settings` JSON that runs the hook for Bash calls, bounded to `root`. */
-export function bashHookSettings(scriptPath: string, root: string, nodeBinary = process.execPath): string {
-  const command = [nodeBinary, scriptPath, root].map(shellQuote).join(" ");
+export function bashHookSettings(scriptPath: string, root: string, nodeBinary = process.execPath, runtimePrograms = false): string {
+  const command = [nodeBinary, scriptPath, root, ...(runtimePrograms ? ["runtime"] : [])].map(shellQuote).join(" ");
   return JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command, timeout: 10 }] }] } });
 }

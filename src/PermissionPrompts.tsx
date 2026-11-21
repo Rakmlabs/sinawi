@@ -6,7 +6,7 @@ import { openSettings } from "./settings/settings-nav";
 
 /** A shell command that starts one of the interpreters the workspace no longer pre-approves (H2). */
 export function isRuntimeCommand(detail: string): boolean {
-  return /^(?:Bash\()?\s*(?:node|npx|python3)\b/u.test(detail.trim());
+  return /^(?:Bash\()?\s*(?:node|npx|python3|npm|pnpm|yarn|find|ao-serve\s+start)\b/u.test(detail.trim());
 }
 
 export type PermissionRequest = { id: string; sessionId: string; workspaceId: string; agent: string; toolName: string; detail: string; createdAt: string };

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
 import { buildInvocation, normalizeCliLine, prepareCliInvocation } from "./cli.js";
 
 test("buildInvocation passes Codex model and reasoning effort with verified flags", () => {
@@ -17,9 +18,11 @@ test("buildInvocation passes Claude effort and omits unsupported Grok effort", (
 });
 
 test("buildInvocation grants non-read-only Claude and Grok runs only the common development commands", () => {
-  // node, npx and python3 run any code: pre-approved only where the workspace allows it (H2).
-  const commands = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof", "trash"];
-  const rules = commands.map((command) => `Bash(${command}:*)`);
+  // Programs that run code given to them are pre-approved only where the workspace allows it (H2);
+  // git and gh only by subcommand, so `git -c …`, aliases and gh extensions are not.
+  const rules = DEVELOPMENT_SHELL_PROGRAMS.map((command) => `Bash(${command}:*)`);
+  for (const rule of ["Bash(git status:*)", "Bash(git commit:*)", "Bash(gh pr:*)", "Bash(ao-serve list:*)", "Bash(curl:*)"]) assert.ok(rules.includes(rule), rule);
+  for (const rule of ["Bash(git:*)", "Bash(gh:*)", "Bash(npm:*)", "Bash(pnpm:*)", "Bash(yarn:*)", "Bash(find:*)", "Bash(ao-serve:*)", "Bash(ao-serve start:*)", "Bash(node:*)"]) assert.ok(!rules.includes(rule), rule);
 
   const claude = buildInvocation({ agent: "claude", prompt: "fix", cwd: "/tmp/project" });
   assert.equal(claude.args[claude.args.indexOf("--permission-mode") + 1], "acceptEdits");
@@ -31,10 +34,10 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
   assert.deepEqual(grok.args.filter((_value, index) => grok.args[index - 1] === "--allow"), rules);
   assert.equal(grok.args.includes("--always-approve"), false);
   assert.equal(grok.args.includes("bypassPermissions"), false);
-  assert.match(grok.args[grok.args.indexOf("--rules") + 1], /node, npx and python3 are not pre-approved here/u);
+  assert.match(grok.args[grok.args.indexOf("--rules") + 1], /node, npx, python3, npm, pnpm, yarn, find and ao-serve start are not pre-approved here/u);
 
   // The workspace's opt-in adds them, for both CLIs.
-  const runtime = [...rules, "Bash(node:*)", "Bash(npx:*)", "Bash(python3:*)"];
+  const runtime = [...rules, ...["node", "npx", "python3", "npm", "pnpm", "yarn", "find", "ao-serve start"].map((command) => `Bash(${command}:*)`)];
   const claudeOn = buildInvocation({ agent: "claude", prompt: "fix", cwd: "/tmp/project", runtimePrograms: true });
   assert.deepEqual(claudeOn.args.slice(claudeOn.args.indexOf("--allowedTools") + 1, claudeOn.args.indexOf("--allowedTools") + 1 + runtime.length), runtime);
   const grokOn = buildInvocation({ agent: "grok", prompt: "fix", cwd: "/tmp/project", runtimePrograms: true });
