@@ -417,7 +417,7 @@ export function withWorkspaceAccounts(runner: PlannerRunner, policyFor?: Workspa
   };
 }
 
-export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean; wsPingMs?: number } = {}) {
+export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean; wsPingMs?: number; wsBufferLimit?: number } = {}) {
   const app = express();
   app.disable("x-powered-by");
   const smallJson = express.json({ limit: "1mb" });
@@ -458,9 +458,16 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
    * once it drains (the ping tick below catches it up), instead of piling up in server memory.
    */
   const behind = new WeakSet<WebSocket>();
+  // Sessions whose skipped update was a full one (an event edited or removed): the last event id
+  // may not have moved, so the catch-up sends them whole.
+  const missedFull = new WeakMap<WebSocket, Set<string>>();
   const sendSession = (client: WebSocket, session: Session, full?: boolean) => {
     if (client.readyState !== WebSocket.OPEN) return;
-    if (client.bufferedAmount > WS_BUFFER_LIMIT) { behind.add(client); return; }
+    if (client.bufferedAmount > (options.wsBufferLimit ?? WS_BUFFER_LIMIT)) {
+      behind.add(client);
+      if (full) { const missed = missedFull.get(client) ?? new Set<string>(); missed.add(session.id); missedFull.set(client, missed); }
+      return;
+    }
     let delivered = deliveredEvents.get(client);
     if (!delivered) {
       delivered = new Map();
@@ -480,10 +487,13 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       if (!alive.has(client)) { client.terminate(); continue; }
       alive.delete(client);
       try { client.ping(); } catch { client.terminate(); continue; }
-      if (behind.has(client) && client.bufferedAmount <= WS_BUFFER_LIMIT) {
+      if (behind.has(client) && client.bufferedAmount <= (options.wsBufferLimit ?? WS_BUFFER_LIMIT)) {
         behind.delete(client);
+        const missed = missedFull.get(client);
+        missedFull.delete(client);
         for (const session of orchestra.list()) {
-          if (deliveredEvents.get(client)?.get(session.id) !== session.events.at(-1)?.id) sendSession(client, session);
+          if (missed?.has(session.id)) sendSession(client, session, true);
+          else if (deliveredEvents.get(client)?.get(session.id) !== session.events.at(-1)?.id) sendSession(client, session);
         }
       }
     }
