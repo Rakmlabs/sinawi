@@ -146,3 +146,23 @@ test("dev servers do not inherit CI, so Metro keeps watching files", () => {
   assert.equal(env.CI, undefined);
   assert.equal(env.PATH, "/usr/bin");
 });
+
+test("a dev server's log is cut to its newest part when it grows past the cap, and keeps growing after", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sinawi-serve-log-"));
+  const devServers = new DevServerManager({ logDir: join(dir, "logs"), env: () => process.env, settleMs: 300, logCap: 4096 });
+  t.after(async () => { devServers.stopAll("SIGKILL"); await rm(dir, { recursive: true, force: true }); });
+  const started = await devServers.start("session-log", { name: "noisy", command: `node -e "let i=0; setInterval(() => process.stdout.write('line ' + (i++) + ' ' + 'x'.repeat(100) + '\\n'), 2)"`, cwd: dir });
+  assert.equal(started.ok, true, JSON.stringify(started));
+  const { statSync, readFileSync } = await import("node:fs");
+  const file = devServers.list("session-log")[0].log;
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.ok(statSync(file).size > 4096);
+  devServers.trimLogs();
+  const trimmed = readFileSync(file, "utf8");
+  assert.ok(statSync(file).size < 4096, `trimmed to ${statSync(file).size}`);
+  assert.match(trimmed, /older log lines dropped/u);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const after = readFileSync(file, "utf8");
+  assert.ok(after.startsWith("[sinawi:"), "new lines are appended after the kept part, not written over it");
+  assert.ok(!after.includes("\u0000"), "no hole of zero bytes");
+});
