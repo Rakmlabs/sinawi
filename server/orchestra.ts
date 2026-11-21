@@ -2823,7 +2823,8 @@ export class Orchestra {
   }
 
   private drainIfIdle(session: Session): void {
-    if (session.status !== "running" && !this.goalAutoNext.has(session.id) && !this.stewardStarting.has(session.id)) this.drainStewardInbox(session);
+    // While the last turn still settles (merge, then stewardIdle), its stewardIdle takes the next message.
+    if (session.status !== "running" && !this.goalAutoNext.has(session.id) && !this.stewardStarting.has(session.id) && !this.settling.has(session.id)) this.drainStewardInbox(session);
   }
 
   private drainStewardInbox(session: Session): void {
@@ -2853,7 +2854,9 @@ export class Orchestra {
    * the next waiting message. A stop answers but takes nothing new; the user stopped it.
    */
   private stewardIdle(session: Session, outcome: "done" | "error" | "stopped"): void {
-    if (!session.steward || session.status === "running" || this.goalAutoNext.has(session.id)) return;
+    // A turn that is starting (status not yet "running") owns `answering` now: settling it here would
+    // answer the asker with the previous turn's text and turn the answer turn into an ordinary one.
+    if (!session.steward || session.status === "running" || this.starting.has(session.id) || this.goalAutoNext.has(session.id)) return;
     this.settleStewardAnswer(session, outcome);
     if (outcome !== "stopped") this.drainStewardInbox(session);
   }
