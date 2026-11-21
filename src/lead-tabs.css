@@ -11,7 +11,7 @@
 }
 .lead-tabs-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; max-width: 160px; min-width: 0; padding-right: 6px; color: var(--text); }
 .lead-tabs-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.lead-tabs-avatar { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--avatar-text); font-size: 12px; font-weight: 700; }
+.lead-tabs-avatar { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--avatar-text); font-size: calc(12px * var(--font-scale)); font-weight: 700; }
 .lead-tabs-list {
   display: flex;
   align-items: center;
@@ -20,7 +20,7 @@
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
 }
 .lead-tabs-list::-webkit-scrollbar { display: none; }
 .lead-tab {
@@ -69,7 +69,7 @@
 .lead-tabs-new:disabled { opacity: 0.5; cursor: default; }
 
 /* Who sent a message when it was not the user in the app (src/origin.ts). */
-.message-origin { display: inline-flex; align-items: center; gap: 5px; align-self: flex-end; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; background: var(--info-tint); color: var(--info-fg); font-size: calc(11.5px * var(--font-scale)); }
+.message-origin { display: inline-flex; align-items: center; gap: 5px; align-self: flex-end; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; background: var(--info-tint); color: var(--info-fg); font-size: calc(12px * var(--font-scale)); }
 .message-origin.lead { background: var(--accent-tint); color: var(--accent-fg); }
 .sidebar-origin { flex: none; color: var(--info-fg); }
 
