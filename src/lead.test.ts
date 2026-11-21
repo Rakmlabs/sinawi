@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Session, Steward } from "../server/types";
-import { leadGroups, leadMessage, leadName, leadPreview, schedulePrompt, scheduleWhen, stewardDescription, stewardIdOf } from "./lead";
+import { firstSentence, leadGroups, leadMessage, leadName, leadPreview, leadSummary, schedulePrompt, scheduleWhen, stewardDescription, stewardIdOf } from "./lead";
 import { mainConversation } from "./conversation";
 
 const lead = (events: Partial<Session["events"][number]>[], steward: Session["steward"] = { turns: 0, since: "" }) =>
@@ -65,4 +65,14 @@ test("a schedule's prompt is told apart in the lead's chat, and its time reads i
   ]);
   assert.deepEqual(mainConversation(chat).map((event) => event.id), ["u", "card", "skill", "fired"], "schedule and skill cards show; other status lines do not");
   assert.equal(leadPreview(chat), "매일 아침 확인해 줘", "the sidebar line skips the app's schedule prompt");
+});
+
+test("the lead row says which chat spoke last and its first sentence, not a raw answer's start", () => {
+  assert.equal(firstSentence("파일 목록은 실제 폴더와 일치합니다. 요약: .omc, README"), "파일 목록은 실제 폴더와 일치합니다.");
+  assert.equal(firstSentence("\n제목 줄\n둘째 줄"), "제목 줄");
+  const a = { ...lead([{ text: "검증했습니다. 세 항목이 같습니다." }]), title: "워커 위임" };
+  const b = { ...lead([]), title: "빈 채팅" };
+  assert.equal(leadSummary([b, a]), "「워커 위임」 검증했습니다.");
+  assert.equal(leadSummary([a]), "검증했습니다.", "one chat: the row below already names it");
+  assert.equal(leadSummary([b]), "");
 });

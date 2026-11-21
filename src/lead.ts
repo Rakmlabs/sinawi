@@ -48,6 +48,26 @@ export function leadPreview(session: Session): string {
   return plain(lastSaid(session));
 }
 
+/** The first sentence of a text (a whole first line when it has no sentence end). */
+export function firstSentence(text: string): string {
+  const line = text.trim().split("\n").find((part) => part.trim())?.trim() ?? "";
+  return /^.*?[.!?。](?=\s|$)/u.exec(line)?.[0] ?? line;
+}
+
+/**
+ * The lead row's line (third review U4): which chat spoke last and its first sentence, not the start
+ * of a raw answer. With one chat the title is left out (the row below already shows it).
+ */
+export function leadSummary(chats: Session[]): string {
+  for (const chat of chats) {
+    const said = leadPreview(chat);
+    if (!said) continue;
+    const sentence = firstSentence(said);
+    return chats.length > 1 ? `「${chat.title}」 ${sentence}` : sentence;
+  }
+  return "";
+}
+
 function lastSaid(session: Session): string {
   for (let index = session.events.length - 1; index >= 0; index--) {
     const event = session.events[index];

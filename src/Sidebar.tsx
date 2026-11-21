@@ -1,7 +1,7 @@
 import { terminalOwnsKeyboardEvent } from "./terminal-events";
 import { AgentMark } from "./AgentMark";
 import { goalProgress } from "./goal-progress";
-import { leadGroups, leadHue, leadName, leadPreview, stewardDescription, stewardIdOf, type LeadGroup } from "./lead";
+import { leadGroups, leadHue, leadName, leadSummary, stewardDescription, stewardIdOf, type LeadGroup } from "./lead";
 import { memo, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
@@ -307,7 +307,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
     const failed = !running && session.status === "error";
     // What the lead said last in any of its chats: a chat an outside AI just opened empty does not
     // blank the lead's line (review L1).
-    const preview = chats.map(leadPreview).find(Boolean)?.replace(/\s+/gu, " ").slice(0, 140) ?? "";
+    const preview = leadSummary(chats).replace(/\s+/gu, " ").slice(0, 140);
     const progress = goalProgress(session);
     const folded = closed.has(group.id) && !searching;
     const anyActive = chats.some((chat) => chat.id === selected) && tab === "workspace";
