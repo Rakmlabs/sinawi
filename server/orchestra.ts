@@ -953,6 +953,11 @@ export class Orchestra {
   private async prepareWorktree(session: Session, workerId: string, label: string): Promise<{ info?: NonNullable<Session["worktrees"]>[number]; error?: string }> {
     if (!this.worktreeDataDir) return {};
     const dataDir = this.worktreeDataDir;
+    // The lead's merge after the last turn finishes first: a new turn's worker must not reuse a
+    // worktree while it is being merged and removed (L8). Only the worktree waits, not the turn: the
+    // merge itself can start the next turn (an answer from another lead), which must not wait on it.
+    const settling = this.settlingDone.get(session.id);
+    if (settling) await settling;
     return this.withWorktreeLock(session.id, () => this.prepareWorktreeLocked(session, workerId, label, dataDir));
   }
 
@@ -1489,10 +1494,6 @@ export class Orchestra {
   }
 
   async followup(id: string, prompt: string, skills: string[] = [], settings: ConversationSettings = {}, alreadyLogged = false): Promise<Session> {
-    // The lead's merge after the last turn finishes first: a new turn's worker must not reuse a
-    // worktree while it is being merged and removed (L8).
-    const settling = this.settlingDone.get(id);
-    if (settling) await settling;
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     // A second message while the first is still starting (it awaits before the status flips) would
