@@ -14,6 +14,16 @@ import { notesPath, saveNotes, stewardDir, userPreferencesPath } from "./steward
 import type { Session } from "./types.js";
 import { appKey } from "./app-key.js";
 
+/** The saved file is written in the background: read it until it holds what was saved (10 s at most). */
+async function savedLeads(directory: string, done: (leads: Awaited<ReturnType<typeof loadStewards>>) => boolean) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const leads = await loadStewards(directory);
+    if (done(leads) || Date.now() > deadline) return leads;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 function request(app: Express, method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -110,8 +120,7 @@ test("a lead chat saved by an older version shows up as a lead entity with its n
   const panel = await request(app, "GET", "/api/sessions/lead-1/steward");
   assert.equal(panel.body.steward.id, "lead-1");
   assert.equal(panel.body.pendingMerge, null);
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal((await loadStewards(directory))[0]?.id, "lead-1", "the migration is saved");
+  assert.equal((await savedLeads(directory, (leads) => leads[0]?.id === "lead-1"))[0]?.id, "lead-1", "the migration is saved");
 });
 
 test("deleting a lead session removes its entity, schedules and notes directory", async (t) => {
@@ -464,8 +473,7 @@ test("leads saved before workspaces had leads go to their chats' workspace, else
   const side = (await request(app, "GET", "/api/stewards?workspace=side")).body;
   assert.deepEqual(side.map((item: any) => item.id), ["with-chat"]);
   assert.deepEqual((await request(app, "GET", "/api/stewards?workspace=default")).body.map((item: any) => item.id), ["no-chat"]);
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const saved = await loadStewards(directory);
+  const saved = await savedLeads(directory, (leads) => leads.length === 2 && leads.every((item) => item.workspaceId));
   assert.deepEqual(Object.fromEntries(saved.map((item) => [item.id, item.workspaceId])), { "with-chat": "side", "no-chat": "default" }, "the placement is saved");
 });
 
