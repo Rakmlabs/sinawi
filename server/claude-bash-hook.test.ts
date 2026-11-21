@@ -308,9 +308,35 @@ test("gh writes to GitHub ask either way; git stash -p asks", () => {
     assert.equal(decide(command), "ask", command);
     assert.equal(decide(command, true), "ask", `${command} (on)`);
   }
-  for (const command of ["gh pr view 7", "gh pr checks 7", "gh pr diff 7", "gh pr list", "gh pr status", "gh issue list", "gh issue view 3", "gh run list", "gh run view 1", "gh pr checkout 7"]) assert.notEqual(decide(command), "ask", command);
+  for (const command of ["gh pr view 7", "gh pr checks 7", "gh pr diff 7", "gh pr list", "gh pr status", "gh issue list", "gh issue view 3", "gh run list", "gh run view 1"]) assert.notEqual(decide(command), "ask", command);
   for (const command of ["git stash -p", "git stash push --patch", "git stash -up"]) assert.equal(decide(command), "ask", command);
   for (const command of ["git stash", "git stash list", "git stash push -u -m x"]) assert.notEqual(decide(command), "ask", command);
+});
+
+// PR #8 review P8-1: listing writes missed aliases, newer subcommands and `-R` first. gh now passes
+// only where it is sure to read, with `-R`/`--repo` anywhere giving the same answer.
+test("gh passes only as a read subcommand or a GET of gh api, wherever -R goes", () => {
+  for (const command of [
+    // The verifier's forms.
+    "gh pr new -t x -b y", "gh issue new -t x -b y", "gh pr revert 1", "gh pr update-branch 1", "gh pr -R o/r merge 1", "gh pr --repo o/r merge 1", "gh issue -R o/r comment 1 -b x",
+    "gh pr --repo=o/r merge 1", "gh pr -Ro/r merge 1", "gh pr -- merge 1", "gh pr --json x view 1", "gh pr checkout 7", "gh co 7", "gh -R o/r pr merge 1",
+    // Aliases, extensions, other commands.
+    "gh myalias", "gh my-extension run", "gh release create v1", "gh workflow run ci.yml", "gh secret set X", "gh repo create x", "gh repo delete o/r", "gh auth token", "gh pr", "gh",
+    // gh api: only a GET of one REST endpoint with read-only flags.
+    "gh api -X POST repos/o/r/issues", "gh api --method=PATCH repos/o/r", "gh api -XDELETE repos/o/r", "gh api repos/o/r/issues -f title=x", "gh api repos/o/r --input body.json",
+    "gh api graphql -f query=x", "gh api graphql", "gh api -H 'X-HTTP-Method-Override: DELETE' repos/o/r", "gh api repos/o/r extra", "gh api --unknown repos/o/r", "gh api",
+  ]) {
+    assert.equal(decide(command), "ask", command);
+    assert.equal(decide(command, true), "ask", `${command} (on)`);
+  }
+  for (const command of [
+    "gh pr view 7", "gh pr -R o/r view 7", "gh pr --repo o/r view 7", "gh pr view 7 -R o/r", "gh pr view 7 --repo=o/r", "gh pr checks 7 -R o/r", "gh issue -R o/r list", "gh run -R o/r view 1",
+    "gh repo view o/r", "gh search prs x", "gh auth status",
+    "gh api repos/o/r/pulls", "gh api -X GET repos/o/r", "gh api --method=GET repos/o/r --paginate --jq .name", "gh api -H 'Accept: application/vnd.github+json' repos/o/r", "gh api /repos/o/r -q .name",
+  ]) {
+    assert.notEqual(decide(command), "ask", command);
+    assert.notEqual(decide(command, true), "ask", `${command} (on)`);
+  }
 });
 
 // Tenth review R10-1: a hooks folder inside the project (husky) made every git command ask, `git status`

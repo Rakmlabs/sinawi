@@ -131,18 +131,46 @@ export function riskyWords(words: string[]): boolean {
   while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[index]!) || ["env", "command", "exec", "nohup", "time"].includes(words[index]!))) index += 1;
   const program = (words[index] ?? "").replace(/^.*\//u, "");
   const rest = words.slice(index + 1);
-  // Sixth review R6-4: what others on GitHub see (a PR merged or closed, a review, a comment, a new
-  // issue, a run cancelled) asks like a `gh api` write. Reading (list, view, diff, checks) and
-  // `gh pr checkout` (local) do not.
-  const ghWrites: Record<string, string[]> = { pr: ["create", "comment", "edit", "ready", "merge", "close", "reopen", "review", "lock", "unlock"], issue: ["create", "comment", "edit", "close", "reopen", "develop", "delete", "transfer", "pin", "unpin", "lock", "unlock"], run: ["rerun", "cancel", "delete"] };
-  if (program === "gh" && ghWrites[rest[0] ?? ""]?.includes(rest[1] ?? "")) return true;
-  if (program === "gh" && rest[0] === "api") {
-    for (let at = 1; at < rest.length; at++) {
-      const word = rest[at]!;
-      if (/^(?:-f|-F|--field|--raw-field|--input)(?:=|$)/u.test(word) || /^-[fF]./u.test(word)) return true;
-      const method = /^(?:-X|--method)(?:=(.*))?$/u.exec(word) ?? /^-X(.+)$/u.exec(word);
-      if (method) { const value = (method[1] ?? rest[at + 1] ?? "").toUpperCase(); if (value !== "GET") return true; }
-    }
+  // Sixth review R6-4, PR #8 review P8-1: gh passes only where it is sure to read. Naming GitHub's
+  // writes one by one missed aliases (`gh pr new`), newer subcommands (`revert`, `update-branch`) and
+  // `-R` before the subcommand. Read subcommands only, `-R`/`--repo` the only flag before them;
+  // `gh api` only as a GET of a REST endpoint with read-only flags. Aliases, extensions and every
+  // other gh command ask.
+  if (program === "gh") {
+    const reads: Record<string, string[]> = { pr: ["list", "view", "diff", "checks", "status"], issue: ["list", "view", "status"], run: ["list", "view", "watch", "download"], repo: ["view"], search: ["code", "commits", "issues", "prs", "repos"], auth: ["status"] };
+    const apiRead = (args: string[]): boolean => {
+      const valued = ["-X", "--method", "-H", "--header", "-q", "--jq", "-t", "--template", "--cache", "--hostname", "-p", "--preview"];
+      let endpoint = 0;
+      for (let at = 0; at < args.length; at++) {
+        const word = args[at]!;
+        if (!word.startsWith("-")) { endpoint++; if (endpoint > 1 || word.toLowerCase().replace(/^\//u, "") === "graphql") return false; continue; }
+        if (["--paginate", "--slurp", "-i", "--include", "--silent", "--verbose"].includes(word)) continue;
+        const long = /^(--[a-z-]+)=(.*)$/su.exec(word);
+        const short = /^(-[a-zA-Z])(.+)$/su.exec(word);
+        const name = long ? long[1]! : short && !word.startsWith("--") ? short[1]! : word;
+        if (!valued.includes(name)) return false;
+        const value = long ? long[2]! : short && !word.startsWith("--") ? short[2]! : args[++at];
+        if (value === undefined) return false;
+        if ((name === "-X" || name === "--method") && value.toUpperCase() !== "GET") return false;
+        // X-HTTP-Method-Override and the like would turn the GET into something else.
+        if ((name === "-H" || name === "--header") && /override|method/iu.test(value)) return false;
+      }
+      return endpoint === 1;
+    };
+    const ghRead = (args: string[]): boolean => {
+      if (args[0] === "api") return apiRead(args.slice(1));
+      const subcommands = reads[args[0] ?? ""];
+      if (!subcommands) return false;
+      let at = 1;
+      while ((args[at] ?? "").startsWith("-")) {
+        const word = args[at]!;
+        if (word === "-R" || word === "--repo") at += 2;
+        else if (word.startsWith("--repo=") || /^-R./u.test(word)) at += 1;
+        else return false;
+      }
+      return subcommands.includes(args[at] ?? "");
+    };
+    if (!ghRead(rest)) return true;
   }
   if (program === "git") {
     const push = rest.indexOf("push");
@@ -492,14 +520,21 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
   const words = staticCommandWords(command);
   if (words ? riskyWords(words) : riskyCommand(command)) return "ask";
   if (root && bashCommandAllowed(command, cwd, root, host)) return "allow";
+  // gh names API paths (`/repos/x`), not files: its files are `@FILE` values and download folders.
+  const ghFiles = (args: string[]) => args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : /^-D./u.test(arg) ? [arg.slice(2)] : []);
+  if (words?.[0] === "gh") {
+    // riskyWords passed, so this gh reads (P8-1). `-R`/`--repo` before the subcommand moves after it:
+    // every spelling of the same read gets the same answer, with the switch on or off.
+    const moved = [...words];
+    while (moved[2] === "-R" || moved[2] === "--repo" || moved[2]?.startsWith("--repo=") || /^-R./u.test(moved[2] ?? "")) moved.push(...moved.splice(2, moved[2] === "-R" || moved[2] === "--repo" ? 2 : 1));
+    return preapprovedPrefix(moved, prefixes) && optionsAllowed(moved) && argumentsStayInside(ghFiles(moved.slice(2)), cwd, root, host) ? "allow" : "ask";
+  }
   if (host.runtimePrograms) return undefined;
   if (!words) return "ask";
   const length = preapprovedPrefix(words, prefixes);
   if (!length || !optionsAllowed(words)) return "ask";
   const args = words.slice(length);
-  // gh names API paths (`/repos/x`), not files: its files are `@FILE` values and download folders.
-  const ghFiles = () => args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : /^-D./u.test(arg) ? [arg.slice(2)] : []);
-  if (!argumentsStayInside(words[0] === "gh" ? ghFiles() : args, cwd, root, host)) return "ask";
+  if (!argumentsStayInside(args, cwd, root, host)) return "ask";
   // R6-1: writes into a git directory, and git in a folder that only looks like a repository.
   const readers = ["git", "cat", "head", "tail", "ls", "rg", "wc", "jq", "file", "stat", "du", "lsof", "echo", "pwd", "ffprobe"];
   if (!readers.includes(words[0]!) && args.some((arg) => [arg, arg.slice(arg.indexOf("=") + 1), arg.replace(/^@/u, "")].some((value) => inGitDir(value, cwd, root, host)))) return "ask";

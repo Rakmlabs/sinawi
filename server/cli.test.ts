@@ -21,8 +21,8 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
   // Programs that run code given to them are pre-approved only where the workspace allows it (H2);
   // git and gh only by subcommand, so `git -c …`, aliases and gh extensions are not.
   const rules = DEVELOPMENT_SHELL_PROGRAMS.map((command) => `Bash(${command}:*)`);
-  for (const rule of ["Bash(git status:*)", "Bash(git commit:*)", "Bash(gh pr:*)", "Bash(ao-serve list:*)", "Bash(curl:*)"]) assert.ok(rules.includes(rule), rule);
-  for (const rule of ["Bash(git:*)", "Bash(gh:*)", "Bash(npm:*)", "Bash(pnpm:*)", "Bash(yarn:*)", "Bash(find:*)", "Bash(ao-serve:*)", "Bash(ao-serve start:*)", "Bash(node:*)"]) assert.ok(!rules.includes(rule), rule);
+  for (const rule of ["Bash(git status:*)", "Bash(git commit:*)", "Bash(gh pr view:*)", "Bash(ao-serve list:*)", "Bash(curl:*)"]) assert.ok(rules.includes(rule), rule);
+  for (const rule of ["Bash(git:*)", "Bash(gh:*)", "Bash(gh pr:*)", "Bash(gh issue:*)", "Bash(gh run:*)", "Bash(npm:*)", "Bash(pnpm:*)", "Bash(yarn:*)", "Bash(find:*)", "Bash(ao-serve:*)", "Bash(ao-serve start:*)", "Bash(node:*)"]) assert.ok(!rules.includes(rule), rule);
 
   const claude = buildInvocation({ agent: "claude", prompt: "fix", cwd: "/tmp/project" });
   assert.equal(claude.args[claude.args.indexOf("--permission-mode") + 1], "acceptEdits");
@@ -62,11 +62,13 @@ test("buildInvocation grants non-read-only Claude and Grok runs only the common 
     assert.ok(denied(grokOn.args).some((rule) => matches(rule, command)), `${command} (on)`);
   }
   // Sixth review R6-4: what others see on GitHub is denied to Grok either way; reading is not.
-  for (const command of ["gh pr merge 7 --squash", "gh pr close 7", "gh pr review 7 --approve", "gh pr comment 7 -b hi", "gh pr create -t x -b y", "gh issue create -t x", "gh issue comment 3 -b hi", "gh run rerun 1", "gh run cancel 1"]) {
+  for (const command of ["gh pr merge 7 --squash", "gh pr close 7", "gh pr review 7 --approve", "gh pr comment 7 -b hi", "gh pr create -t x -b y", "gh issue create -t x", "gh issue comment 3 -b hi", "gh run rerun 1", "gh run cancel 1",
+    // PR #8 review P8-1: aliases, newer subcommands, a flag before the subcommand.
+    "gh pr new -t x", "gh issue new -t x", "gh pr revert 1", "gh pr update-branch 1", "gh pr -R o/r merge 1", "gh pr --repo o/r merge 1", "gh issue -R o/r comment 1 -b x", "gh co 7", "gh release create v1", "gh api graphql -f query=x", "gh api -H X-HTTP-Method-Override:DELETE repos/o/r"]) {
     assert.ok(denied(grok.args).some((rule) => matches(rule, command)), command);
     assert.ok(denied(grokOn.args).some((rule) => matches(rule, command)), `${command} (on)`);
   }
-  for (const command of ["gh pr view 7", "gh pr checks 7", "gh pr list", "gh issue list", "gh run view 1", "gh pr checkout 7"]) assert.ok(!denied(grok.args).some((rule) => matches(rule, command)), command);
+  for (const command of ["gh pr view 7", "gh pr checks 7", "gh pr list", "gh issue list", "gh run view 1", "gh pr view 7 -R o/r", "gh api repos/o/r/pulls"]) assert.ok(!denied(grok.args).some((rule) => matches(rule, command)), command);
   // Fourth review R4-2: text the shell only resolves when it runs ("no""de", n''ode, $(which node), chains)
   // is denied while the switch is off; real Grok 1.0.92 refused each of these forms by these rules.
   for (const rule of ["Bash(*$*)", "Bash(*`*)", "Bash(*;*)", "Bash(*|*)", "Bash(*>*)", 'Bash(*""*)', "Bash(*''*)", "Bash(*\\*)", 'Bash("*)']) {
