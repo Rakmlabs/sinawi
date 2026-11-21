@@ -50,14 +50,14 @@ test("a step that writes before another step makes the whole chain ask", () => {
     // The verifier's repro (with this test's paths).
     "printf 'ref: refs/heads/main\\n' > r8/HEAD && printf '../r8c\\n' > r8/commondir && cd r8 && git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD",
     "cd src; cat a.txt > b.txt && echo ok", "git add -A && git commit -m x", "mkdir -p out && touch out/f.txt", "echo hi > new.txt; true", "sort -o s.txt a.txt && cat s.txt",
-    "touch x || git status", "(echo x > y) && ls", "echo x > y | cat", "cat a.txt | sort -o out.txt", "ls | head -3 && echo x > notes.txt", "ls & echo x > y", "git checkout -b x && git status",
+    "touch x || git status", "(echo x > y) && ls", "echo x > y | cat", "cat a.txt | sort -o out.txt", "ls | head -3 && echo x > notes.txt", "ls & echo x > y", "git checkout -b x && git status", "git branch x && git status", "git branch -d x; ls",
   ]) {
     assert.notEqual(decide(command), "allow", command);
     assert.equal(decide(command), "ask", command);
   }
   // `cd` only into a folder that exists when the chain is judged.
   assert.equal(allowed("cd not-yet && ls"), false);
-  for (const command of ["cd src && cat a.txt > b.txt", "git status && git diff && git commit -m x", "ls && echo x > notes.txt", "true; echo hi > new.txt", "cd src && mkdir -p out"]) assert.equal(allowed(command), true, command);
+  for (const command of ["cd src && cat a.txt > b.txt", "git status && git diff && git commit -m x", "pwd && git status --short && git branch --show-current && ls -la && cat a.txt", "git branch -vv && git log --oneline -3", "ls && echo x > notes.txt", "true; echo hi > new.txt", "cd src && mkdir -p out"]) assert.equal(allowed(command), true, command);
 });
 
 test("the same trick over separate calls: each call is judged when it runs", () => {

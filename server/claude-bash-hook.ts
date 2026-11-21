@@ -496,7 +496,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
   const pathPrograms = new Set(["ls", "cat", "head", "tail", "wc", "grep", "rg", "mkdir", "touch", "test", "sort"]);
   // Programs that never touch files themselves (only through redirections, checked separately).
   const plainPrograms = new Set(["echo", "printf", "true", "false", "pwd"]);
-  const gitSubcommands = new Set(["status", "diff", "log", "show", "add", "commit", "rev-parse", "ls-files", "blame"]);
+  const gitSubcommands = new Set(["status", "diff", "log", "show", "add", "commit", "rev-parse", "ls-files", "blame", "branch"]);
   const packageManagers = new Set(["npm", "pnpm", "yarn"]);
   const packageDenied = /^(?:--prefix|-C$|--dir|--cwd|-g$|--global|--location|--script-shell|--userconfig|--globalconfig|--workspace-root|-w$|--node-options)/u;
   const resolveReal = (absolute: string): string | undefined => {
@@ -631,6 +631,11 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
     if (program === "git") {
       // Only these leave the worktree as it was; add/commit write the index and objects.
       if (!["status", "diff", "log", "show", "rev-parse", "ls-files", "blame"].includes(args[0] ?? "")) writes = true;
+      // `git branch` that only lists (`--show-current`, `-a`, `-vv`) reads; with a name it creates or changes one.
+      if (args[0] === "branch") {
+        if (!args.slice(1).every((arg) => ["--show-current", "--list", "-l", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--no-color"].includes(arg))) return false;
+        writes = false;
+      }
     }
     if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, rootReal, host));
     if (program === "find") return findAllowed(args, dirs);
