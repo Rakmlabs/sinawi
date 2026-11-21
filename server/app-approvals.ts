@@ -127,6 +127,6 @@ export class ApprovalStore {
 
 /** Who asked, as the user knows them: "담당 '백엔드'", "담당" or "외부 AI" (the particle is the caller's). */
 export function approvalRequester(item: Pick<AppApproval, "source" | "requester">): string {
-  if (item.source !== "lead") return "외부 AI";
+  if (item.source !== "lead") return item.requester?.trim() ? `외부 AI '${item.requester.trim()}'` : "외부 AI";
   return item.requester?.trim() ? `담당 '${item.requester.trim()}'` : "담당";
 }

@@ -2,14 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import { APP_ERROR_EVENT } from "./link-open";
 import { t } from "./i18n";
+import { originLabel } from "./origin";
 import type { AppApproval } from "../server/app-approvals";
 
 /** The server's `app-approvals` WebSocket message (pending ones), re-sent as a window event. */
 export const APP_APPROVALS_EVENT = "orchestra:app-approvals";
 
-/** Who asked, by name: "담당 '백엔드'" before a bare "담당"; an outside AI has no name. */
+/** Who asked, by name: "담당 '백엔드'" before a bare "담당"; an outside AI by its MCP client (Claude Code, Grok Bot ...). */
 export function approvalSource(item: Pick<AppApproval, "source" | "requester">): string {
-  if (item.source !== "lead") return t("approval.external");
+  if (item.source !== "lead") return item.requester?.trim() ? t("approval.externalNamed", { name: originLabel({ kind: "mcp", client: item.requester.trim() }) }) : t("approval.external");
   return item.requester?.trim() ? t("approval.leadNamed", { name: item.requester.trim() }) : t("approval.lead");
 }
 

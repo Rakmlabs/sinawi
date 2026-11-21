@@ -113,6 +113,17 @@ test("a lead's new chat without agent or model keeps the lead's own CLI and mode
   assert.equal(waited.done, true, "an empty chat has nothing running");
 });
 
+test("an approval an outside AI asks for names that AI on the card", async (t) => {
+  const { call, mcp, project } = await harness(t);
+  const opened = await mcp("create_session", { cwd: project, title: "지울 채팅" });
+  const asked = await mcp("delete_session", { session_id: opened.id }, "Grok Bot");
+  assert.equal(asked.status, "pending_approval", JSON.stringify(asked));
+  const listed = (await call("GET", "/api/app-approvals")).body as Array<{ id: string; requester?: string; source: string }>;
+  const item = (Array.isArray(listed) ? listed : (listed as { approvals: typeof listed }).approvals).find((entry) => entry.id === asked.approvalId)!;
+  assert.equal(item.source, "external");
+  assert.equal(item.requester, "Grok Bot");
+});
+
 test("wait_for_session on a missing chat is an error, not a hang", async (t) => {
   const { mcp } = await harness(t);
   await assert.rejects(mcp("wait_for_session", { session_id: "nope", timeout_sec: 5 }), /찾을 수 없/u);

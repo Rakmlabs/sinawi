@@ -1448,7 +1448,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const session = caller.sessionId ? orchestra.get(caller.sessionId) : undefined;
     const workspaceName = workspaceState.workspaces.find((item) => item.id === caller.workspaceId)?.name;
     return {
-      ...(session?.steward ? { requester: stewardName(session) } : {}),
+      // A lead by its name; an outside AI by its MCP client's name (Claude Code, Codex, Grok ...).
+      ...(session?.steward ? { requester: stewardName(session) } : caller.surface === "external" && caller.origin?.client && caller.origin.client !== "MCP" ? { requester: caller.origin.client } : {}),
       ...(session?.title ? { sessionTitle: session.title } : {}),
       ...(workspaceName ? { workspaceName } : {}),
     };

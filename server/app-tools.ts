@@ -386,7 +386,7 @@ const APP: AppTool[] = [
     description: "채팅을 다른 워크스페이스(공간)로 옮긴다. 옮긴 채팅은 그 공간의 정책(전체 권한, 컴퓨터 조작 등)을 따르게 되므로 사용자 승인 후 옮긴다. 공간 ID는 list_workspaces.",
     properties: { session_id: str("채팅 ID."), workspace_id: str("옮길 워크스페이스 ID.") }, required: ["session_id", "workspace_id"],
     path: (args) => `/api/sessions/${seg(args, "session_id")}/workspace`, body: (args) => ({ workspaceId: args.workspace_id }), pick: (output) => sessionRow(output as Row),
-    summary: (args, names) => `채팅 ${names.session(args.session_id)} → 워크스페이스 ${names.workspace(args.workspace_id)}로 옮김`,
+    summary: (args, names) => `채팅 ${names.session(args.session_id)} → 작업 공간 ${names.workspace(args.workspace_id)}로 옮김`,
   }),
   routeTool({
     name: "stop_session", risk: "approval", method: "POST", route: "/api/sessions/:id/stop",
@@ -611,14 +611,14 @@ const APP: AppTool[] = [
       if (args.defaults === undefined && args.policy === undefined) throw new Error("defaults나 policy 중 하나는 있어야 합니다.");
       return defined({ workspaceId: args.workspace_id, defaults: args.defaults, settings: args.policy });
     },
-    summary: (args, names) => `워크스페이스 ${names.workspace(args.workspace_id)} ${[args.defaults !== undefined ? "기본값" : "", args.policy !== undefined ? "정책" : ""].filter(Boolean).join("·")} 변경`,
+    summary: (args, names) => `작업 공간 ${names.workspace(args.workspace_id)} ${[args.defaults !== undefined ? "기본값" : "", args.policy !== undefined ? "정책" : ""].filter(Boolean).join("·")} 변경`,
   }),
   routeTool({
     name: "delete_workspace", risk: "approval", method: "DELETE", route: "/api/workspaces/:id",
     description: "워크스페이스를 지운다. 그 안의 채팅, 그룹, 담당은 move_to(비우면 남은 첫 공간)로 옮겨진다. 실행 중인 채팅이 있으면 안 된다. 사용자 승인 후 지워진다.",
     properties: { workspace_id: str("지울 워크스페이스 ID."), move_to: str("내용을 옮길 워크스페이스 ID.") }, required: ["workspace_id"],
     path: (args) => `/api/workspaces/${seg(args, "workspace_id")}${query({ moveTo: args.move_to })}`,
-    summary: (args, names) => `워크스페이스 ${names.workspace(args.workspace_id)} 삭제${args.move_to ? ` (내용 → ${names.workspace(args.move_to)})` : ""}`,
+    summary: (args, names) => `작업 공간 ${names.workspace(args.workspace_id)} 삭제${args.move_to ? ` (내용 → ${names.workspace(args.move_to)})` : ""}`,
   }),
 
   // ----- 프로젝트 그룹 -----
