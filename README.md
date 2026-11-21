@@ -43,7 +43,7 @@ The name comes from *sinawi* (시나위), Korean improvised ensemble music where
 <td width="50%" valign="top">
 
 ### 🔌 Your AI hands work to Sinawi; you watch
-An outside AI calls `list_leads`, then `create_session`: a new chat opens as a tab of that lead, with the agent and model it picked. `wait_for_session` waits until the turn is done and returns the new messages, `send_message` continues, `show_session` brings the chat up in the app. Its messages carry a badge like *sent by Grok Bot via MCP* and the tab shows a plug icon. You can type in the same chat.
+An outside AI calls `list_leads`, then `create_session`: a new chat opens as a tab of that lead, with the agent and model it picked. `wait_for_session` waits until the turn is done and returns the new messages, `send_message` continues, `show_session` brings the chat up in the app. Its messages carry a badge like *sent by Grok Build via MCP* and the tab shows a plug icon. You can type in the same chat.
 
 </td>
 <td width="50%" valign="top">
@@ -151,7 +151,7 @@ Any MCP client can hand work to Sinawi through a small stdio bridge that ships i
 1. `list_leads` finds the lead (담당) for the project.
 2. `create_session(lead_id, prompt, title, agent, model)` opens a new chat (tab) of that lead with the agent and model the AI picked (empty = the lead's own) and starts the work.
 3. `wait_for_session(session_id, after_event_id)` waits until it is done and returns the new messages and the last answer.
-4. `send_message` continues the same chat; `show_session` brings it up in the app.
+4. `send_message` continues the same chat; `show_session` asks the user to look at it (without taking the screen they are on).
 
 You see each of these chats live in Sinawi, with a badge on the messages the outside AI sent, and you can type in them too.
 
@@ -184,6 +184,8 @@ Claude Desktop, Cursor and other clients:
 Use the full path from `which node` if the client cannot find `node`. On the same Mac the bridge reads the token from its file (`~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`) by itself, so no secret goes into the config. Set `SINAWI_MCP_TOKEN` only for a client on another setup. From a checkout, `npm run sinawi-mcp` runs the same bridge.
 
 Tested: Claude Code and Grok Build actually connected (Grok found 81 tools); for Codex only the config was registered, the handshake was not checked.
+
+**Cloud agents (Grok Bot, Codex dots) cannot connect today.** Both run on their own cloud computers, and Sinawi accepts connections from this Mac only. Grok Bot is a different product from Grok Build, the CLI on your Mac. What is and is not confirmed: [docs/mcp-clients.md](docs/mcp-clients.md) §6-1 and the tabs of the same names in Settings.
 
 > [!NOTE]
 > After the npm package is published: `npx -y @rakmlabs/sinawi mcp` will work in place of `node …/sinawi-mcp.mjs`.
@@ -291,6 +293,10 @@ SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev
 ```
 
 Both servers bind to `127.0.0.1` only. `SINAWI_PORT` and `SINAWI_DATA_DIR` change the API port and data folder; `SINAWI_UI_PORT` accepts only 5188 and 5198.
+
+A port other than 3001 runs **isolated**: it does not watch the browser, computer and serve queues in `/tmp` that the installed app uses, and does not rewrite `~/.local/bin/ao-*` or the CLIs' skill folders (`SINAWI_ISOLATED=1` turns this on at 3001 too, `=0` turns it off).
+
+**App window key.** What only the user may do (changing settings, approvals, merges, `/ws`, the terminal) needs more than an Origin header: a key the server makes fresh on every start. The installed app's window asks the server for it directly (the server checks the connecting process is the app's executable); `npm run dev` has `scripts/dev.mjs` make the key and put it in a `<meta>` of the dev page. **Dev-mode weakness:** that key can be read from the dev page and the process environment (`ps -E`), so do not run untrusted pages or programs on the same Mac while a dev server is up.
 
 | Path | What it holds |
 |---|---|

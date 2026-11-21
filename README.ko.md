@@ -43,7 +43,7 @@ Mac 앱이자 MCP 서버입니다. Claude Code, Codex, Grok Build, Claude Deskto
 <td width="50%" valign="top">
 
 ### 🔌 내 AI가 시나위에 일을 맡기고, 나는 봅니다
-바깥 AI가 `list_leads`로 담당을 찾고 `create_session`을 부르면, 그 담당의 새 채팅이 탭으로 열리고 AI가 고른 에이전트·모델로 일을 시작합니다. `wait_for_session`은 끝날 때까지 기다렸다가 새 메시지를 돌려주고, `send_message`로 이어 시키고, `show_session`으로 앱에 그 채팅을 띄웁니다. 바깥 AI가 보낸 메시지에는 *Grok Bot이 MCP로 보냄* 같은 배지가, 탭에는 플러그 아이콘이 붙습니다. 같은 채팅에 내가 직접 말해도 됩니다.
+바깥 AI가 `list_leads`로 담당을 찾고 `create_session`을 부르면, 그 담당의 새 채팅이 탭으로 열리고 AI가 고른 에이전트·모델로 일을 시작합니다. `wait_for_session`은 끝날 때까지 기다렸다가 새 메시지를 돌려주고, `send_message`로 이어 시키고, `show_session`으로 앱에 그 채팅을 띄웁니다. 바깥 AI가 보낸 메시지에는 *Grok Build가 MCP로 보냄* 같은 배지가, 탭에는 플러그 아이콘이 붙습니다. 같은 채팅에 내가 직접 말해도 됩니다.
 
 </td>
 <td width="50%" valign="top">
@@ -151,7 +151,7 @@ flowchart LR
 1. `list_leads`로 그 프로젝트의 담당을 찾습니다.
 2. `create_session(lead_id, prompt, title, agent, model)`이 그 담당의 새 채팅(탭)을 열고, AI가 고른 에이전트·모델로 일을 시작합니다(비우면 담당 자신의 것).
 3. `wait_for_session(session_id, after_event_id)`이 끝날 때까지 기다렸다가 새 메시지와 마지막 답을 돌려줍니다.
-4. `send_message`로 같은 채팅에 이어 시키고, `show_session`으로 앱에 그 채팅을 띄웁니다.
+4. `send_message`로 같은 채팅에 이어 시키고, `show_session`으로 그 채팅을 봐 달라고 알립니다(보고 있던 화면은 빼앗지 않습니다).
 
 이 채팅들은 시나위에서 실시간으로 보이고, 바깥 AI가 보낸 메시지에는 배지가 붙습니다. 같은 채팅에 직접 말해도 됩니다.
 
@@ -184,6 +184,8 @@ Claude Desktop, Cursor와 그 밖의 클라이언트:
 클라이언트가 `node`를 못 찾으면 `which node`의 전체 경로를 쓰세요. 같은 Mac에서는 브리지가 토큰 파일(`~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`)을 알아서 읽으므로 구성에 비밀값이 들어가지 않습니다. `SINAWI_MCP_TOKEN`은 다른 환경의 클라이언트에만 씁니다. 저장소에서는 `npm run sinawi-mcp`가 같은 브리지를 실행합니다.
 
 확인한 것: Claude Code와 Grok Build는 실제로 연결됐습니다(Grok은 도구 81개를 찾음). Codex는 구성 등록까지만 확인했고 핸드셰이크는 확인하지 않았습니다.
+
+**클라우드 에이전트(Grok Bot, Codex dots)는 지금 붙지 않습니다.** 둘 다 자기 클라우드 컴퓨터에서 돌고, 시나위는 이 Mac 안에서 오는 연결만 받습니다. Grok Bot은 이 Mac의 CLI인 Grok Build와 다른 제품입니다. 확인한 것과 못 한 것은 [docs/mcp-clients.md](docs/mcp-clients.md) 6-1절과 설정의 같은 이름 탭에 있습니다.
 
 > [!NOTE]
 > npm 패키지가 게시된 뒤에는: `node …/sinawi-mcp.mjs` 대신 `npx -y @rakmlabs/sinawi mcp`를 쓸 수 있습니다.
@@ -291,6 +293,10 @@ SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev
 ```
 
 두 서버 모두 `127.0.0.1`에만 열립니다. `SINAWI_PORT`, `SINAWI_DATA_DIR`로 API 포트와 데이터 폴더를 바꿀 수 있고, `SINAWI_UI_PORT`는 5188과 5198만 됩니다.
+
+3001이 아닌 포트로 띄우면 **독립 실행**입니다. 설치된 앱과 같이 쓰는 `/tmp`의 브라우저·컴퓨터·serve 큐를 보지 않고, `~/.local/bin/ao-*`와 CLI 스킬 폴더를 고쳐 쓰지 않습니다(`SINAWI_ISOLATED=1`로 3001에서도 켜고, `=0`으로 끕니다).
+
+**앱 창 키.** 사용자만 해야 하는 일(설정 변경, 승인, 병합, `/ws`, 터미널)은 Origin 머리말만으로는 허락되지 않고, 서버가 실행마다 새로 만드는 키가 있어야 합니다. 설치된 앱은 창이 서버에 직접 물어 받고(서버가 접속한 프로세스가 앱 실행 파일인지 확인), `npm run dev`는 `scripts/dev.mjs`가 키를 만들어 개발 페이지의 `<meta>`에 넣습니다. **개발 모드의 약점:** 그 키는 개발 페이지와 프로세스 환경(`ps -E`)에서 읽을 수 있으니, 개발 서버를 띄운 채 믿지 못할 페이지나 프로그램을 같은 Mac에서 돌리지 마세요.
 
 | 경로 | 내용 |
 |---|---|

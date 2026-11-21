@@ -142,4 +142,4 @@
 - Grok Build: https://x.ai/cli , https://x.ai/news/grok-build-cli
 - opencode MCP: https://opencode.ai/docs/mcp-servers
 
-확인 못 한 것: Conductor 데스크톱 앱이 MCP로 만든 클라우드 세션을 보여 주는지, Vibe Kanban MCP로 시작한 세션이 UI에서 보이는지(추정만), Nimbalyst·opencode의 외부 제어 MCP 유무, Grok Build 서브에이전트 대시보드의 공식 여부. 소유자가 말한 "그록봇"이 Grok Build CLI를 말하는지 별도 봇인지도 확인하지 못했다(이 문서는 Grok Build 기준).
+확인 못 한 것: Conductor 데스크톱 앱이 MCP로 만든 클라우드 세션을 보여 주는지, Vibe Kanban MCP로 시작한 세션이 UI에서 보이는지(추정만), Nimbalyst·opencode의 외부 제어 MCP 유무, Grok Build 서브에이전트 대시보드의 공식 여부. 소유자가 말한 "그록봇"은 xAI의 클라우드 에이전트 **Grok Bot**(https://x.ai/bot)이고 Grok Build CLI와는 다르다. 이 문서의 Grok 비교는 Grok Build 기준이다. Grok Bot은 클라우드에서 돌아 지금 시나위(이 Mac 안에서만 연결을 받음)에 붙을 수 없다(docs/mcp-clients.md 6-1절).

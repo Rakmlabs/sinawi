@@ -9,7 +9,16 @@ import { CopyButton } from "../CopyButton";
 import { WebLink } from "../WebLink";
 import { ConfirmDialog, SettingRow, SettingsPage, SettingsSection } from "./controls";
 
-type ClientSetup = { id: "claude-code" | "codex" | "grok" | "claude-desktop" | "cursor" | "other"; name: string; command?: string; config?: string; configFile?: string; check?: string };
+type ClientSetup = { id: "claude-code" | "codex" | "grok" | "claude-desktop" | "cursor" | "other" | "grok-bot" | "codex-dots"; name: string; command?: string; config?: string; configFile?: string; check?: string; cloud?: true };
+
+/**
+ * Cloud agents people mean by "connect my AI": what their makers' pages say, and why they cannot reach
+ * this Mac's Sinawi (it listens on 127.0.0.1 only). No command: there is none that works today.
+ */
+const CLOUD_AGENTS: ClientSetup[] = [
+  { id: "grok-bot", name: "Grok Bot", cloud: true },
+  { id: "codex-dots", name: "Codex dots", cloud: true },
+];
 type McpConnection = { token: string; tokenFile: string; script: string | null; clients?: ClientSetup[]; scriptConfig?: unknown };
 type OneClick = "claude" | "cursor";
 type McpClientPlan = { client: OneClick; name: string; path: string; exists: boolean; replaces: boolean; upToDate: boolean; merge: string };
@@ -64,7 +73,8 @@ function CodeBlock({ label, text }: { label: string; text: string }) {
   </div>;
 }
 
-function ClientTabs({ clients, fail }: { clients: ClientSetup[]; fail: (reason: unknown) => void }) {
+function ClientTabs({ clients: local, fail }: { clients: ClientSetup[]; fail: (reason: unknown) => void }) {
+  const clients = [...local, ...CLOUD_AGENTS];
   const [active, setActive] = useState<ClientSetup["id"]>(clients[0]?.id ?? "claude-code");
   const list = useRef<HTMLDivElement>(null);
   const client = clients.find((item) => item.id === active) ?? clients[0];
@@ -87,6 +97,12 @@ function ClientTabs({ clients, fail }: { clients: ClientSetup[]; fail: (reason: 
       </button>)}
     </div>
     <div id="connect-panel" role="tabpanel" aria-labelledby={`connect-tab-${client.id}`} className="connect-panel">
+      {client.cloud && (client.id === "grok-bot" || client.id === "codex-dots") && <div className="connect-cloud">
+        <p>{t(`set.connect.cloud.${client.id as "grok-bot" | "codex-dots"}.what`)}</p>
+        <p><strong>{t("set.connect.cloud.reach")}</strong> {t(`set.connect.cloud.${client.id as "grok-bot" | "codex-dots"}.reach`)}</p>
+        <p className="connect-hint">{t("set.connect.cloud.unconfirmed")} {t(`set.connect.cloud.${client.id as "grok-bot" | "codex-dots"}.unconfirmed`)}</p>
+        <WebLink className="settings-link" href={client.id === "grok-bot" ? "https://x.ai/bot" : "https://learn.chatgpt.com/codex/dots"}>{t("set.connect.cloud.source")} <ExternalLink size={11} aria-hidden="true" /></WebLink>
+      </div>}
       {oneClick && <OneClickConnect client={oneClick} fail={fail} />}
       {client.command && <>
         <p>{t("set.connect.runInTerminal", { name: client.name })}</p>
@@ -99,7 +115,7 @@ function ClientTabs({ clients, fail }: { clients: ClientSetup[]; fail: (reason: 
         <CodeBlock label={client.configFile ?? "mcpServers"} text={client.config} />
       </>}
       {client.check && <p className="connect-hint">{t("set.connect.check")} <code className="settings-code">{client.check}</code></p>}
-      <p className="connect-hint">{t(client.command ? "set.connect.restartCli" : "set.connect.restartApp", { name: client.name })}</p>
+      {!client.cloud && <p className="connect-hint">{t(client.command ? "set.connect.restartCli" : "set.connect.restartApp", { name: client.name })}</p>}
     </div>
   </div>;
 }

@@ -104,7 +104,7 @@ bearer_token_env_var = "SINAWI_MCP_TOKEN"
 
 공식 문서: https://docs.x.ai/build/features/mcp-servers , https://docs.x.ai/build/settings — `~/.grok/config.toml`의 `[mcp_servers.<이름>]`, 프로젝트 `.grok/config.toml`. 명령: `grok mcp add|list|remove|enable|disable|doctor`. 📄 (`grok mcp add --help`, grok 1.0.92로 플래그 확인)
 
-> 소유자가 말한 "그록봇"이 Grok Build CLI 위에서 도는 것이라고 보고 썼다. 별도 봇(예: X/Grok 앱의 봇)이라면 그 봇이 MCP 클라이언트를 지원하는지부터 확인해야 한다 ⚠️.
+> Grok Build는 이 Mac의 터미널에서 도는 xAI의 CLI다. 클라우드에서 도는 **Grok Bot**(x.ai/bot)과는 다른 제품이고, Grok Bot은 아래 6-1절에 따로 적었다.
 >
 > 주의: 시나위 **안의** Grok 담당은 MCP 도구가 없다(README). 이것과 별개로, Grok Build를 **바깥 오케스트레이터**로 두고 시나위에 붙이는 것은 아래처럼 된다.
 
@@ -242,6 +242,25 @@ V2 형식은 문서 일부만 확인해 정확한 예시를 쓰지 않았다 ⚠
 
 ---
 
+## 6-1. 클라우드 에이전트: Grok Bot, Codex dots
+
+둘 다 **자기 클라우드 컴퓨터에서 도는** 에이전트다. 시나위는 이 Mac 안에서 오는 연결만 받는다(Host가 `127.0.0.1`/`localhost`가 아니면 거부, `server/server.ts` `localGuard`). 그래서 지금은 둘 다 시나위에 **직접 붙을 수 없다**. 터널(ngrok 등)로 열어도 Host 검사에서 막힌다. 붙이려면 시나위에 원격 접속 기능(바깥 주소, 그 주소용 인증, 접근 범위 제한)이 있어야 하는데 아직 없다.
+
+### Grok Bot (xAI) — https://x.ai/bot
+
+- 확인한 것 📄: 클라우드 컴퓨터에서 24시간 돈다. 데스크톱·iOS 앱이 있다(x.ai/bot FAQ). "Grok Bot supports the same MCP servers, plugins, and skills as Cursor"(x.ai/bot/guides/grok-bot-101). 데스크톱 앱 내려받기 링크가 cursor.com으로 간다.
+- 확인하지 못한 것 ⚠️: MCP 서버를 원격 HTTP로 붙이는지 로컬 stdio로 붙이는지, 어떤 인증(헤더·OAuth)을 쓰는지, 데스크톱 앱을 통해 사용자 컴퓨터의 localhost에 닿는지. xAI 문서에서 찾지 못했다.
+- 지금 할 수 있는 것: 이 Mac에서 Grok으로 시나위를 쓰려면 3절의 **Grok Build**로 연결한다. 앱의 설정 → 외부 AI 연결 → "Grok Bot" 탭에 같은 내용이 있다.
+- 원격 접속이 생기면 필요한 것: 공개 HTTPS 주소(터널), 그 주소에서 받는 Host 허용, MCP 토큰을 Bearer 헤더로 받는 지금 방식이 Grok Bot에서 되는지 확인.
+
+### Codex dots (OpenAI) — https://learn.chatgpt.com/codex/dots
+
+- 확인한 것 📄: 자기 클라우드 컴퓨터에서 Codex를 쓰는 상시 에이전트다. 컴퓨터를 연결하면(ChatGPT 앱을 켜 두고 Computers에서 Allow) "can create local Work or Codex tasks and continue existing local Codex tasks"(learn.chatgpt.com/codex/dots, chatgpt.com/features/dots).
+- 확인하지 못한 것 ⚠️: dots 문서에 MCP 이야기가 없다. dots가 이 Mac에 연 로컬 Codex 작업이 사용자의 `~/.codex/config.toml`(2절의 `codex mcp add sinawi …`)을 읽는지 시험하지 못했다.
+- 가능해 보이는 길(미확인): dots → 이 Mac의 로컬 Codex 작업 → 그 Codex가 2절대로 시나위 MCP를 쓴다. 이 경우 연결은 이 Mac 안이라 `localGuard`에 걸리지 않는다.
+
+---
+
 ## 7. 오케스트레이터에게 붙여 줄 사용법
 
 바깥 AI의 시스템 프롬프트·스킬·AGENTS.md에 넣어 "시나위에 일을 맡기는 법"을 알려 주는 문안. 앱의 **설정 → 외부 AI 연결 → 바깥 AI에게 줄 사용법**에도 같은 글이 있고 복사 버튼이 있다. 도구 이름은 `server/app-tools.ts` 기준.
@@ -281,6 +300,8 @@ CODEX_HOME=$(mktemp -d) codex mcp add ... && codex mcp list   # 형식만 확인
 - Claude Code MCP: https://code.claude.com/docs/en/mcp
 - Codex MCP: https://developers.openai.com/codex/mcp
 - Grok Build MCP: https://docs.x.ai/build/features/mcp-servers , https://docs.x.ai/build/settings
+- Grok Bot: https://x.ai/bot , https://x.ai/bot/guides/grok-bot-101
+- Codex dots: https://learn.chatgpt.com/codex/dots , https://chatgpt.com/features/dots
 - Claude Desktop: https://modelcontextprotocol.io/docs/develop/connect-local-servers , https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop
 - Cursor: https://cursor.com/docs/mcp
 - Gemini CLI: https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md

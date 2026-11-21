@@ -84,7 +84,7 @@ The usual loop for an orchestrator:
 2. `create_session` with `lead_id`, a `prompt`, and optionally `agent` (`claude`, `codex`, `grok`) and `model` — opens a new chat under that lead and starts it. The lead's folder, instructions and memory are shared by all its chats.
 3. `wait_for_session` with the chat id — returns when the turn ends (or after `timeout_sec`) with the status, the lead's last answer and the messages since. If `done` is false it is still running: call again with `after_event_id` set to `lastEventId`.
 4. `send_message` to the same chat to continue, or `create_session` again for a parallel chat.
-5. `show_session` opens the chat in the app window so the user sees it.
+5. `show_session` notifies the user (who asks, with an "open chat" button). The app switches to the chat by itself only when the user has left an empty new-chat screen untouched for 30 seconds; while they look at another chat or settings, or are typing, their screen stays.
 
 In the app the chat appears as a tab under the lead, labelled with the client that opened it; the user can read along and type into it at any time.
 
