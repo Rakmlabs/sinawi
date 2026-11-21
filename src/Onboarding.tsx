@@ -129,10 +129,15 @@ export function Onboarding({ progress, onProgress, onClose, onMinimize, workspac
     switch (step.id) {
       case "tools": return <>
         <p className="ob-lead">{tx("ob.tools.lead")}</p>
-        <div className="ob-list">{tools ? tools.map((tool) => <div key={tool.id} className={`ob-row ${tool.installed ? "ok" : tool.agent ? "optional" : "warn"}`}>
-          <div className="ob-row-head"><strong>{tool.name}</strong>{tool.agent && <small>{t("ob.agent")}</small>}<span className="ob-spacer" />{tool.installed ? <Badge status="ok">{tool.version ? `v${tool.version}` : t("ob.installed")}</Badge> : <Badge status="warn">{tool.agent ? t("ob.missingOptional") : t("ob.installRequired")}</Badge>}</div>
-          {!tool.installed && <><Command command={tool.install} label={tool.name} /><WebLink className="ob-link" href={tool.docs}>{t("ob.installDocs")} <ExternalLink size={12} /></WebLink></>}
-        </div>) : <p className="ob-muted">{t("ob.checking")}</p>}</div>
+        <div className="ob-list">{tools ? tools.map((tool) => {
+          const warn = tool.installed && tool.warning === "unsupported-version" ? t("set.env.node.warnUnsupported")
+            : tool.installed && tool.warning === "rosetta" ? t("set.env.node.warnRosetta") : undefined;
+          return <div key={tool.id} className={`ob-row ${tool.installed && !warn ? "ok" : !tool.installed && tool.agent ? "optional" : "warn"}`}>
+            <div className="ob-row-head"><strong>{tool.name}</strong>{tool.agent && <small>{t("ob.agent")}</small>}<span className="ob-spacer" />{tool.installed ? <Badge status={warn ? "warn" : "ok"}>{tool.version ? `v${tool.version}` : t("ob.installed")}</Badge> : <Badge status="warn">{tool.agent ? t("ob.missingOptional") : t("ob.installRequired")}</Badge>}</div>
+            {!tool.installed && <><Command command={tool.install} label={tool.name} /><WebLink className="ob-link" href={tool.docs}>{t("ob.installDocs")} <ExternalLink size={12} /></WebLink></>}
+            {warn && <p className="ob-hint">{warn}</p>}
+          </div>;
+        }) : <p className="ob-muted">{t("ob.checking")}</p>}</div>
         <p className="ob-muted">{tx("ob.tools.note")}</p>
       </>;
       case "login": return <>

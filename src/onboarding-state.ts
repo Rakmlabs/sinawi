@@ -54,7 +54,7 @@ export function shouldAutoOpen(progress: OnboardingProgress, ready: string[] | u
 export type StepStatus = "ok" | "warn";
 export function toolsStatus(tools: SetupTool[] | undefined): StepStatus {
   if (!tools) return "warn";
-  const base = tools.filter((t) => !t.agent).every((t) => t.installed);
+  const base = tools.filter((t) => !t.agent).every((t) => t.installed && !t.warning);
   return base && tools.some((t) => t.agent && t.installed) ? "ok" : "warn";
 }
 export function loginStatus(tools: SetupTool[] | undefined, auth: Partial<Record<string, AuthStatus>>): StepStatus {
