@@ -1,3 +1,4 @@
+import { envVar } from "./runtime.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Duplex } from "node:stream";
 import { LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
@@ -946,7 +947,7 @@ export async function handleToolMcp(message: JsonRpcMessage, surface: ToolSurfac
     case "initialize":
       return { jsonrpc: "2.0", id, result: {
         protocolVersion: MCP_VERSIONS.includes(message.params?.protocolVersion ?? "") ? message.params!.protocolVersion : MCP_VERSIONS[0],
-        capabilities: { tools: {} }, serverInfo: { name: serverName, title: "Sinawi", version: "1.0.0" },
+        capabilities: { tools: {} }, serverInfo: { name: serverName, title: "Sinawi", version: envVar("SERVER_VERSION") || "0.0.0-dev" },
         ...(surface === "external" ? { instructions: EXTERNAL_INSTRUCTIONS } : {}),
       } };
     case "ping":
