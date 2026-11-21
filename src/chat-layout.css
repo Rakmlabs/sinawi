@@ -1044,6 +1044,6 @@ body,
 /* Opened at the bottom, a chat's earlier messages sit above the view: fade the top edge so the first
    visible message reads as "more above", not as a clipped bubble (review round 2, §6). */
 .chat-body.has-above {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 40px);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 40px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 40px);
 }
