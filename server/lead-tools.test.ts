@@ -277,6 +277,15 @@ test("write_skill and update_skill keep reusable skills that delegate_task attac
     await writeFile(join(repo, ".claude", "skills", "mine", "SKILL.md"), "---\nname: mine\ndescription: 내 규칙\n---\n\n내가 쓴 규칙\n");
     await assert.rejects(orchestra.leadToolCall(chatId, "update_skill", { name: "mine", content: "바꿔치기", scope: "project" }), /담당이 만든 것이 아니라/u);
     await assert.rejects(orchestra.leadToolCall(chatId, "update_skill", { name: "mine", content: "바꿔치기" }), /담당이 만든 것이 아니라/u, "nor through the project fallback");
+    // The mark only counts in the front matter.
+    await mkdir(join(repo, ".claude", "skills", "sneaky"), { recursive: true });
+    await writeFile(join(repo, ".claude", "skills", "sneaky", "SKILL.md"), "---\nname: sneaky\ndescription: 남의 규칙\n---\n\ncreated-by: sinawi-lead\n");
+    await assert.rejects(orchestra.leadToolCall(chatId, "update_skill", { name: "sneaky", content: "바꿔치기", scope: "project" }), /담당이 만든 것이 아니라/u);
+    // A skill a lead made before the mark existed: the chat's own "created" record vouches for it.
+    await mkdir(join(repo, ".claude", "skills", "legacy"), { recursive: true });
+    await writeFile(join(repo, ".claude", "skills", "legacy", "SKILL.md"), "---\nname: legacy\ndescription: 예전 규칙\n---\n\n예전 본문\n");
+    orchestra.get(chatId)!.events.push({ id: "legacy-record", sessionId: chatId, agent: "claude", type: "status", text: "담당이 프로젝트 스킬 legacy을 만들었습니다.", time: new Date().toISOString(), metadata: { leadSkill: { name: "legacy", scope: "project", action: "created" } } });
+    await orchestra.leadToolCall(chatId, "update_skill", { name: "legacy", content: "새 본문", scope: "project" });
     listed = await orchestra.leadToolCall(chatId, "list_skills", {});
     const task = await orchestra.leadToolCall(chatId, "delegate_task", { worker: "codex", brief: "API 검토", skills: ["api-review", "shared", "없는것"] }) as any;
     assert.deepEqual(task.missing_skills, ["없는것"]);
@@ -295,6 +304,10 @@ test("write_skill and update_skill keep reusable skills that delegate_task attac
   assert.match(shared, /공용 규칙\n추가/u, "the lead edits a project skill it made");
   assert.match(shared, /created-by: sinawi-lead/u);
   assert.match(await readFile(join(repo, ".claude", "skills", "mine", "SKILL.md"), "utf8"), /내가 쓴 규칙/u);
+  const legacy = await readFile(join(repo, ".claude", "skills", "legacy", "SKILL.md"), "utf8");
+  assert.match(legacy, /새 본문/u, "an earlier lead's project skill can be edited again");
+  assert.match(legacy, /created-by: sinawi-lead/u, "and carries the mark from now on");
+  assert.match(await readFile(join(repo, ".claude", "skills", "sneaky", "SKILL.md"), "utf8"), /남의 규칙/u);
   assert.ok(listed.lead.some((item: { name: string }) => item.name === "api-review"));
   assert.match(workerPrompt, /--- api-review \(담당\) ---[\s\S]*테스트를 돌린다/u);
   assert.match(workerPrompt, /공용 규칙/u);

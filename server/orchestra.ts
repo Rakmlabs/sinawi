@@ -211,6 +211,8 @@ function runExhausted(run: { exitCode: number; cliText: string; quotaErrorEviden
 
 /** Front-matter line a lead writes into the project skills it creates (writeLeadSkill). */
 const LEAD_SKILL_MARK = /^\s*created-by:\s*sinawi-lead\s*$/mu;
+/** The mark counts only in the skill's front matter, not anywhere in its body. */
+const leadMarked = (text: string) => LEAD_SKILL_MARK.test(/^---\n([\s\S]*?)\n---/u.exec(text)?.[1] ?? "");
 
 export class Orchestra {
   private sessions = new Map<string, Session>();
@@ -2484,6 +2486,15 @@ export class Orchestra {
     return { lead: view(records.filter((item) => item.source === "담당")), others: view(records.filter((item) => item.source !== "담당")) };
   }
 
+  /** A lead made this project skill: some chat in that folder recorded creating it (leadSkill metadata). */
+  private leadCreatedProjectSkill(cwd: string, name: string): boolean {
+    for (const other of this.sessions.values()) {
+      if (other.cwd !== cwd) continue;
+      if (other.events.some((event) => event.metadata?.leadSkill?.name === name && event.metadata.leadSkill.scope === "project" && event.metadata.leadSkill.action === "created")) return true;
+    }
+    return false;
+  }
+
   private async writeLeadSkill(session: Session, args: Record<string, unknown>, update: boolean): Promise<{ name: string; scope: "lead" | "project"; path: string; action: "created" | "updated" }> {
     const name = skillSlug(typeof args.name === "string" ? args.name : "");
     if (!name) throw new Error("스킬 이름은 영문 소문자·숫자·하이픈으로 정하세요 (예: api-review).");
@@ -2501,7 +2512,8 @@ export class Orchestra {
     if (!update && existing !== undefined) throw new Error(`스킬 ${name}이 이미 있습니다. update_skill로 고치세요.`);
     // A project skill someone else wrote (the user, a teammate, another tool) is theirs: a lead only
     // edits the project skills a lead made, marked in their front matter.
-    if (scope === "project" && existing !== undefined && !LEAD_SKILL_MARK.test(existing)) throw new Error(`프로젝트 스킬 ${name}은 담당이 만든 것이 아니라 고칠 수 없습니다. 다른 이름으로 write_skill 하세요.`);
+    // Skills a lead made before the mark existed are known by the "created" record in that folder's chats.
+    if (scope === "project" && existing !== undefined && !leadMarked(existing) && !this.leadCreatedProjectSkill(session.cwd, name)) throw new Error(`프로젝트 스킬 ${name}은 담당이 만든 것이 아니라 고칠 수 없습니다. 다른 이름으로 write_skill 하세요.`);
     existing ??= "";
     const front = /^---\n([\s\S]*?)\n---\n?/u.exec(existing);
     const oldDescription = front?.[1].match(/^description:\s*(.*)$/mu)?.[1]?.trim() ?? "";
