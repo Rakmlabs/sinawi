@@ -5,7 +5,8 @@
 //
 //   SINAWI_URL             app address (default http://127.0.0.1:${SINAWI_PORT:-3001})
 //   SINAWI_PORT            app port when SINAWI_URL is not set (default 3001)
-//   SINAWI_MCP_TOKEN       the token from Sinawi Settings → General → External AI connection (MCP)
+//   SINAWI_MCP_TOKEN       the token itself (Sinawi Settings → Connect an AI); not needed on the same Mac,
+//                          since the app's token file below is read by default
 //   SINAWI_MCP_TOKEN_FILE  read the token from this file instead
 //   SINAWI_DATA_DIR        or from $SINAWI_DATA_DIR/app-mcp-token
 //                          (default ~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token)
@@ -73,7 +74,7 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
   // Read on each call: a token renewed in the app works without restarting the client.
   const token = readToken();
   if (!token) {
-    send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Sinawi MCP token missing: set SINAWI_MCP_TOKEN (Sinawi Settings → General → External AI connection (MCP); 설정 → 일반 → 외부 AI 연결)." } });
+    send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Sinawi MCP token missing: set SINAWI_MCP_TOKEN (Sinawi Settings → Connect an AI; 설정 → 외부 AI 연결)." } });
     return;
   }
   try {

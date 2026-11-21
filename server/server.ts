@@ -1506,7 +1506,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.post("/api/app-mcp", async (req, res) => {
     try {
       if (!tokenMatches(await ensureAppMcpToken(mcpDataDir), presentedToken(req.headers))) {
-        res.status(401).json({ error: "Sinawi: MCP 토큰이 없거나 틀렸습니다. 설정 → 일반 → 외부 AI 연결에서 확인하세요." });
+        res.status(401).json({ error: "Sinawi: MCP 토큰이 없거나 틀렸습니다. 설정 → 외부 AI 연결에서 확인하세요." });
         return;
       }
       await ready;

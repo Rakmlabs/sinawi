@@ -106,7 +106,7 @@ test("`sinawi mcp` says how to get a token when there is none, and when the app 
   assert.equal(missing.id, 3);
   assert.equal(missing.error.code, -32603);
   assert.match(missing.error.message, /token missing: set SINAWI_MCP_TOKEN/u);
-  assert.match(missing.error.message, /External AI connection/u);
+  assert.match(missing.error.message, /Connect an AI/u);
   assert.equal(app.seen.length, 0, "nothing is sent without a token");
 
   const closed = createServer();

@@ -1,6 +1,6 @@
-# 오케스트레이터별 시나위 MCP 연결 안내 (초안)
+# 오케스트레이터별 시나위 MCP 연결 안내
 
-> 작성 2026-11-21. 기준 코드 `7d58487`. 바깥 AI(오케스트레이터)가 시나위를 "일을 맡길 곳"으로 쓰도록 MCP에 등록하는 방법을 클라이언트별로 모았다.
+> 작성 2026-11-21. 앱의 **설정 → 외부 AI 연결** 화면이 아래 명령을 내 Mac의 경로로 채워서 보여 준다. 바깥 AI(오케스트레이터)가 시나위를 "일을 맡길 곳"으로 쓰도록 MCP에 등록하는 방법을 클라이언트별로 모았다.
 >
 > 표기: **✅ 실제 연결 확인**(임시 시나위 서버에 붙여 핸드셰이크·도구 목록까지 확인) · **📄 공식 문서로 형식 확인** · **⚠️ 추측**(공식 문서로 확인 못 함)
 
@@ -11,9 +11,9 @@
 | 서버 주소 | `http://127.0.0.1:3001` (`SINAWI_PORT`로 변경) — 이 Mac 안에서만 | `server/app-mcp.ts` `appUrl()` |
 | MCP 엔드포인트 | `POST /api/app-mcp`, JSON-RPC 한 건 요청 → `application/json` 한 건 응답. 알림은 `202`. `GET`/`DELETE`는 `404`(SSE 스트림·세션 ID 없음) | `server/server.ts:1368`, 직접 curl 확인 |
 | 인증 | `Authorization: Bearer <토큰>` (또는 `x-sinawi-mcp-token`). 없거나 틀리면 `401` | `presentedToken()` |
-| 토큰 위치 | `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token` (0600). 설정 → 일반 → 외부 AI 연결(MCP)에서 보기·재발급 | `server/app-mcp.ts` |
+| 토큰 위치 | `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token` (0600). 설정 → 외부 AI 연결에서 경로 보기·재발급 | `server/app-mcp.ts` |
 | 프로토콜 버전 | `2025-06-18`, `2025-03-26`, `2024-11-05` | `server/app-tools.ts` `MCP_VERSIONS` |
-| 도구 수 | 외부 표면 79개(담당 전용 10개 제외) | `tools/list` 직접 확인 |
+| 도구 수 | 외부 표면 81개(승인 필요 30개 포함, 담당 전용 도구 제외) | `tools/list` 직접 확인 |
 | stdio 브리지 | `packages/sinawi/lib/mcp.mjs` 한 파일. 앱 안 사본: `/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`, 데이터 폴더 사본: `<데이터 폴더>/hooks/sinawi-mcp.mjs` | `src-tauri/tauri.conf.json` resources |
 | 브리지 환경 변수 | `SINAWI_URL` → 없으면 `http://127.0.0.1:${SINAWI_PORT:-3001}`. 토큰: `SINAWI_MCP_TOKEN` → `SINAWI_MCP_TOKEN_FILE` → `$SINAWI_DATA_DIR/app-mcp-token` → 기본 토큰 파일. **같은 Mac이면 env 없이도 기본 토큰 파일을 읽는다**(호출마다 다시 읽어 재발급에도 안 끊김) | `packages/sinawi/lib/mcp.mjs` |
 
@@ -143,7 +143,7 @@ Authorization = "Bearer ${SINAWI_MCP_TOKEN}"
 
 공식 문서: https://modelcontextprotocol.io/docs/develop/connect-local-servers , https://support.claude.com/en/articles/10949351 — macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, 설정 → 개발자 → 구성 편집, 경로는 절대 경로, 바꾼 뒤 완전히 재시작. 📄
 
-가장 쉬움: 시나위 **설정 → 일반 → 외부 AI 연결(MCP) → Claude Desktop에 연결**(앱이 JSON을 보여 주고 합쳐 쓰며 `.bak`을 남김. `server/mcp-clients.ts`).
+가장 쉬움: 시나위 **설정 → 외부 AI 연결 → Claude Desktop 탭 → Claude Desktop에 연결**(앱이 JSON을 보여 주고 합쳐 쓰며 `.bak`을 남김. `server/mcp-clients.ts`).
 
 직접 넣을 때:
 
@@ -241,25 +241,19 @@ V2 형식은 문서 일부만 확인해 정확한 예시를 쓰지 않았다 ⚠
 
 ---
 
-## 7. 오케스트레이터에게 붙여 줄 사용법 (지시문 초안)
+## 7. 오케스트레이터에게 붙여 줄 사용법
 
-바깥 AI의 시스템 프롬프트·스킬·AGENTS.md에 넣어 "시나위를 워커로 쓰는 법"을 알려 주는 문안. 도구 이름은 `server/app-tools.ts` 기준.
+바깥 AI의 시스템 프롬프트·스킬·AGENTS.md에 넣어 "시나위에 일을 맡기는 법"을 알려 주는 문안. 앱의 **설정 → 외부 AI 연결 → 바깥 AI에게 줄 사용법**에도 같은 글이 있고 복사 버튼이 있다. 도구 이름은 `server/app-tools.ts` 기준.
 
 ```text
-코딩 작업을 직접 하지 말고 시나위(MCP 서버 "sinawi")에 맡겨라. 사람은 시나위 앱에서 그 대화를 보고 끼어든다.
-
-1. list_workspaces로 공간 ID를 확인하고, 이후 호출에는 workspace_id를 꼭 넣는다
-   (안 넣으면 사용자가 지금 보고 있는 공간으로 간다).
-2. 일을 시킬 때: create_session(prompt, cwd=<절대 경로>, agent="claude"|"codex"|"grok", title=<짧은 제목>, workspace_id)
-   - 팀을 모르겠으면 먼저 recommend_team.
-   - 프로젝트 담당이 있으면 list_leads로 ID를 찾아 lead_id로 연다.
-3. send_message는 바로 돌아온다. 진행은 get_session_summary(session_id)로 확인하고,
-   status가 running이 아니게 될 때까지 간격을 두고 다시 확인한다. 내용은 get_session(session_id, limit).
-4. 달리는 중에 물어볼 것은 ask_running_session, 이어서 시킬 것은 send_message.
-5. 사람이 시나위에서 같은 채팅에 직접 말했을 수 있다. 다음 지시 전에 get_session으로 최근 메시지를 읽는다.
-6. [승인 필요] 도구는 pending_approval을 돌려준다. 같은 요청을 다시 보내지 말고, 사용자에게 시나위에서
-   승인하라고 알린 뒤 list_approvals(approval_id)로 결과를 본다.
-7. 도구 설명과 오류는 한국어다. 사용자에게는 사용자의 언어로 답한다.
+코딩 작업은 직접 하지 말고 시나위(MCP 서버 "sinawi")에 맡긴다. 사람은 시나위 앱에서 그 대화를 보고 끼어든다.
+1. list_leads로 프로젝트 담당을 찾는다. 없으면 create_lead로 만든다.
+2. create_session(lead_id, prompt, title)으로 그 담당의 새 채팅을 연다. 특정 에이전트·모델이 필요하면 agent(claude|codex|grok)와 model을 준다. 비우면 담당 설정을 쓴다.
+3. wait_for_session(session_id)으로 답을 기다린다. done이 false면 다시 부른다. 다음부터는 after_event_id에 lastEventId를 넣어 새 메시지만 받는다.
+4. 이어서 시킬 일은 send_message(session_id, prompt) 다음 wait_for_session.
+5. 사람이 같은 채팅에 직접 말했을 수 있다. messages의 from을 보고 따른다.
+6. [승인 필요] 도구는 pending_approval을 돌려준다. 같은 요청을 다시 보내지 말고 사용자에게 시나위에서 승인하라고 알린다.
+7. 사용자에게 보여 줄 채팅은 show_session(session_id)으로 앱에 띄운다.
 ```
 
 ## 8. 검증 방법 (재현용)

@@ -37,26 +37,19 @@ Both surfaces read the same registry (`APP_TOOLS` in `server/app-tools.ts`). App
 
 ### Connect an MCP client
 
-Sinawi must be running. In order of preference:
+Sinawi must be running. **Settings → Connect an AI** shows a ready setup per client with this Mac's paths filled in (`clientSetups` in `server/app-mcp.ts`, served by `GET`/`POST /api/app-mcp/connection`):
 
-1. **In-app button** (Claude Desktop, Cursor): **Settings → General → External AI connection (MCP) → Connect to Claude Desktop / Connect to Cursor**. After the user confirms the exact JSON, the app merges `mcpServers.sinawi` into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json`, keeping other entries and a `.bak` copy. The entry is `"command": "<node>", "args": ["<data>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<data>/app-mcp-token"}` (no token copied). Routes: `GET`/`POST /api/app-mcp/clients/:client` (`claude`, `cursor`); not MCP tools, and `POST` needs the app's own Origin and the confirmed JSON. Tests move the paths with `SINAWI_CLAUDE_DESKTOP_CONFIG` and `SINAWI_CURSOR_MCP_CONFIG`.
-2. **npx**, with the npm package `@rakmlabs/sinawi`: **Copy config** on the same screen gives
+- **Claude Code**: `claude mcp add sinawi --scope user -e SINAWI_URL=<url> -e SINAWI_MCP_TOKEN_FILE=<data>/app-mcp-token -- <node> <data>/hooks/sinawi-mcp.mjs`
+- **Codex**: `codex mcp add sinawi --env … -- <node> <bridge>`, or the same as a `[mcp_servers.sinawi]` block in `~/.codex/config.toml`
+- **Grok Build**: `grok mcp add sinawi -e … -- <node> <bridge>`, or `[mcp_servers.sinawi]` with `enabled = true` in `~/.grok/config.toml`
+- **Claude Desktop, Cursor**: a button. After the user confirms the exact JSON, the app merges `mcpServers.sinawi` into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json`, keeping other entries and a `.bak` copy. Routes: `GET`/`POST /api/app-mcp/clients/:client/plan` and `POST /api/app-mcp/clients/:client` (`claude`, `cursor`); not MCP tools, and only the app's own window (allowed Origin) may call them. Tests move the paths with `SINAWI_CLAUDE_DESKTOP_CONFIG` and `SINAWI_CURSOR_MCP_CONFIG`.
+- **Any other client**: `{"mcpServers": {"sinawi": {"command": "<node>", "args": ["<data>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<data>/app-mcp-token"}}}}`.
 
-```json
-{
-  "mcpServers": {
-    "sinawi": {
-      "command": "npx",
-      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
-      "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
-    }
-  }
-}
-```
+The entries read the token from its file (no token copied). `/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs` is the same bridge; the copy in `<data>/hooks/` survives app updates and moves. From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`) starts it too. Every form runs one implementation, `packages/sinawi/lib/mcp.mjs`, which has no dependencies (Node 18+).
 
-3. **The bridge bundled in the app**: `"command": "node"`, `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, same `env`. The settings screen's "without npx" config points at the copy in `<data>/hooks/sinawi-mcp.mjs` instead (it survives app updates and moves).
+The npm package `@rakmlabs/sinawi` is **not published yet** (`npx` answers 404). Once it is, `npx -y @rakmlabs/sinawi mcp` can replace `<node> <bridge>`, and `npx @rakmlabs/sinawi` installs the app (macOS; downloads the latest release, verifies it with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`).
 
-From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`) starts the same stdio bridge. Every form runs one implementation, `packages/sinawi/lib/mcp.mjs`, which has no dependencies (Node 18+). The same npm package installs the app: `npx @rakmlabs/sinawi` (macOS; downloads the latest release, verifies it with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`).
+**Orchestrator loop:** `list_leads` → `create_session(lead_id, prompt, agent?, model?)` opens a new chat (tab) under that lead, sharing its folder, instructions and notes → `wait_for_session(session_id)` until `done`, passing `after_event_id = lastEventId` on later calls → `send_message` + `wait_for_session` to continue → `show_session` to bring the chat up in the app. The user sees each chat live, labelled with the client's name, and can type into it.
 
 ### Bridge environment variables (`sinawi mcp`)
 
