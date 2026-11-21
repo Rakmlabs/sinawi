@@ -1484,7 +1484,9 @@ export class Orchestra {
   async followup(id: string, prompt: string, skills: string[] = [], settings: ConversationSettings = {}, alreadyLogged = false): Promise<Session> {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
-    if (session.status === "running") throw new Error("세션이 이미 실행 중입니다.");
+    // A second message while the first is still starting (it awaits before the status flips) would
+    // replace the first run's controller and drop that message silently: refuse it like a running chat.
+    if (session.status === "running" || this.starting.has(id)) throw new Error("세션이 이미 실행 중입니다.");
     // From here until the turn is running (or refused) the chat counts as working (isWorking).
     this.starting.add(id);
     try { return await this.startFollowup(session, prompt, skills, settings, alreadyLogged); }
