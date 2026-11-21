@@ -19,9 +19,14 @@ test("Claude partial-message deltas are liveness only, never chat text", () => {
   assert.deepEqual(normalizeCliLine("claude", delta), []);
 });
 
-test("raw CLI activity keeps a quiet run alive past the inactivity watchdog", async () => {
+// Mocked time (timers and clock) from the runner's start: with real time a loaded machine could spend
+// the 150 ms watchdog in the steps before the runner and stop the run before any activity.
+test("raw CLI activity keeps a quiet run alive past the inactivity watchdog", async (t) => {
   const published: Session[] = [];
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
+    started();
     // 600ms of thinking with no visible line, against a 150ms watchdog.
     const beat = setInterval(() => options.onActivity?.(), 30);
     setTimeout(() => {
@@ -30,9 +35,13 @@ test("raw CLI activity keeps a quiet run alive past the inactivity watchdog", as
       resolve({ exitCode: 0, finalText: "answer" });
     }, 600);
   });
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: Date.now() });
   const orchestra = new Orchestra((session) => { published.push(structuredClone(session)); }, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 150);
   orchestra.heartbeatPublishMs = 100;
   const session = await orchestra.create({ prompt: "think hard", agent: "claude", workers: ["codex"], cwd: process.cwd() });
+  await running;
+  for (let step = 0; step < 21; step++) t.mock.timers.tick(30);
+  t.mock.timers.reset();
   await settle(session);
   assert.equal(session.status, "done");
   assert.ok(published.some((item) => item.status === "running" && item.lastActivityAt), "clients learn the run is alive");
