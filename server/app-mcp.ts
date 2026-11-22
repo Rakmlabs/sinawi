@@ -99,6 +99,39 @@ export async function installAppMcpScript(dataDir: string): Promise<string | und
   return target;
 }
 
+export const APP_MCP_LAUNCHER = "sinawi-node";
+const posixQuote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
+
+/**
+ * The command clients run instead of a Node path (review L7): n or nvm switching versions removes the
+ * Node the server ran with, so a path written into a client's config broke. This launcher tries that
+ * Node first, then the node on PATH and the usual install places, and runs the bridge with it.
+ */
+export function launcherSource(node = process.execPath): string {
+  return [
+    "#!/bin/sh",
+    "# Sinawi MCP: runs the bridge with Node (written by the app; rewritten when its Node changes).",
+    `for node in ${posixQuote(node)} "$(command -v node 2>/dev/null)" /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do`,
+    '  [ -n "$node" ] && [ -x "$node" ] && exec "$node" "$@"',
+    "done",
+    'echo "Sinawi MCP: Node.js를 찾지 못했습니다 / Node.js was not found" >&2',
+    "exit 127",
+    "",
+  ].join("\n");
+}
+
+/** Writes <data>/hooks/sinawi-node (see launcherSource) and returns its path. */
+export async function installAppMcpLauncher(dataDir: string, node = process.execPath): Promise<string> {
+  const target = join(dataDir, "hooks", APP_MCP_LAUNCHER);
+  const source = launcherSource(node);
+  if ((await readFile(target, "utf8").catch(() => "")) !== source) {
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, source, { mode: 0o755 });
+    await chmod(target, 0o755);
+  }
+  return target;
+}
+
 export const appUrl = () => `http://127.0.0.1:${envVar("PORT") || "3001"}`;
 
 /**
@@ -121,4 +154,37 @@ export function scriptClientConfig(script: string, token: string, command = proc
  */
 export function connectEntry(script: string, tokenFile: string, command = process.execPath) {
   return { command, args: [script], env: { SINAWI_URL: appUrl(), SINAWI_MCP_TOKEN_FILE: tokenFile } };
+}
+
+export type McpClientSetupId = "claude-code" | "codex" | "grok" | "claude-desktop" | "cursor" | "other";
+/** How one MCP client adds Sinawi: a command to paste in a terminal and/or the config it ends up with. */
+export type McpClientSetup = { id: McpClientSetupId; name: string; command?: string; config?: string; configFile?: string; check?: string };
+
+/** One shell word, quoted when it has to be ("Application Support" has a space). */
+export const shellWord = (value: string) => /^[\w@%+=:,./-]+$/u.test(value) ? value : `'${value.replace(/'/gu, `'\\''`)}'`;
+
+const tomlString = (value: string) => JSON.stringify(value);
+
+/**
+ * Per-client setup for the settings page and the docs (docs/mcp-clients.md): every one runs this
+ * Node with the app's copy of the bridge and reads the token from its file, so no secret is pasted
+ * into a config and a renewed token keeps working. Formats checked against each client's docs;
+ * Claude Code and Grok Build were connected for real (docs/mcp-clients.md).
+ */
+export function clientSetups(script: string, tokenFile: string, node = process.execPath): McpClientSetup[] {
+  const url = appUrl();
+  const env = { SINAWI_URL: url, SINAWI_MCP_TOKEN_FILE: tokenFile };
+  const pairs = Object.entries(env).map(([key, value]) => `${key}=${value}`);
+  const run = `-- ${shellWord(node)} ${shellWord(script)}`;
+  const flags = (flag: string) => pairs.map((pair) => `${flag} ${shellWord(pair)}`).join(" ");
+  const json = JSON.stringify({ mcpServers: { [APP_MCP_SERVER]: connectEntry(script, tokenFile, node) } }, null, 2);
+  const toml = (extra = "") => [`[mcp_servers.${APP_MCP_SERVER}]`, `command = ${tomlString(node)}`, `args = [${tomlString(script)}]`, ...(extra ? [extra] : []), "", `[mcp_servers.${APP_MCP_SERVER}.env]`, ...Object.entries(env).map(([key, value]) => `${key} = ${tomlString(value)}`)].join("\n");
+  return [
+    { id: "claude-code", name: "Claude Code", command: `claude mcp add ${APP_MCP_SERVER} --scope user ${flags("-e")} ${run}`, check: "claude mcp list" },
+    { id: "codex", name: "Codex", command: `codex mcp add ${APP_MCP_SERVER} ${flags("--env")} ${run}`, config: toml(), configFile: "~/.codex/config.toml", check: "codex mcp list" },
+    { id: "grok", name: "Grok Build", command: `grok mcp add ${APP_MCP_SERVER} ${flags("-e")} ${run}`, config: toml("enabled = true"), configFile: "~/.grok/config.toml", check: `grok mcp doctor ${APP_MCP_SERVER}` },
+    { id: "claude-desktop", name: "Claude Desktop", config: json, configFile: "~/Library/Application Support/Claude/claude_desktop_config.json" },
+    { id: "cursor", name: "Cursor", config: json, configFile: "~/.cursor/mcp.json" },
+    { id: "other", name: "MCP (JSON)", config: json },
+  ];
 }

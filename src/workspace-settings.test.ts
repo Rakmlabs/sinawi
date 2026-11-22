@@ -25,11 +25,11 @@ test("workspace settings render every rule per workspace with its current value"
   }
   // The open workspace's rules start expanded; the restricted one shows its summary.
   assert.match(html, /<details class="workspace-rules" open="">/);
-  assert.match(html, /3개 제한/);
+  assert.match(html, /도구·미디어 3개 막음/);
   assert.match(html, /image-tool/);
   assert.match(html, /search · Grok Build/);
-  assert.match(html, /id="ws-team-computer"[^>]*checked=""/);
-  assert.doesNotMatch(html, /id="ws-default-computer"[^>]*checked=""/);
+  assert.match(html, /id="ws-team-computer"[^>]*aria-checked="true"/);
+  assert.match(html, /id="ws-default-computer"[^>]*aria-checked="false"/);
   // Settings › Environment links to the open workspace's computer-use switch.
   assert.match(html, /data-setting-id="ws-computer"[^]*id="ws-default-computer"/);
   assert.equal(html.match(/data-setting-id="ws-computer"/g)?.length, 1);

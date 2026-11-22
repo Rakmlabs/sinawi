@@ -4,6 +4,7 @@ import { normalizeCliLine, type RunCliOptions } from "./cli.js";
 import { Orchestra } from "./orchestra.js";
 import { StallDetector } from "./supervision.js";
 import type { Session } from "./types.js";
+import { onAbort } from "./test-abort.js";
 
 async function settle(session: Session, timeoutMs = 5_000) {
   const started = Date.now();
@@ -18,9 +19,14 @@ test("Claude partial-message deltas are liveness only, never chat text", () => {
   assert.deepEqual(normalizeCliLine("claude", delta), []);
 });
 
-test("raw CLI activity keeps a quiet run alive past the inactivity watchdog", async () => {
+// Mocked time (timers and clock) from the runner's start: with real time a loaded machine could spend
+// the 150 ms watchdog in the steps before the runner and stop the run before any activity.
+test("raw CLI activity keeps a quiet run alive past the inactivity watchdog", async (t) => {
   const published: Session[] = [];
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
+    started();
     // 600ms of thinking with no visible line, against a 150ms watchdog.
     const beat = setInterval(() => options.onActivity?.(), 30);
     setTimeout(() => {
@@ -29,9 +35,13 @@ test("raw CLI activity keeps a quiet run alive past the inactivity watchdog", as
       resolve({ exitCode: 0, finalText: "answer" });
     }, 600);
   });
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"], now: Date.now() });
   const orchestra = new Orchestra((session) => { published.push(structuredClone(session)); }, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 150);
   orchestra.heartbeatPublishMs = 100;
   const session = await orchestra.create({ prompt: "think hard", agent: "claude", workers: ["codex"], cwd: process.cwd() });
+  await running;
+  for (let step = 0; step < 21; step++) t.mock.timers.tick(30);
+  t.mock.timers.reset();
   await settle(session);
   assert.equal(session.status, "done");
   assert.ok(published.some((item) => item.status === "running" && item.lastActivityAt), "clients learn the run is alive");
@@ -40,7 +50,7 @@ test("raw CLI activity keeps a quiet run alive past the inactivity watchdog", as
 
 test("without activity the watchdog still stops a silent run", async () => {
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
-    options.signal?.addEventListener("abort", () => resolve({ exitCode: 143, finalText: "" }), { once: true });
+    onAbort(options.signal, () => resolve({ exitCode: 143, finalText: "" }));
   });
   const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 60);
   const session = await orchestra.create({ prompt: "silent", agent: "claude", workers: ["codex"], cwd: process.cwd() });
@@ -63,7 +73,7 @@ test("activity without any session event is capped: endless retry noise fails wi
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
     // Raw output forever (partial deltas, retries), but nothing that becomes a message/tool/result.
     const beat = setInterval(() => options.onActivity?.(), 20);
-    options.signal?.addEventListener("abort", () => { clearInterval(beat); resolve({ exitCode: 143, finalText: "" }); }, { once: true });
+    onAbort(options.signal, () => { clearInterval(beat); resolve({ exitCode: 143, finalText: "" }); });
   });
   const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 10_000);
   orchestra.quietLimitMs = 300;

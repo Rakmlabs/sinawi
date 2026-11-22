@@ -1080,6 +1080,37 @@ textarea::placeholder {
   font-size: calc(12px * var(--font-scale));
   line-height: 1.6;
 }
+.error-banner.login-needed {
+  align-items: flex-start;
+  gap: 14px;
+}
+.login-needed-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.login-needed-body strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(13px * var(--font-scale));
+}
+.login-needed-body span {
+  color: var(--text-secondary, inherit);
+}
+.login-needed-body code {
+  font-size: calc(12px * var(--font-scale));
+  opacity: 0.8;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.error-banner.login-needed button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  white-space: nowrap;
+}
 .error-banner button {
   display: grid;
   place-items: center;

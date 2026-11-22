@@ -5,10 +5,13 @@
 //
 //   SINAWI_URL             app address (default http://127.0.0.1:${SINAWI_PORT:-3001})
 //   SINAWI_PORT            app port when SINAWI_URL is not set (default 3001)
-//   SINAWI_MCP_TOKEN       the token from Sinawi Settings → General → External AI connection (MCP)
+//   SINAWI_MCP_TOKEN       the token itself (Sinawi Settings → Connect an AI); not needed on the same Mac,
+//                          since the app's token file below is read by default
 //   SINAWI_MCP_TOKEN_FILE  read the token from this file instead
 //   SINAWI_DATA_DIR        or from $SINAWI_DATA_DIR/app-mcp-token
 //                          (default ~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token)
+//   SINAWI_CLIENT_NAME     the name Sinawi shows on chats and messages this client starts
+//                          (default: the client's own `clientInfo.name` from `initialize`)
 //
 // This file is the one implementation. It runs as soon as it is loaded, and is run as:
 //   npx -y @rakmlabs/sinawi mcp                              the npm package `@rakmlabs/sinawi` (bin/sinawi.mjs)
@@ -35,11 +38,15 @@ function readToken() {
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 
+// Who this client is, so the app can show "Grok Bot asked" on the work it starts.
+let clientName = (process.env.SINAWI_CLIENT_NAME || "").trim();
+const clientHeader = () => clientName ? { "x-sinawi-client": encodeURIComponent(clientName.slice(0, 60)) } : {};
+
 // node:http, not fetch: some calls (waiting on a run) can outlast fetch's header timeout.
 const post = (body, token) => new Promise((resolve, reject) => {
   const req = transport.request({
     host: base.hostname, port: base.port || (base.protocol === "https:" ? 443 : 80), path: "/api/app-mcp", method: "POST",
-    headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), authorization: `Bearer ${token}` },
+    headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), authorization: `Bearer ${token}`, ...clientHeader() },
   }, (res) => {
     let text = "";
     res.setEncoding("utf8");
@@ -59,10 +66,15 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
     return;
   }
   if (!message || message.id === undefined || message.id === null) return;
+  if (message.method === "initialize" && !process.env.SINAWI_CLIENT_NAME) {
+    const info = message.params && message.params.clientInfo;
+    const name = info && (typeof info.title === "string" && info.title.trim() ? info.title : info.name);
+    if (typeof name === "string" && name.trim()) clientName = name.trim();
+  }
   // Read on each call: a token renewed in the app works without restarting the client.
   const token = readToken();
   if (!token) {
-    send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Sinawi MCP token missing: set SINAWI_MCP_TOKEN (Sinawi Settings → General → External AI connection (MCP); 설정 → 일반 → 외부 AI 연결)." } });
+    send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Sinawi MCP token missing: set SINAWI_MCP_TOKEN (Sinawi Settings → Connect an AI; 설정 → 외부 AI 연결)." } });
     return;
   }
   try {

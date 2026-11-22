@@ -37,13 +37,23 @@ Grok Build에는 실행마다 MCP를 붙이는 옵션이 없어, Grok 담당은 
 
 ## 앱 전체 MCP (외부 AI)
 
-시나위는 기능을 MCP 서버로도 내놓아 Claude Desktop, Cursor 같은 외부 AI가 채팅·담당·일정·워크스페이스·그룹·봇·알림·스킬·설정 등을 다룰 수 있습니다.
+시나위는 기능을 MCP 서버로도 내놓아 다른 AI가 지휘를 맡을 수 있습니다. Claude Code, Codex, Grok Build, Claude Desktop, Cursor 등 MCP 클라이언트가 담당 아래 채팅을 열고, 특정 채팅에 일을 보내고, 에이전트와 모델을 고르고, 결과를 기다려 읽습니다. 이렇게 열린 채팅은 앱에 클라이언트 이름과 함께 실시간으로 보이고, 사용자가 이어서 말할 수 있습니다. 같은 서버로 담당·일정·작업 공간·그룹·봇·알림·스킬·설정도 다룹니다.
 
-### Claude Desktop·Cursor 연결
+### 연결
 
-시나위가 켜져 있어야 합니다. 쉬운 순서로 세 가지 방법이 있습니다.
+시나위가 켜져 있어야 합니다. **설정 → 외부 AI 연결**을 열어 클라이언트를 고르고 보이는 내용을 복사하세요. 경로와 포트는 내 Mac에 맞게 채워져 있습니다. 앱이 `/Applications`에 있으면 이런 모양입니다:
 
-1. **버튼 하나.** 시나위 **설정 → 일반 → 외부 AI 연결 (MCP)**에서 **Claude Desktop에 연결** 또는 **Cursor에 연결**을 누릅니다. 대화상자가 넣을 JSON을 그대로 보여 주고, **구성에 쓰기**를 누르면 `~/Library/Application Support/Claude/claude_desktop_config.json` 또는 `~/.cursor/mcp.json`에 합칩니다(없으면 만들고, 다른 키와 서버는 그대로 두고, 원래 파일은 `<파일>.bak`으로 복사하고, 올바른 JSON이 아닌 파일은 건드리지 않음). 그다음 클라이언트를 다시 시작하세요. 이 항목은 앱이 쓰는 Node로 앱의 브리지 사본을 실행하고 토큰은 파일에서 읽습니다. 토큰이 복사되지 않고, 다시 만든 토큰도 그대로 동작합니다:
+| 클라이언트 | 방법 |
+|---|---|
+| Claude Code | `claude mcp add sinawi --scope user -e SINAWI_URL=http://127.0.0.1:3001 -e SINAWI_MCP_TOKEN_FILE=<토큰 파일> -- <node> <브리지>` |
+| Codex | `codex mcp add sinawi --env SINAWI_URL=… --env SINAWI_MCP_TOKEN_FILE=… -- <node> <브리지>`, 또는 화면에 나오는 `[mcp_servers.sinawi]` 블록을 `~/.codex/config.toml`에 |
+| Grok Build | `grok mcp add sinawi -e SINAWI_URL=… -e SINAWI_MCP_TOKEN_FILE=… -- <node> <브리지>`, 확인은 `grok mcp doctor sinawi` |
+| Claude Desktop, Cursor | **Claude Desktop에 연결** / **Cursor에 연결** 버튼이 대신 써 줍니다(아래) |
+| 그 밖 | **그 밖의 MCP** 탭의 `mcpServers` JSON |
+
+`<브리지>`는 `<데이터 폴더>/hooks/sinawi-mcp.mjs`에 있는 브리지 사본으로, 앱을 옮기거나 업데이트해도 그대로입니다(`/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`도 됩니다). `<node>`는 앱이 쓰는 Node, `<토큰 파일>`은 `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`입니다. 토큰은 파일에서 읽기 때문에 구성에 토큰이 복사되지 않고, 다시 만든 토큰도 그대로 동작합니다. 그다음 클라이언트를 다시 시작하거나 새 세션을 여세요.
+
+**Claude Desktop·Cursor는 버튼 하나.** 버튼을 누르면 넣을 JSON을 그대로 보여 주고, **구성에 쓰기**를 누르면 `~/Library/Application Support/Claude/claude_desktop_config.json` 또는 `~/.cursor/mcp.json`에 합칩니다(없으면 만들고, 다른 키와 서버는 그대로 두고, 원래 파일은 `<파일>.bak`으로 복사하고, 올바른 JSON이 아닌 파일은 건드리지 않음). 그다음 클라이언트를 다시 시작하세요:
 
 ```json
 {
@@ -60,33 +70,31 @@ Grok Build에는 실행마다 MCP를 붙이는 옵션이 없어, Grok 담당은 
 }
 ```
 
-   이 버튼은 MCP 도구가 아니고, 쓰기는 앱 자신의 창에서 사용자가 확인한 JSON으로만 받습니다. AI가 다른 AI 클라이언트의 구성을 바꿀 수 없습니다.
+이 버튼은 MCP 도구가 아니고, 쓰기는 앱 자신의 창에서 사용자가 확인한 JSON으로만 받습니다. AI가 다른 AI 클라이언트의 구성을 바꿀 수 없습니다.
 
-2. **npx.** npm 패키지 [`@rakmlabs/sinawi`](../packages/sinawi)를 씁니다. 같은 화면의 **구성 복사**가 토큰이 채워진 다음 구성을 줍니다. Claude Desktop은 **설정 → 개발자 → 구성 편집**에 넣습니다:
+**npm 패키지가 게시된 뒤에는** `<node> <브리지>` 대신 `npx -y @rakmlabs/sinawi mcp`를 써도 됩니다. 아직 게시 전이라 지금은 `npx`가 404를 냅니다. 위 명령을 쓰세요.
 
-```json
-{
-  "mcpServers": {
-    "sinawi": {
-      "command": "npx",
-      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
-      "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
-    }
-  }
-}
-```
+모두 같은 파일 `packages/sinawi/lib/mcp.mjs`를 실행합니다. 저장소에서는 `npm run sinawi-mcp`도 같습니다. 환경변수는 [패키지 README](../packages/sinawi/README.md)에, 클라이언트별 안내는 [docs/mcp-clients.md](mcp-clients.md)에 있습니다.
 
-3. **앱 안의 브리지.** npm 없이 `"command": "node"`(또는 `which node`의 전체 경로), `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, `env`는 같습니다. 설정 화면의 "npx 없이 쓰는 구성"은 `<데이터 폴더>/hooks/sinawi-mcp.mjs` 사본을 가리키며, 앱을 옮기거나 업데이트해도 그대로입니다.
+### 담당에게 일 맡기기
 
-모두 같은 파일 `packages/sinawi/lib/mcp.mjs`를 실행합니다. 저장소에서는 `npm run sinawi-mcp`도 같습니다. 환경변수는 [패키지 README](../packages/sinawi/README.md)에 있습니다.
+지휘하는 AI의 보통 흐름:
+
+1. `list_leads` — 담당(프로젝트 주인)과 폴더 목록.
+2. `create_session`에 `lead_id`, `prompt`, 필요하면 `agent`(`claude`, `codex`, `grok`)와 `model` — 그 담당 아래 새 채팅을 열고 시작합니다. 담당의 폴더·지침·메모리는 모든 채팅이 함께 씁니다.
+3. `wait_for_session`에 채팅 id — 이번 턴이 끝나면(또는 `timeout_sec`가 지나면) 상태, 담당의 마지막 답, 그사이 메시지를 줍니다. `done`이 false면 아직 실행 중이니 `after_event_id`에 `lastEventId`를 넣어 다시 부릅니다.
+4. 이어서 하려면 같은 채팅에 `send_message`, 동시에 돌리려면 `create_session`을 한 번 더.
+5. `show_session`은 사용자에게 그 채팅을 봐 달라는 알림(누가 부탁했는지와 '채팅 열기')을 띄웁니다. 사용자가 다른 채팅·설정을 보거나 입력 중이면 화면을 바꾸지 않고, 빈 새 채팅 화면을 30초 넘게 그대로 두었을 때만 앱이 그 채팅으로 넘어갑니다.
+
+앱에서는 이 채팅이 담당 아래 탭으로 보이고 연 클라이언트 이름이 붙습니다. 사용자는 언제든 읽고 끼어들 수 있습니다.
 
 ### npm 패키지 `@rakmlabs/sinawi`
 
-`npx @rakmlabs/sinawi`는 앱을 설치하거나 업데이트합니다(최신 GitHub 릴리즈를 `codesign --verify --deep --strict`와 `spctl -a -t exec`로 확인하고, `/Applications/Sinawi.app`을 바꾸기 전에 묻습니다). `npx @rakmlabs/sinawi mcp`가 브리지입니다. 배포는 손으로 합니다. `packages/sinawi/package.json` 버전을 올린 뒤 **Actions → Publish sinawi (npm) → Run workflow**를 실행합니다(`.github/workflows/publish-sinawi.yml`, `NPM_TOKEN` 시크릿으로 `npm publish --provenance --access public`). `npm run pkg:pack`은 묶일 파일을 보여 주고, `npm run pkg:publish`는 로그인된 컴퓨터에서 provenance 없이 배포합니다.
+아직 게시 전입니다. 게시되면 `npx @rakmlabs/sinawi`가 앱을 설치하거나 업데이트하고(최신 GitHub 릴리즈를 `codesign --verify --deep --strict`와 `spctl -a -t exec`로 확인하고, `/Applications/Sinawi.app`을 바꾸기 전에 묻습니다), `npx @rakmlabs/sinawi mcp`가 브리지입니다. 배포는 손으로 합니다. `packages/sinawi/package.json` 버전을 올린 뒤 **Actions → Publish sinawi (npm) → Run workflow**를 실행합니다(`.github/workflows/publish-sinawi.yml`, `NPM_TOKEN` 시크릿으로 `npm publish --provenance --access public`). `npm run pkg:pack`은 묶일 파일을 보여 주고, `npm run pkg:publish`는 로그인된 컴퓨터에서 provenance 없이 배포합니다.
 
 ### 토큰
 
-토큰은 `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`(권한 0600)에 있습니다. 서버는 `SINAWI_MCP_TOKEN` → `SINAWI_MCP_TOKEN_FILE` → `$SINAWI_DATA_DIR/app-mcp-token` → 기본 경로 순서로 찾고 호출마다 다시 읽습니다. 같은 설정 화면의 **토큰 다시 만들기**를 누르면 이전 토큰은 바로 거부됩니다.
+토큰은 `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`(권한 0600)에 있습니다. 서버는 `SINAWI_MCP_TOKEN` → `SINAWI_MCP_TOKEN_FILE` → `$SINAWI_DATA_DIR/app-mcp-token` → 기본 경로 순서로 찾고 호출마다 다시 읽습니다. **설정 → 외부 AI 연결**의 **토큰 다시 만들기**를 누르면 이전 토큰은 바로 거부됩니다.
 
 ### 승인
 

@@ -216,6 +216,29 @@ fn macho_has_arm64(path: &Path) -> bool {
     }
 }
 
+/// This app's own executable (resolved), which the server trusts to collect the window's key.
+fn app_exe() -> String {
+    std::env::current_exe().ok().and_then(|path| fs::canonicalize(path).ok()).map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// Only an installed app manages the LaunchAgent: a release build whose (canonical) executable sits
+/// directly in an app bundle in `/Applications` or `~/Applications`. A bare `cargo build` binary
+/// (src-tauri/target/…) is a production build too and once replaced the user's installed server with a
+/// branch's when run; a bundle opened where `npm run app:build` leaves it (target/release/bundle/…)
+/// would do the same (third review N4). Debug builds never touch it.
+fn installed_app(exe: &str, home: &str) -> bool {
+    if cfg!(debug_assertions) { return false; }
+    installed_app_path(exe, home)
+}
+
+fn installed_app_path(exe: &str, home: &str) -> bool {
+    let user_apps = format!("{}/Applications/", home.trim_end_matches('/'));
+    let Some(rest) = exe.strip_prefix("/Applications/").or_else(|| if home.is_empty() { None } else { exe.strip_prefix(user_apps.as_str()) }) else { return false };
+    // `<Name>.app/Contents/MacOS/<binary>`, the bundle directly in the Applications folder.
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.len() == 4 && parts[0].ends_with(".app") && parts[0].len() > 4 && parts[1] == "Contents" && parts[2] == "MacOS" && !parts[3].is_empty()
+}
+
 /// The node binary an installed plist launches (first ProgramArguments string).
 fn plist_node(contents: &str) -> Option<String> {
     let rest = &contents[contents.find("<key>ProgramArguments</key>")?..];
@@ -228,6 +251,8 @@ fn plist_node(contents: &str) -> Option<String> {
 fn plist_outdated(layout: &Layout) -> bool {
     let Ok(c) = fs::read_to_string(&layout.plist) else { return true };
     if c.contains("/bin/zsh") || !c.contains("<key>PATH</key>") || !c.contains("<key>SINAWI_PORT</key>") { return true; }
+    // The server gives the window's key only to this binary (server/app-key.ts): it must know where it is.
+    if !c.contains(&format!("<key>SINAWI_APP_EXE</key><string>{}</string>", xml(&app_exe()))) { return true; }
     let Some(node) = plist_node(&c) else { return true };
     apple_silicon() && !macho_has_arm64(Path::new(&node)) && resolve_node_env().0 != node
 }
@@ -256,6 +281,7 @@ fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
     <key>SINAWI_STATIC_DIR</key><string>{dist}</string>
     <key>SINAWI_DATA_DIR</key><string>{data}</string>
     <key>SINAWI_SERVER_VERSION</key><string>{version}</string>
+    <key>SINAWI_APP_EXE</key><string>{app_exe}</string>
   </dict>
   <key>WorkingDirectory</key><string>{cwd}</string>
   <key>RunAtLoad</key><true/>
@@ -269,7 +295,7 @@ fn write_plist(layout: &Layout, version: &str) -> std::io::Result<()> {
 "#,
         server = s(&layout.server_dir.join("server.cjs")), dist = s(&layout.server_dir.join("dist")),
         data = s(&layout.data_dir), cwd = s(&layout.server_dir), version = xml(version),
-        node = xml(&node), path_env = xml(&path_env), home = xml(&std::env::var("HOME").unwrap_or_default()));
+        node = xml(&node), path_env = xml(&path_env), home = xml(&std::env::var("HOME").unwrap_or_default()), app_exe = xml(&app_exe()));
     fs::write(&layout.plist, plist)
 }
 
@@ -379,6 +405,10 @@ pub fn ensure(layout: Layout) -> Result<(), String> {
     let home = std::env::var("HOME").unwrap_or_default();
     if !home_matches_account(&home, account_home().as_deref()) {
         return Err(format!("HOME ({home}) is not this account's home folder; not touching the {LABEL} LaunchAgent"));
+    }
+    let exe = app_exe();
+    if !installed_app(&exe, &home) {
+        return Err(format!("{exe} is not an installed release app (an app bundle in /Applications or ~/Applications); not touching the {LABEL} LaunchAgent"));
     }
     let version = bundled_version(&layout);
     if loaded(&legacy_target()) {
@@ -503,6 +533,22 @@ mod tests {
         assert!(move_legacy_dir(&old2, &empty, "logs").unwrap().contains("moved"));
         assert!(empty.join("a").is_file());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_an_installed_app_bundle_manages_the_agent() {
+        assert!(installed_app_path("/Applications/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"));
+        assert!(installed_app_path("/Users/me/Applications/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"));
+        assert!(!installed_app_path("/Users/me/sinawi/src-tauri/target/debug/sinawi", "/Users/me"));
+        // The bundle `npm run app:build` leaves behind, opened from there (third review N4).
+        assert!(!installed_app_path("/Users/me/sinawi/src-tauri/target/release/bundle/macos/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"));
+        assert!(!installed_app_path("/Applications/Tools/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"), "only directly in Applications");
+        assert!(!installed_app_path("/Applications/Sinawi.app/Contents/MacOS/helpers/x", "/Users/me"));
+        assert!(!installed_app_path("/Applications/.app/Contents/MacOS/sinawi", "/Users/me"));
+        assert!(!installed_app_path("/tmp/Applications/Sinawi.app/Contents/MacOS/sinawi", ""));
+        assert!(!installed_app_path("", "/Users/me"));
+        // This test binary is a debug build: it never manages the agent, wherever it runs from.
+        assert!(!installed_app("/Applications/Sinawi.app/Contents/MacOS/sinawi", "/Users/me"));
     }
 
     #[test]

@@ -75,7 +75,7 @@ export function normalizeWorkspacePolicy(value: unknown, strict = false, base: W
     return structuredClone(base);
   }
   const input = value as Record<string, unknown>;
-  const flag = (key: "mediaGeneration" | "computerUse" | "grokMcp" | "fullAccess", label: string): boolean => {
+  const flag = (key: "mediaGeneration" | "computerUse" | "grokMcp" | "fullAccess" | "runtimePrograms", label: string): boolean => {
     if (input[key] == null) return base[key] ?? false;
     if (typeof input[key] === "boolean") return input[key] as boolean;
     if (strict) throw new WorkspacePolicyInputError(`${label} 설정이 올바르지 않습니다.`);
@@ -93,6 +93,7 @@ export function normalizeWorkspacePolicy(value: unknown, strict = false, base: W
     computerUse: flag("computerUse", "컴퓨터 조작"),
     grokMcp: flag("grokMcp", "Grok MCP 도구"),
     ...(flag("fullAccess", "전체 권한") ? { fullAccess: true } : {}),
+    ...(flag("runtimePrograms", "코드를 실행하는 명령 미리 허용") ? { runtimePrograms: true } : {}),
     blockedTools: input.blockedTools === undefined ? [...base.blockedTools] : toolList(input.blockedTools, strict, "차단 도구"),
     authAlertTools: input.authAlertTools === undefined ? [...base.authAlertTools] : toolList(input.authAlertTools, strict, "인증 알림 도구"),
     ...(mediaPrompt ? { mediaPrompt } : {}),
@@ -147,6 +148,14 @@ export function accountLoginCommand(agent: AgentId, dir?: string): string {
   const login = agent === "claude" ? "claude auth login" : agent === "codex" ? "codex login" : "grok login";
   if (!dir) return login;
   return `mkdir -p ${shellQuote(dir)} && ${ACCOUNT_ENV[agent]}=${shellQuote(dir)} ${login}`;
+}
+
+/**
+ * A CLI's own words for "you are not signed in" (first-run #4): the chat shows one error with a login
+ * button instead of the CLI's text followed by a bare exit code.
+ */
+export function loginNeededText(text: string): boolean {
+  return /\bnot (?:signed|logged) in\b|\bnot authenticated\b|\bunauthenticated\b|\b(?:authentication|login) required\b|\bplease (?:run \S+ )?(?:\/)?log ?in\b|\brun [`'"]?(?:claude|codex|grok)(?: auth)? login\b|invalid api key|로그인(?:이)? 필요|인증(?:이)? 필요/iu.test(text);
 }
 
 /** The account folder this workspace gives `agent`'s CLI runs; undefined is the default login. */

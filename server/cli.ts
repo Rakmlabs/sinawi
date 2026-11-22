@@ -1,7 +1,8 @@
 import { ensurePermissionServerScript, PERMISSION_TOOL, PROMPT_TIMEOUT_MS, permissionMcpConfig, registerRunActivity, unregisterRunActivity } from "./permission-prompts.js";
 import { claudeLeadServer, codexLeadArgs, ensureLeadServerScript, LEAD_MCP_RULE, LEAD_MCP_SERVER, LEAD_TOOL_TIMEOUT_MS, leadMcpLaunch, type LeadMcpLaunch } from "./lead-tools.js";
-import { cliChildEnv, DEVELOPMENT_SHELL_PROGRAMS } from "./supervision.js";
+import { cliChildEnv, GROK_UNREADABLE_PATTERNS, preapprovedPrograms, RISKY_SHELL_PATTERNS } from "./supervision.js";
 import { fullPath, resolveCli } from "./cli-path";
+import { forgetEndedCliGroups, recordCliGroup } from "./cli-ledger.js";
 import { envVar } from "./runtime.js";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -19,7 +20,19 @@ export interface CliInvocation {
   command: string;
   args: string[];
   cwd: string;
+  /** Written to the CLI's stdin (then closed) instead of passing the prompt as an argument. */
+  stdin?: string;
 }
+
+/** Prompts this large go through stdin where the CLI reads it, far below macOS's 1 MB ARG_MAX (env included). */
+export const STDIN_PROMPT_BYTES = 100_000;
+
+/** A prompt as one argv value: a leading `-` would be read as an option, so it gets a space in front. */
+export function promptArg(prompt: string): string {
+  return prompt.startsWith("-") ? ` ${prompt}` : prompt;
+}
+
+const viaStdin = (prompt: string) => Buffer.byteLength(prompt) > STDIN_PROMPT_BYTES;
 
 export interface RunCliOptions {
   agent: AgentId;
@@ -36,6 +49,8 @@ export interface RunCliOptions {
   readTools?: boolean;
   /** No approval prompts for this run (the workspace's opt-in "full access"); ignored when read-only. */
   fullAccess?: boolean;
+  /** "auto" runs start node, npx and python3 without asking (the workspace's opt-in, WorkspacePolicy.runtimePrograms). */
+  runtimePrograms?: boolean;
   resumeSessionId?: string;
   blockedMcp?: string[];
   /** MCP servers the workspace locks off; Grok also gets them disabled in the project config. */
@@ -96,7 +111,8 @@ function cliName(agent: AgentId): string {
   return configured || resolveCli(agent) || agent;
 }
 
-const developmentBashRules = DEVELOPMENT_SHELL_PROGRAMS.map((command) => `Bash(${command}:*)`);
+/** `Bash(program:*)` rules for what an "auto" run starts without asking (node/npx/python3 only where the workspace allows). */
+const developmentBashRules = (runtimePrograms?: boolean) => preapprovedPrograms(runtimePrograms).map((command) => `Bash(${command}:*)`);
 /** Read-only verification profile (see RunCliOptions.readTools). Plan mode still refuses edits. */
 export const CLAUDE_READ_TOOLS = ["Read", "Grep", "Glob", "Bash"] as const;
 export const GROK_READ_TOOLS = "read_file,list_dir,grep";
@@ -110,14 +126,25 @@ export const GROK_MCP_TOOLS = "search_tool,use_tool";
  */
 export const CLAUDE_READ_ONLY_BASH_RULES = ["git diff", "git status", "git log", "git show", "ls", "cat", "rg", "wc", "head", "tail"].map((command) => `Bash(${command}:*)`);
 export const CLAUDE_READ_ONLY_BASH_DENY = ["--output", "--ext-diff", "--textconv", "--pre"].map((flag) => `Bash(*${flag}*)`);
-const developmentCommandNames = developmentBashRules.map((rule) => rule.slice(5, -3));
 /** Nobody can approve a prompt in headless mode: a non-pre-approved shell command cancels the whole run. */
-export const grokHeadlessRules = [
-  "You run headless; nobody can approve permission prompts. A shell command that is not pre-approved CANCELS YOUR WHOLE RUN.",
-  `Pre-approved programs: ${developmentCommandNames.join(", ")}.`,
-  "Each run_terminal_command must be ONE simple command that starts with one of those programs: no `cd`, no `&&`/`;`/`||` chains, no `VAR=value` assignments, no `$(...)`, no for/while loops, no `bash -c`.",
-  "Use absolute paths or paths relative to the working directory instead of cd. Split multi-step work into several separate tool calls; write longer logic to a .py file and run it with python3.",
-].join(" ");
+/**
+ * What a Grok run is denied while the workspace does not pre-approve programs that run code: the
+ * runtime programs and their kin, plus the shells and wrappers that would start one of them
+ * (`bash -c "node …"`, `env node …`). Grok is told not to chain or wrap commands anyway.
+ */
+export const GROK_RUNTIME_DENIED = [
+  "node", "nodejs", "npx", "python", "python3", "npm", "pnpm", "pnpx", "yarn", "bun", "bunx", "deno", "tsx", "ts-node", "find", "ao-serve start",
+  "bash", "sh", "zsh", "dash", "env", "xargs", "exec", "command", "nohup", "timeout", "time", "nice", "perl", "ruby", "osascript",
+] as const;
+
+export function grokHeadlessRules(runtimePrograms?: boolean): string {
+  return [
+    "You run headless; nobody can approve permission prompts. A shell command that is not pre-approved CANCELS YOUR WHOLE RUN.",
+    `Pre-approved programs: ${preapprovedPrograms(runtimePrograms).join(", ")}.`,
+    "Each run_terminal_command must be ONE simple command that starts with one of those programs: no `cd`, no `&&`/`;`/`||` chains, no `VAR=value` assignments, no `$(...)`, no for/while loops, no `bash -c`.",
+    `Use absolute paths or paths relative to the working directory instead of cd. Split multi-step work into several separate tool calls${runtimePrograms ? "; write longer logic to a .py file and run it with python3" : "; node, npx, python3, npm, pnpm, yarn, find and ao-serve start are not pre-approved here (the user can allow them in the workspace settings): list files with rg --files or ls, and say in your answer which command the user should run"}.`,
+  ].join(" ");
+}
 
 /**
  * The CLI's own end-of-turn line (Claude `result`, Grok `end`). `claude -p` keeps running after it
@@ -145,15 +172,19 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     if (model) args.push("--model", model);
     if (reasoningEffort) args.push("-c", `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`);
     if (options.leadMcp && !readOnly) args.push(...codexLeadArgs(options.leadMcp));
-    if (resumeSessionId) args.push("resume", resumeSessionId, prompt);
-    else args.push(prompt);
+    // `codex exec -` reads the prompt from stdin; `exec resume` keeps it as an argument.
+    if (resumeSessionId) args.push("resume", resumeSessionId, promptArg(prompt));
+    else if (viaStdin(prompt)) return { command: cliName("codex"), args: [...args, "-"], cwd, stdin: prompt };
+    else args.push(promptArg(prompt));
     return { command: cliName("codex"), args, cwd };
   }
 
   if (agent === "claude") {
     const supports = (flag: string) => !options.claudeFlags || options.claudeFlags.has(flag);
     // Partial messages are only a liveness signal (long thinking is otherwise silent); normalizeCliLine drops them.
-    const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", ...(supports("--include-partial-messages") ? ["--include-partial-messages"] : [])];
+    // `claude -p` with no prompt argument reads it from stdin.
+    const stdin = viaStdin(prompt) ? prompt : undefined;
+    const args = ["-p", ...(stdin === undefined ? [promptArg(prompt)] : []), "--output-format", "stream-json", "--verbose", ...(supports("--include-partial-messages") ? ["--include-partial-messages"] : [])];
     if (model) args.push("--model", model);
     if (reasoningEffort) args.push("--effort", reasoningEffort);
     if (readOnly && readTools) args.push("--tools", ...CLAUDE_READ_TOOLS, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "plan", "--allowedTools", ...CLAUDE_READ_ONLY_BASH_RULES, "--disallowedTools", ...CLAUDE_READ_ONLY_BASH_DENY);
@@ -161,7 +192,7 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     else if (full) args.push("--dangerously-skip-permissions");
     // Sinawi's "auto": Claude Code's own auto mode where available, so ordinary commands (a loop,
     // `cd x && git log`) run without a question; only what it judges risky reaches the user.
-    else args.push("--permission-mode", options.claudeFlags?.has(CLAUDE_AUTO_MODE) ? "auto" : "acceptEdits", "--allowedTools", ...developmentBashRules);
+    else args.push("--permission-mode", options.claudeFlags?.has(CLAUDE_AUTO_MODE) ? "auto" : "acceptEdits", "--allowedTools", ...developmentBashRules(options.runtimePrograms));
     if (!readOnly && !full && options.claudeSettings && supports("--settings")) args.push("--settings", options.claudeSettings);
     for (const dir of extraDirs) args.push("--add-dir", dir);
     for (const dir of new Set(options.readOnlyDirs ?? [])) {
@@ -182,10 +213,10 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
       if (lead && !full) args.push("--allowedTools", LEAD_MCP_RULE);
     }
     if (resumeSessionId) args.push("--resume", resumeSessionId);
-    return { command: cliName("claude"), args, cwd };
+    return { command: cliName("claude"), args, cwd, ...(stdin === undefined ? {} : { stdin }) };
   }
 
-  const args = ["-p", prompt, "--output-format", "streaming-json", "--cwd", cwd];
+  const args = ["-p", promptArg(prompt), "--output-format", "streaming-json", "--cwd", cwd];
   if (model) args.push("--model", model);
   // Grok rejects extra directories ("additionalDirectories is not supported"); its read tools take
   // absolute paths, so the worktree paths in the review note are enough.
@@ -197,8 +228,15 @@ export function buildInvocation(options: Omit<RunCliOptions, "signal" | "onLine"
     // Headless Grok cancels the whole run when a command isn't pre-allowed (e.g. `cd x && ffprobe`);
     // "auto" lets its safety classifier approve routine commands while deny rules still apply.
     args.push("--permission-mode", "auto");
-    for (const rule of developmentBashRules) args.push("--allow", rule);
-    args.push("--rules", grokHeadlessRules);
+    for (const rule of developmentBashRules(options.runtimePrograms)) args.push("--allow", rule);
+    // Grok's auto mode decides unlisted commands with its own classifier, so "not pre-approved" alone
+    // does not keep it from running code (third review N3, H2-c): with the switch off, those programs
+    // and the shells and wrappers that would start them are denied outright.
+    if (!options.runtimePrograms) for (const program of GROK_RUNTIME_DENIED) args.push("--deny", `Bash(${program}:*)`);
+    // Fourth review R4-2: with the switch off, command text the shell only resolves when it runs.
+    if (!options.runtimePrograms) for (const pattern of GROK_UNREADABLE_PATTERNS) args.push("--deny", `Bash(${pattern})`);
+    for (const pattern of RISKY_SHELL_PATTERNS) args.push("--deny", `Bash(${pattern})`);
+    args.push("--rules", grokHeadlessRules(options.runtimePrograms));
   }
   for (const pattern of blockedMcp ?? []) args.push("--deny", pattern);
   if (resumeSessionId) args.push("--resume", resumeSessionId);
@@ -257,7 +295,7 @@ export async function prepareCliInvocation(
   // Writable Claude runs get the Bash pre-approval hook, bounded to their own folder (see claude-bash-hook.ts).
   if (options.agent === "claude" && !options.readOnly && !options.fullAccess && !options.claudeSettings && options.usageContext?.dataDir) {
     const script = await ensureBashHookScript(options.usageContext.dataDir).catch(() => undefined);
-    if (script) options = { ...options, claudeSettings: bashHookSettings(script, options.cwd) };
+    if (script) options = { ...options, claudeSettings: bashHookSettings(script, options.cwd, undefined, options.runtimePrograms) };
   }
   const locked = [...new Set(options.lockedMcp ?? [])];
   if (!locked.length) return buildInvocation(options);
@@ -601,9 +639,19 @@ export function accountEnv(agent: AgentId, dir: string | undefined): Record<stri
   return dir ? { [ACCOUNT_ENV[agent]]: dir } : {};
 }
 
+/**
+ * Whether a run may have the server start any command for it (`ao-serve start`, H2), which happens
+ * outside the CLI's own sandbox: full access, the workspace's opt-in, or Claude (which asks the user
+ * for each command not pre-approved) may; Codex and Grok in "auto" without the opt-in, and read-only
+ * runs, may not.
+ */
+export function mayStartCode(options: Pick<RunCliOptions, "agent" | "fullAccess" | "readOnly" | "runtimePrograms">): boolean {
+  return Boolean(options.fullAccess || (!options.readOnly && (options.runtimePrograms || options.agent === "claude")));
+}
+
 export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
   // SINAWI_SESSION_ID (display) + a per-run SINAWI_COMPUTER_TOKEN: ao-computer is attributed by the token only.
-  const computerEnv = computerRunEnv(options.agent, options.usageContext);
+  const computerEnv = computerRunEnv(options.agent, options.usageContext, process.env, mayStartCode(options));
   const token = computerEnv.SINAWI_COMPUTER_TOKEN;
   // Writable Claude runs ask the user through the app when a tool needs permission (permission-prompts.ts).
   if (options.agent === "claude" && token && !options.readOnly && !options.fullAccess && !options.permissionMcp && options.usageContext?.dataDir) {
@@ -628,9 +676,16 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
       cwd: invocation.cwd,
       // A permission question waits for the user; Claude must not give up on that MCP call first.
       env: cliChildEnv(process.env, { PATH: fullPath(), CI: "1", ...computerEnv, ...accountEnv(options.agent, options.accountDir), ...(options.permissionMcp || options.leadMcp ? { MCP_TOOL_TIMEOUT: String(Math.max(options.permissionMcp ? PROMPT_TIMEOUT_MS : 0, options.leadMcp ? LEAD_TOOL_TIMEOUT_MS : 0) + 60_000) } : {}) }),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    if (process.platform !== "win32") recordCliGroup(child.pid, invocation.command);
+    // The cast above only types stdout/stderr; stdin is a pipe exactly when there is a prompt for it.
+    const input = (child as unknown as { stdin: import("node:stream").Writable | null }).stdin;
+    if (invocation.stdin !== undefined && input) {
+      input.on("error", () => undefined); // the CLI may exit before reading it all
+      input.end(invocation.stdin);
+    }
 
     let finalText = "";
     let sessionId: string | undefined;
@@ -730,7 +785,7 @@ export async function runCli(options: RunCliOptions): Promise<CliRunResult> {
     liveCliGroups.add(killProcessGroup);
     installExitHook();
     // Once the run is over and no SIGKILL escalation is pending, the group is no longer ours to signal.
-    const releaseGroup = () => { if (!escalationTimer) liveCliGroups.delete(killProcessGroup); };
+    const releaseGroup = () => { if (!escalationTimer) liveCliGroups.delete(killProcessGroup); forgetEndedCliGroups(); };
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();
 

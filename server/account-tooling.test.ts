@@ -15,7 +15,7 @@ test("account skills install both app skills directly into each CLI account", as
       assert.match(await readFile(join(account, "skills", name, "SKILL.md"), "utf8"), new RegExp(`name: ${name}`));
     }
     await installAccountSkills(accounts);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("MCP discovery and edits use account env and the account Codex config", async () => {
@@ -38,7 +38,7 @@ test("MCP discovery and edits use account env and the account Codex config", asy
     assert.match(await readFile(file, "utf8"), /enabled = false/);
     await updateMcpTool({ agent: "grok", name: "docs", enabled: false }, { runner, accounts });
     assert.equal(calls.at(-1)?.env?.GROK_HOME, accounts.grok);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("concurrent Codex MCP edits preserve every requested change", async () => {
@@ -55,5 +55,5 @@ test("concurrent Codex MCP edits preserve every requested change", async () => {
     const updated = await readFile(config, "utf8");
     assert.match(updated, /\[mcp_servers\.docs\][\s\S]*?enabled = false/);
     assert.match(updated, /\[mcp_servers\.search\][\s\S]*?enabled = false/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });

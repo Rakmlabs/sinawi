@@ -37,13 +37,23 @@ Grok Build has no per-run MCP option, so a Grok lead uses the text tag protocol 
 
 ## App-wide MCP for other AIs
 
-Sinawi also serves its features as an MCP server for other AI clients such as Claude Desktop and Cursor: chats, leads, schedules, workspaces, groups, bots, notifications, skills, settings and more.
+Sinawi also serves its features as an MCP server, so another AI can be the orchestrator: Claude Code, Codex, Grok Build, Claude Desktop, Cursor or any MCP client can open chats under a lead, send work to a specific chat, pick the agent and model, wait for the result and read it. Every chat it opens shows up live in the app with the client's name, and you can keep talking in it. The same server also covers leads, schedules, workspaces, groups, bots, notifications, skills and settings.
 
-### Connect Claude Desktop or Cursor
+### Connect
 
-Sinawi must be running. Three ways, easiest first:
+Sinawi must be running. Open **Settings → Connect an AI**, pick your client and copy what it shows; the paths and port are already filled in for your Mac. With the app in `/Applications` they look like this:
 
-1. **One click.** In Sinawi, open **Settings → General → External AI connection (MCP)** and press **Connect to Claude Desktop** or **Connect to Cursor**. A dialog shows the exact JSON; on **Write config** Sinawi merges it into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json` (created when missing; every other key and server stays; the original is copied to `<file>.bak`; a file that is not valid JSON is left alone). Then restart the client. The entry runs the app's copy of the bridge with the Node the app uses and reads the token from its file, so no token is copied and a renewed token keeps working:
+| Client | How |
+|---|---|
+| Claude Code | `claude mcp add sinawi --scope user -e SINAWI_URL=http://127.0.0.1:3001 -e SINAWI_MCP_TOKEN_FILE=<token file> -- <node> <bridge>` |
+| Codex | `codex mcp add sinawi --env SINAWI_URL=… --env SINAWI_MCP_TOKEN_FILE=… -- <node> <bridge>`, or the `[mcp_servers.sinawi]` block the page shows, in `~/.codex/config.toml` |
+| Grok Build | `grok mcp add sinawi -e SINAWI_URL=… -e SINAWI_MCP_TOKEN_FILE=… -- <node> <bridge>`; check with `grok mcp doctor sinawi` |
+| Claude Desktop, Cursor | **Connect to Claude Desktop** / **Connect to Cursor** writes the entry for you (below) |
+| Anything else | the `mcpServers` JSON on the **Other MCP** tab |
+
+`<bridge>` is the copy of the bridge in `<data folder>/hooks/sinawi-mcp.mjs`, which stays put when the app is moved or updated (`/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs` works too). `<node>` is the Node the app uses. `<token file>` is `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`. The entry reads the token from its file, so no token is copied into a config and a renewed token keeps working. Then restart the client or open a new session.
+
+**Claude Desktop and Cursor, one click.** The button shows the exact JSON; on **Write config** Sinawi merges it into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json` (created when missing; every other key and server stays; the original is copied to `<file>.bak`; a file that is not valid JSON is left alone). Then restart the client:
 
 ```json
 {
@@ -60,33 +70,31 @@ Sinawi must be running. Three ways, easiest first:
 }
 ```
 
-   These buttons are not MCP tools, and the write is accepted only from the app's own window with the JSON you confirmed: an AI cannot rewire another AI client.
+These buttons are not MCP tools, and the write is accepted only from the app's own window with the JSON you confirmed: an AI cannot rewire another AI client.
 
-2. **npx**, with the npm package [`@rakmlabs/sinawi`](../packages/sinawi). **Copy config** on the same screen gives this with the token filled in; in Claude Desktop add it under **Settings → Developer → Edit Config**:
+**After the npm package is published**, `npx -y @rakmlabs/sinawi mcp` can stand in for `<node> <bridge>`. It is not published yet, so today `npx` answers 404; use the commands above.
 
-```json
-{
-  "mcpServers": {
-    "sinawi": {
-      "command": "npx",
-      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
-      "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
-    }
-  }
-}
-```
+All of these run one file, `packages/sinawi/lib/mcp.mjs`; from a checkout `npm run sinawi-mcp` runs it too. The [package README](../packages/sinawi/README.md) lists the environment variables. [docs/mcp-clients.md](mcp-clients.md) has a page per client.
 
-3. **The bridge inside the app**, no npm: `"command": "node"` (or the full path from `which node`), `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, same `env`. The settings screen also offers a "without npx" config that points at the copy in `<data folder>/hooks/sinawi-mcp.mjs`, which stays put when the app is moved or updated.
+### Hand work to a lead
 
-All of these run one file, `packages/sinawi/lib/mcp.mjs`; from a checkout `npm run sinawi-mcp` runs it too. The [package README](../packages/sinawi/README.md) lists the environment variables.
+The usual loop for an orchestrator:
+
+1. `list_leads` — the leads (project owners) and their folders.
+2. `create_session` with `lead_id`, a `prompt`, and optionally `agent` (`claude`, `codex`, `grok`) and `model` — opens a new chat under that lead and starts it. The lead's folder, instructions and memory are shared by all its chats.
+3. `wait_for_session` with the chat id — returns when the turn ends (or after `timeout_sec`) with the status, the lead's last answer and the messages since. If `done` is false it is still running: call again with `after_event_id` set to `lastEventId`.
+4. `send_message` to the same chat to continue, or `create_session` again for a parallel chat.
+5. `show_session` notifies the user (who asks, with an "open chat" button). The app switches to the chat by itself only when the user has left an empty new-chat screen untouched for 30 seconds; while they look at another chat or settings, or are typing, their screen stays.
+
+In the app the chat appears as a tab under the lead, labelled with the client that opened it; the user can read along and type into it at any time.
 
 ### The `@rakmlabs/sinawi` npm package
 
-`npx @rakmlabs/sinawi` installs or updates the app (latest GitHub release, checked with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`); `npx @rakmlabs/sinawi mcp` is the bridge. It is published by hand: bump `packages/sinawi/package.json`, then run **Actions → Publish sinawi (npm) → Run workflow** (`.github/workflows/publish-sinawi.yml`: `npm publish --provenance --access public` with the `NPM_TOKEN` secret). `npm run pkg:pack` shows what would be packed; `npm run pkg:publish` publishes from a logged-in machine without provenance.
+Not published yet. Once it is, `npx @rakmlabs/sinawi` installs or updates the app (latest GitHub release, checked with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`) and `npx @rakmlabs/sinawi mcp` is the bridge. It is published by hand: bump `packages/sinawi/package.json`, then run **Actions → Publish sinawi (npm) → Run workflow** (`.github/workflows/publish-sinawi.yml`: `npm publish --provenance --access public` with the `NPM_TOKEN` secret). `npm run pkg:pack` shows what would be packed; `npm run pkg:publish` publishes from a logged-in machine without provenance.
 
 ### Token
 
-The token is stored in `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token` (mode 0600). The server looks for it in `SINAWI_MCP_TOKEN`, then `SINAWI_MCP_TOKEN_FILE`, then `$SINAWI_DATA_DIR/app-mcp-token`, then that default path, and rereads it on every call. **Make a new token** on the same settings screen rejects the old token immediately.
+The token is stored in `~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token` (mode 0600). The server looks for it in `SINAWI_MCP_TOKEN`, then `SINAWI_MCP_TOKEN_FILE`, then `$SINAWI_DATA_DIR/app-mcp-token`, then that default path, and rereads it on every call. **Make a new token** on **Settings → Connect an AI** rejects the old token immediately.
 
 ### Approvals
 

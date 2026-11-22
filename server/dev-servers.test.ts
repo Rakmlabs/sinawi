@@ -8,7 +8,8 @@ import test from "node:test";
 import express from "express";
 import { clearComputerTokens, issueComputerToken } from "./computer-tokens.js";
 import { DevServerManager, devServerEnv, portOpen } from "./dev-servers.js";
-import { parseServeArgv, registerServeRoutes, SERVE_CLI_SOURCE } from "./serve-tool.js";
+import { CODE_RUNS_OFF, handleServe, parseServeArgv, registerServeRoutes, SERVE_CLI_SOURCE } from "./serve-tool.js";
+import { mayStartCode } from "./cli.js";
 
 async function freePort(): Promise<number> {
   return new Promise((resolve) => {
@@ -55,7 +56,7 @@ test("an app-owned dev server waits for its port, is reused by name, and stops w
     assert.equal(await loopbackOpen(port), false);
   } finally {
     devServers.stopAll("SIGKILL");
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -75,7 +76,7 @@ test("a dev server that exits at once reports its log; a busy port is refused", 
   } finally {
     busy.close();
     devServers.stopAll("SIGKILL");
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -90,7 +91,7 @@ test("removing a session stops its dev servers", async () => {
     assert.throws(() => process.kill(pid, 0));
   } finally {
     devServers.stopAll("SIGKILL");
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -137,7 +138,7 @@ test("the generated ao-serve script starts and lists a server through the app wi
     http.close();
     devServers.stopAll("SIGKILL");
     clearComputerTokens();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -145,4 +146,44 @@ test("dev servers do not inherit CI, so Metro keeps watching files", () => {
   const env = devServerEnv({ CI: "1", PATH: "/usr/bin" });
   assert.equal(env.CI, undefined);
   assert.equal(env.PATH, "/usr/bin");
+});
+
+test("a dev server's log is cut to its newest part when it grows past the cap, and keeps growing after", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "sinawi-serve-log-"));
+  const devServers = new DevServerManager({ logDir: join(dir, "logs"), env: () => process.env, settleMs: 300, logCap: 4096 });
+  t.after(async () => { devServers.stopAll("SIGKILL"); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+  const started = await devServers.start("session-log", { name: "noisy", command: `node -e "let i=0; setInterval(() => process.stdout.write('line ' + (i++) + ' ' + 'x'.repeat(100) + '\\n'), 2)"`, cwd: dir });
+  assert.equal(started.ok, true, JSON.stringify(started));
+  const { statSync, readFileSync } = await import("node:fs");
+  const file = devServers.list("session-log")[0].log;
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.ok(statSync(file).size > 4096);
+  devServers.trimLogs();
+  const trimmed = readFileSync(file, "utf8");
+  assert.ok(statSync(file).size < 4096, `trimmed to ${statSync(file).size}`);
+  assert.match(trimmed, /older log lines dropped/u);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const after = readFileSync(file, "utf8");
+  // A line the server writes between the cut and the rewrite may land first; the marker stays near the top.
+  const marker = after.indexOf("[sinawi:");
+  assert.ok(marker >= 0 && marker < 1024, "new lines are appended after the kept part, not written over it");
+  assert.ok(after.length > trimmed.length, "the log keeps growing after the cut");
+  assert.ok(!after.includes("\u0000"), "no hole of zero bytes");
+});
+
+// H2: ao-serve start runs any command outside the CLI's sandbox; Codex in auto mode reaches it through
+// the file queue, so the server itself refuses a run that was not given that right.
+test("ao-serve start is refused for a run that may not start code, and list still works", async () => {
+  let started = 0;
+  const manager = { start: async () => { started++; throw new Error("must not start"); }, list: () => [] } as unknown as DevServerManager;
+  const token = issueComputerToken({ sessionId: "s-h2", workspaceId: "default", agent: "codex", codeRuns: mayStartCode({ agent: "codex" }) });
+  const refused = await handleServe(manager, "start", { token, name: "x", command: "sh -c id" });
+  assert.deepEqual(refused, { ok: false, error: CODE_RUNS_OFF });
+  assert.equal(started, 0);
+  assert.deepEqual(await handleServe(manager, "list", { token }), { ok: true, result: [] });
+  assert.equal(mayStartCode({ agent: "codex", runtimePrograms: true }), true, "the workspace's opt-in");
+  assert.equal(mayStartCode({ agent: "codex", fullAccess: true }), true);
+  assert.equal(mayStartCode({ agent: "grok" }), false);
+  assert.equal(mayStartCode({ agent: "claude" }), true, "Claude asks the user for each command");
+  assert.equal(mayStartCode({ agent: "claude", readOnly: true }), false);
 });

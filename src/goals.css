@@ -83,7 +83,7 @@
 .lead-message .message-author svg { color: var(--accent-fg); }
 .lead-message .message-text { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-subtle, transparent); }
 .steward-divider svg { color: var(--accent-fg); }
-.minimal-empty-note { max-width: 520px; margin: 0 auto 12px; color: var(--text-muted); text-align: center; }
+.minimal-empty-note { max-width: 520px; margin: 0 auto 12px; color: var(--text-muted); text-align: center; word-break: keep-all; text-wrap: balance; }
 .minimal-empty h2 svg { vertical-align: -3px; color: var(--accent-fg); }
 .steward-settings label.steward-accept { display: flex; flex-direction: row; align-items: center; gap: 6px; color: var(--text-secondary); }
 
@@ -153,3 +153,6 @@
 .schedule-card.missed { border-style: dashed; }
 .schedule-turn > summary { cursor: pointer; list-style: none; }
 .schedule-turn > .message-text { margin-top: 6px; text-align: left; }
+.lead-pick-folder { display: inline-flex; align-items: center; gap: 6px; margin: 4px auto 14px; }
+.steward-picker-title { max-width: 620px; margin: 4px auto 8px; color: var(--text-muted); font-size: calc(13px * var(--font-scale)); text-align: left; }
+.steward-picker-title strong { color: var(--text); font-weight: 600; }

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { APP_TOOLS, injectRequest, LEAD_TOOL_NAMES, nameLookup, namedLabel, ROUTE_EXCLUSIONS, toolsFor } from "./app-tools.js";
 import { appMcpTokenPath } from "./app-mcp.js";
@@ -20,7 +20,7 @@ async function fixture(t: test.TestContext, sessions: Session[] = []) {
   const directory = await mkdtemp(join(tmpdir(), "sinawi-app-tools-"));
   if (sessions.length) await saveSessions(sessions, directory);
   const created = createServer({ dataDir: directory, modelHomeDir: directory, staticDir: directory, availableAgents: [], modelRunner: async () => { throw new Error("No CLI in fixture"); }, routingSkillLoader: async () => [] });
-  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { created.httpServer.close(); created.websocket.close(); await new Promise((resolve) => setTimeout(resolve, 100)); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => injectRequest(created.app as never, method, path, body, headers) as Promise<{ status: number; body: any }>;
   return { directory, ...created, call };
 }
@@ -110,9 +110,23 @@ test("the external MCP endpoint refuses a missing or wrong token and answers wit
   assert.equal(connection.body.config.mcpServers.sinawi.command, "npx", "the config runs the npm package");
   assert.deepEqual(connection.body.config.mcpServers.sinawi.args, ["-y", "@rakmlabs/sinawi", "mcp"]);
   const alternative = connection.body.scriptConfig.mcpServers.sinawi;
-  assert.equal(alternative.command, process.execPath, "the alternative runs the app's copy with Node, without npx");
+  assert.match(alternative.command, /hooks\/sinawi-node$/u, "the alternative runs the app's copy through the Node launcher, without npx");
   assert.equal(alternative.args[0], connection.body.script);
   assert.equal(alternative.env.SINAWI_MCP_TOKEN, token);
+  // Per-client setup: the app's copy of the bridge, the token read from its file, never written in.
+  const clients = connection.body.clients as Array<{ id: string; command?: string; config?: string }>;
+  assert.deepEqual(clients.map((client) => client.id), ["claude-code", "codex", "grok", "claude-desktop", "cursor", "other"]);
+  for (const client of clients) {
+    const text = `${client.command ?? ""}\n${client.config ?? ""}`;
+    assert.ok(text.includes(connection.body.script), client.id);
+    assert.ok(text.includes("SINAWI_MCP_TOKEN_FILE"), client.id);
+    assert.ok(!text.includes(token), `${client.id} has no token in it`);
+    assert.ok(!text.includes("npx"), `${client.id} does not need the unpublished npm package`);
+  }
+  assert.match(clients[0].command!, /^claude mcp add sinawi --scope user -e SINAWI_URL=\S+ -e '?SINAWI_MCP_TOKEN_FILE=.+ -- \S+ \S+$/u);
+  assert.match(clients[1].command!, /^codex mcp add sinawi --env /u);
+  assert.match(clients[2].command!, /^grok mcp add sinawi -e /u);
+  assert.match(clients[1].config!, /^\[mcp_servers\.sinawi\]\ncommand = /u);
   const rotated = await call("POST", "/api/app-mcp/token");
   assert.notEqual(rotated.body.token, token);
   assert.equal((await call("POST", "/api/app-mcp", rpc(2, "tools/list"), { authorization: `Bearer ${token}` })).status, 401, "old token");
@@ -191,7 +205,7 @@ test("app tools reuse the routes' validation and return what the AI needs", asyn
 
 test("a lead's run gets the lead tools and the app tools; its approvals land in its chat", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-app-tools-lead-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const lead: Session = {
     id: "lead-1", title: "담당", agent: "codex", workers: ["claude"], cwd, status: "done", createdAt: "2026-01-01T00:00:00.000Z",
     workspaceId: "default", skills: [], events: [], steward: { turns: 1, since: "2026-01-01T00:00:00.000Z", name: "api" },
@@ -224,7 +238,7 @@ test("a lead's run gets the lead tools and the app tools; its approvals land in 
 
 test("a lead MCP get_lead name resolves in the calling lead's workspace", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "sinawi-app-tools-lead-name-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+  t.after(() => rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const lead = (id: string, workspaceId: string, prompt: string): Session => ({
     id, title: id, agent: "codex", workers: ["claude"], cwd, status: "done",
     createdAt: id === "home" ? "2026-01-01T00:00:00.000Z" : "2026-01-02T00:00:00.000Z",
@@ -339,4 +353,48 @@ test("lead tools default to the caller's workspace: list_leads lists it, create_
   assert.deepEqual(calls.slice(3).map((call) => (call.body as { workspaceId?: string }).workspaceId), ["side", "default", "default"]);
   assert.match(tool("list_leads").description, /워크스페이스 안에서 고유/u);
   assert.match(tool("get_session_lead").description, /같은 워크스페이스 안에서만/u);
+});
+
+test("shell words with spaces or quotes are quoted for a terminal", async () => {
+  const { shellWord } = await import("./app-mcp.js");
+  assert.equal(shellWord("/usr/bin/node"), "/usr/bin/node");
+  assert.equal(shellWord("/Users/me/Library/Application Support/x"), "'/Users/me/Library/Application Support/x'");
+  assert.equal(shellWord("it's"), `'it'\\''s'`);
+});
+
+test("a lead's skill in the repo waits for the user's approval; its own skills do not (review M1.3)", async () => {
+  const { findTool, needsApproval } = await import("./app-tools");
+  const write = findTool("lead", "write_skill")!;
+  const update = findTool("lead", "update_skill")!;
+  assert.equal(needsApproval(write, { name: "a", scope: "project" }), true);
+  assert.equal(needsApproval(update, { name: "a", scope: "project" }), true);
+  assert.equal(needsApproval(write, { name: "a" }), false);
+  assert.equal(needsApproval(write, { name: "a", scope: "lead" }), false);
+  assert.match(write.summary!({ name: "shared", description: "모두 쓰는 규칙", scope: "project" }, {} as never), /프로젝트 스킬 shared/u);
+});
+
+test("an in-process call whose outer caller hangs up closes the route's response (review L2)", async () => {
+  const { injectRequest } = await import("./app-tools");
+  let closed = false;
+  const handler = ((_req: unknown, res: import("node:http").ServerResponse) => { res.on("close", () => { closed = true; }); }) as never;
+  const hangUp = new AbortController();
+  const call = injectRequest(handler, "GET", "/api/sessions/x/wait", undefined, {}, 60_000, true, hangUp.signal);
+  hangUp.abort();
+  await assert.rejects(call, /연결을 끊었습니다/u);
+  assert.equal(closed, true, "the waiting route sees the close and stops");
+});
+
+test("the Node launcher outlives a removed Node: it falls back to the node on PATH (review L7)", async (t) => {
+  const { installAppMcpLauncher } = await import("./app-mcp");
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const dir = await mkdtemp(join(tmpdir(), "sinawi-launcher-"));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const launcher = await installAppMcpLauncher(dir, join(dir, "gone", "node"));
+  const script = join(dir, "hello.mjs");
+  await writeFile(script, "console.log('bridge ran', process.argv.length)");
+  const run = spawnSync(launcher, [script], { encoding: "utf8", env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /bridge ran/u);
 });

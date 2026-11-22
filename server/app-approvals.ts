@@ -35,6 +35,8 @@ export interface AppApproval {
 }
 
 const KEEP_DECIDED = 200;
+/** An approval older than this is not run: the chat, settings or files it names may have changed since. */
+export const APPROVAL_TTL_MS = 24 * 60 * 60_000;
 const RESULT_LIMIT = 4_000;
 
 export function approvalResultText(value: unknown): string {
@@ -106,6 +108,9 @@ export class ApprovalStore {
     item.decidedAt = new Date().toISOString();
     if (!approve) {
       item.status = "rejected";
+    } else if (Date.now() - Date.parse(item.createdAt) > APPROVAL_TTL_MS) {
+      item.status = "failed";
+      item.error = "24시간이 지난 승인 요청이라 실행하지 않았습니다. 필요하면 다시 요청하게 하세요. / Expired after 24 hours; ask for it again.";
     } else {
       item.status = "approved";
       // On disk as decided before the tool runs: a crash or restart mid-run must not bring it back as
@@ -122,6 +127,6 @@ export class ApprovalStore {
 
 /** Who asked, as the user knows them: "담당 '백엔드'", "담당" or "외부 AI" (the particle is the caller's). */
 export function approvalRequester(item: Pick<AppApproval, "source" | "requester">): string {
-  if (item.source !== "lead") return "외부 AI";
+  if (item.source !== "lead") return item.requester?.trim() ? `외부 AI '${item.requester.trim()}'` : "외부 AI";
   return item.requester?.trim() ? `담당 '${item.requester.trim()}'` : "담당";
 }

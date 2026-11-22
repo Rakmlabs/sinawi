@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, readSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
@@ -60,7 +60,30 @@ export class DevServerManager {
     onEvent?: (sessionId: string, text: string) => void;
     readyMs?: number;
     settleMs?: number;
+    /** Bytes a server's log may grow to before its older part is dropped (default 10 MB). */
+    logCap?: number;
   }) {}
+
+  private trimmer?: NodeJS.Timeout;
+
+  /** A dev server left on for days must not fill the disk: keep the newest part of each log. */
+  trimLogs(): void {
+    const cap = this.opts.logCap ?? 10 * 1024 * 1024;
+    for (const server of this.servers.values()) {
+      try {
+        const size = statSync(server.log).size;
+        if (size <= cap) continue;
+        const keep = Math.min(Math.floor(cap / 4), size);
+        const buffer = Buffer.alloc(keep);
+        const fd = openSync(server.log, "r");
+        try { readSync(fd, buffer, 0, keep, size - keep); } finally { closeSync(fd); }
+        // The server writes in append mode, so its next line lands after what is kept here. A line it
+        // writes between the cut and this rewrite can land first or be lost: acceptable for a log.
+        truncateSync(server.log, 0);
+        appendFileSync(server.log, Buffer.concat([Buffer.from(`[sinawi: 로그가 커서 앞부분을 지웠습니다 / older log lines dropped]\n`), buffer]));
+      } catch { /* the log is gone or unreadable: nothing to trim */ }
+    }
+  }
 
   private key(sessionId: string, name: string) { return `${sessionId}\u0000${name}`; }
 
@@ -85,7 +108,9 @@ export class DevServerManager {
     }
     mkdirSync(this.opts.logDir, { recursive: true });
     const log = join(this.opts.logDir, `${sessionId.slice(0, 8)}-${name}.log`);
-    const fd = openSync(log, "w");
+    writeFileSync(log, "");
+    // Append mode: trimLogs can cut the file while the server keeps writing at its end.
+    const fd = openSync(log, "a");
     let child;
     try {
       // Own process group: stop() ends the dev server and everything it started (turbo, vite, …).
@@ -101,6 +126,7 @@ export class DevServerManager {
     child.unref();
     const server: DevServer = { sessionId, name, command, cwd: input.cwd, port: input.port, pid, log, startedAt: new Date().toISOString() };
     this.servers.set(this.key(sessionId, name), server);
+    if (!this.trimmer) { this.trimmer = setInterval(() => this.trimLogs(), 60_000); this.trimmer.unref(); }
     const ready = await this.waitReady(server);
     if (!alive(pid)) {
       this.servers.delete(this.key(sessionId, name));

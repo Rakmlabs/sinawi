@@ -8,6 +8,7 @@ import { defaultWorkspacePolicy, mediaBlockedMessage } from "./workspace-policy.
 import type { RunCliOptions } from "./cli.js";
 import type { AgentId } from "./types.js";
 import { publicSkills } from "./skills.js";
+import { onAbort } from "./test-abort.js";
 
 // No workspace id is special. These tests configure "company" the way an old install's migration does:
 // Codex off and media generation off, through the same resolvers the server passes.
@@ -64,7 +65,7 @@ test("orchestrator runs selected worker and sends its result back", async () => 
   const session = await orchestra.create({ prompt: "Do work", agent: "codex", workers: ["claude"], cwd });
 
   await new Promise<void>((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error("session timeout")), 5_000);
+    const deadline = setTimeout(() => reject(new Error("session timeout")), 15_000);
     const poll = () => {
       if (session.status !== "running") { clearTimeout(deadline); resolve(); }
       else setTimeout(poll, 5);
@@ -587,10 +588,10 @@ test("stop aborts an active CLI run and reaches stopped state", async () => {
   let markStarted!: () => void;
   const started = new Promise<void>((resolve) => { markStarted = resolve; });
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
-    options.signal?.addEventListener("abort", () => {
+    onAbort(options.signal, () => {
       observedAbort = true;
       resolve({ exitCode: 143, finalText: "" });
-    }, { once: true });
+    });
     markStarted();
   });
   const orchestra = new Orchestra(() => undefined, runner);
@@ -603,42 +604,65 @@ test("stop aborts an active CLI run and reaches stopped state", async () => {
   assert.equal(session.events.at(-1)?.text, "중지됨");
 });
 
-test("an inactive run is aborted and reported as an error", async () => {
+// The watchdog runs on mocked time and fires only once the runner is running. With a real 20 ms
+// timer a loaded machine could spend longer than that in the steps before the runner (routing,
+// skills), so the watchdog failed the run before the runner was called and the runner never saw
+// the abort (fourth review: orchestra.test.ts:622 under two parallel suites).
+test("an inactive run is aborted and reported as an error", async (t) => {
   let observedAbort = false;
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
-    options.signal?.addEventListener("abort", () => {
+    onAbort(options.signal, () => {
       observedAbort = true;
       resolve({ exitCode: 143, finalText: "" });
-    }, { once: true });
+    });
+    started();
   });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const orchestra = new Orchestra(
     undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 20,
   );
   const session = await orchestra.create({ prompt: "Silent task", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await running;
+  assert.equal(observedAbort, false, "nothing aborts the run before the watchdog's time passes");
+  t.mock.timers.tick(25);
+  t.mock.timers.reset();
 
-  await waitUntilSettled(session);
+  await waitUntilSettled(session, orchestra);
 
   assert.equal(observedAbort, true);
   assert.equal(session.status, "error");
   assert.match(session.events.at(-1)?.text ?? "", /새 이벤트가 없어 작업을 중단했습니다/);
 });
 
-test("run output resets the inactivity watchdog", async () => {
+// Mocked time from the runner's start, for the same reason as the test above: the steps before the
+// runner must not eat into the watchdog's 200 ms.
+test("run output resets the inactivity watchdog", async (t) => {
   let observedAbort = false;
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
     const first = setTimeout(() => options.onLine({ type: "status", text: "still working" }), 120);
     const second = setTimeout(() => resolve({ exitCode: 0, finalText: "done" }), 240);
-    options.signal?.addEventListener("abort", () => {
+    onAbort(options.signal, () => {
       observedAbort = true;
       clearTimeout(first);
       clearTimeout(second);
       resolve({ exitCode: 143, finalText: "" });
-    }, { once: true });
+    });
+    started();
   });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const orchestra = new Orchestra(
     undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 200,
   );
   const session = await orchestra.create({ prompt: "Active task", agent: "codex", workers: ["claude"], cwd: process.cwd() });
+  await running;
+  // 120 ms: a line re-arms the watchdog; 240 ms: done, past the first 200 ms but within the second.
+  t.mock.timers.tick(120);
+  t.mock.timers.tick(120);
+  t.mock.timers.reset();
 
   await waitUntilSettled(session);
 
@@ -790,11 +814,12 @@ test("company bot conversations reject Codex before starting a CLI", async () =>
   assert.equal(calls, 0);
 });
 
-async function waitUntilSettled(session: { status: string }) {
+/** With `orchestra`, also waits out the moment between create() returning and the run flipping to running. */
+async function waitUntilSettled(session: { id?: string; status: string }, orchestra?: Orchestra) {
   await new Promise<void>((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error("session timeout")), 1_000);
+    const deadline = setTimeout(() => reject(new Error("session timeout")), 15_000);
     const poll = () => {
-      if (session.status !== "running") { clearTimeout(deadline); resolve(); }
+      if (session.status !== "running" && !(orchestra && session.id && orchestra.isWorking(session.id))) { clearTimeout(deadline); resolve(); }
       else setTimeout(poll, 5);
     };
     poll();

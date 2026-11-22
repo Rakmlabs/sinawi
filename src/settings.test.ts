@@ -11,7 +11,7 @@ import { dictionaries, getLang, setLang } from "./i18n";
 const memory = () => { const data = new Map<string, string>(); return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } }; };
 
 test("settings categories: spec order, workspace categories included, last one remembered", () => {
-  assert.deepEqual([...CATEGORIES], ["general", "appearance", "notifications", "shortcuts", "environment", "updates", "workspaces", "agents", "routing", "projects"]);
+  assert.deepEqual([...CATEGORIES], ["general", "connect", "appearance", "notifications", "shortcuts", "environment", "updates", "workspaces", "agents", "routing", "projects"]);
   for (const id of CATEGORIES) assert.ok(dictionaries.ko[`set.cat.${id}` as keyof typeof dictionaries.ko], id);
   const store = memory();
   assert.equal(lastCategory(store), "general");

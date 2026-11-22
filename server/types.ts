@@ -46,6 +46,17 @@ export interface Group {
   workspaceId: WorkspaceId;
 }
 
+/**
+ * Who asked for a chat or a message when it was not the user typing in the app: an outside AI over
+ * MCP (Grok Bot, Codex, Claude Code, Claude Desktop, ...) or another lead. Shown in the chat so the
+ * user sees who gave the work; the user can always keep talking in the same chat.
+ */
+export interface RequestOrigin {
+  kind: "mcp" | "lead";
+  /** The MCP client's name (its `clientInfo.name`, or SINAWI_CLIENT_NAME), or the lead's name. */
+  client: string;
+}
+
 export interface SessionEvent {
   id: string;
   sessionId: string;
@@ -60,7 +71,7 @@ export interface SessionEvent {
   reasoningEffort?: string;
   workerId?: string;
   workerLabel?: string;
-  metadata?: { auto?: boolean; from?: AgentId; to?: AgentId; reason?: string; previousConfig?: UpdateTeamInput; previousPlanner?: AgentSelection; undone?: boolean; deletedWorker?: boolean; quotaFallback?: boolean; resetsAt?: number; live?: "status" | "directive"; ambiguous?: boolean; promoted?: boolean; prompt?: string; targetWorkerId?: string; briefAutofilled?: string[]; phase?: "verify" | "replan" | "self-work" | "worker-report" | "verify-cut"; round?: number; stall?: "repeated-error" | "repeated-command" | "no-progress" | "tool-family-loop" | "no-success"; mergeHold?: "ask" | "never"; addedWorker?: AgentId; schedule?: ScheduleCard; leadSkill?: { name: string; scope: "lead" | "project"; action: "created" | "updated" } };
+  metadata?: { auto?: boolean; from?: AgentId; to?: AgentId; reason?: string; previousConfig?: UpdateTeamInput; previousPlanner?: AgentSelection; undone?: boolean; deletedWorker?: boolean; quotaFallback?: boolean; resetsAt?: number; live?: "status" | "directive"; ambiguous?: boolean; promoted?: boolean; prompt?: string; targetWorkerId?: string; briefAutofilled?: string[]; phase?: "verify" | "replan" | "self-work" | "worker-report" | "verify-cut"; round?: number; stall?: "repeated-error" | "repeated-command" | "no-progress" | "tool-family-loop" | "no-success"; mergeHold?: "ask" | "never"; addedWorker?: AgentId; schedule?: ScheduleCard; leadSkill?: { name: string; scope: "lead" | "project"; action: "created" | "updated" }; via?: RequestOrigin; loginNeeded?: { agent: AgentId; command: string } };
 }
 
 export interface PendingInstruction {
@@ -97,6 +108,8 @@ export interface Session {
   /** Where each `workerSessionIds` entry came from (same rule as `cliSessionAgent`). Missing entries are legacy. */
   workerSessionOrigins?: Record<string, ResumeOrigin>;
   events: SessionEvent[];
+  /** Events trimmed out of `events` into sessions/archive/<id>.jsonl (server/event-archive.ts). */
+  archivedEvents?: number;
   groupId?: string;
   skills?: string[];
   systemPrompt?: string;
@@ -123,6 +136,8 @@ export interface Session {
   disabledStewardId?: string;
   /** The commander session this goal session was started for. */
   parentId?: string;
+  /** Who opened this chat when it was not the user in the app (an outside AI over MCP, another lead). */
+  origin?: RequestOrigin;
 }
 
 export interface GoalItem {
@@ -220,7 +235,11 @@ export interface StewardState {
   /** Messages waiting for this lead (other leads' questions and answers, its report). Kept across restarts. */
   inbox?: StewardDelivery[];
   /** The lead whose question this lead is answering now; its answer goes back when the work ends. */
-  answering?: { id: string; question: string; depth: number };
+  answering?: {
+    id: string; question: string; depth: number;
+    /** Set when the turn that answers ends, so a later turn never answers in its place. */
+    result?: { outcome: "done" | "error" | "stopped"; text: string };
+  };
   /** Lets another lead's request change this project; off, the lead only looks and answers. */
   acceptWork?: boolean;
   /** What the app did after the last turn (merges), told to the lead at the start of the next. */
@@ -313,6 +332,11 @@ export interface WorkspacePolicy {
    * Read-only review runs are not affected.
    */
   fullAccess?: boolean;
+  /**
+   * Opt-in, set by the user: "auto" runs start node, npx and python3 without asking. They run any code,
+   * outside the project too (audit H2), so it starts off and those commands ask like any other.
+   */
+  runtimePrograms?: boolean;
   /** Grok may call MCP tools at all. Off adds a blanket MCP deny to every Grok run. */
   grokMcp: boolean;
   /**
@@ -370,6 +394,8 @@ export interface ConversationSettings {
   permissionMode?: PermissionMode;
   /** Run multi-step requests to completion and split big ones into chats (server/goals.ts). */
   autoRun?: boolean;
+  /** Who sent this message when it was not the user in the app (see RequestOrigin). */
+  origin?: RequestOrigin;
 }
 
 export interface StartSessionInput extends ConversationSettings {
@@ -394,7 +420,7 @@ export interface StartSessionInput extends ConversationSettings {
   /** Starts as a commander that only splits the request into goal chats (server/goals.ts). */
   commander?: boolean;
   /** Starts as the project lead (server/steward.ts): a new one, or a new thread of Steward `id`. */
-  steward?: { name?: string; id?: string };
+  steward?: { name?: string; id?: string; agent?: AgentId; model?: string };
   parentId?: string;
 }
 

@@ -4,15 +4,15 @@
 
 # Sinawi
 
-**One lead AI. A team of Claude Code, Codex and Grok Build workers. One chat.**
+**Your AI hands coding work to Claude Code, Codex and Grok. Sinawi lets you watch those conversations live and step in.**
 
-Chat with a lead that writes the briefs and skills, hands the work out in parallel, and uses the app itself through MCP tools. No if-rules.
+A Mac app and MCP server: Claude Code, Codex, Grok Build, Claude Desktop, Cursor or any MCP client opens chats in Sinawi, and each one is a normal chat you can read and type into. You can also chat with a project lead yourself.
 
-[![Release](https://img.shields.io/github/v/release/Rakmlabs/sinawi?style=flat-square&color=0f7b4f)](https://github.com/Rakmlabs/sinawi/releases/latest) [![Downloads](https://img.shields.io/github/downloads/Rakmlabs/sinawi/total?style=flat-square)](https://github.com/Rakmlabs/sinawi/releases) [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square&logo=apple)](#install) [![MCP](https://img.shields.io/badge/MCP-89%20tools-6e56cf?style=flat-square)](docs/mcp.md) [![License: MIT](https://img.shields.io/github/license/Rakmlabs/sinawi?style=flat-square)](LICENSE) [![Stars](https://img.shields.io/github/stars/Rakmlabs/sinawi?style=flat-square)](https://github.com/Rakmlabs/sinawi/stargazers)
+[![Release](https://img.shields.io/github/v/release/Rakmlabs/sinawi?style=flat-square&color=0f7b4f)](https://github.com/Rakmlabs/sinawi/releases/latest) [![Downloads](https://img.shields.io/github/downloads/Rakmlabs/sinawi/total?style=flat-square)](https://github.com/Rakmlabs/sinawi/releases) [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square&logo=apple)](#install) [![MCP](https://img.shields.io/badge/MCP-81%20tools-6e56cf?style=flat-square)](docs/mcp.md) [![License: MIT](https://img.shields.io/github/license/Rakmlabs/sinawi?style=flat-square)](LICENSE) [![Stars](https://img.shields.io/github/stars/Rakmlabs/sinawi?style=flat-square)](https://github.com/Rakmlabs/sinawi/stargazers)
 
 **English** · [한국어](README.ko.md)
 
-[Download](https://github.com/Rakmlabs/sinawi/releases/latest) · [How it works](#how-it-works) · [MCP](docs/mcp.md) · [Prompts for your AI](#copy-paste-prompts-for-your-ai) · [For AI agents](#for-ai-agents) · [Work with us](#built-by-rakm)
+[Download](https://github.com/Rakmlabs/sinawi/releases/latest) · [Connect your AI](#connect-your-ai-mcp) · [How it works](#how-it-works) · [MCP](docs/mcp.md) · [Prompts for your AI](#copy-paste-prompts-for-your-ai) · [For AI agents](#for-ai-agents) · [Work with us](#built-by-rakm)
 
 <br />
 
@@ -24,11 +24,15 @@ Chat with a lead that writes the briefs and skills, hands the work out in parall
 
 ---
 
-## Why
+## What it is for
 
-The setup that gave me the best results was not one coding agent. It was **one lead AI writing prompts and skills, then handing the work to Claude and Codex**. Doing that by hand means juggling terminals and copying output between them.
+The setup that gave me the best results was not one coding agent. It was **one lead AI writing prompts and skills, then handing the work to Claude and Codex**. But when one AI drives another over MCP, the orchestrator gets only the result and you never see the conversation in between. Sinawi opens that work as chats on your screen, so you can watch, step in, and approve anything risky.
 
-Sinawi turns that into an app. It runs the coding-agent CLIs you already have (**Codex**, **Claude Code** and **Grok Build**) as one team, and you watch every step live.
+Situations it is made for:
+
+- **You use Claude Desktop or Cursor as the conductor.** It cannot write the code itself. Through Sinawi's `create_session` it opens the work in Claude Code or Codex; the real conversation runs in a Sinawi chat, and you can type "not that file, this one" right there.
+- **You run one CLI (Claude Code, Codex or Grok Build) as the orchestrator and send work to another.** With a plain MCP sub-call the sub-agent's conversation stays hidden. In Sinawi each task is a named chat you (and the orchestrator, with `get_session`) can read again later.
+- **You give the same task to several models and keep the best.** The orchestrator opens a chat each for Claude, Codex and Grok; you watch them side by side and correct the one that drifts.
 
 The name comes from *sinawi* (시나위), Korean improvised ensemble music where players find harmony without a fixed score.
 
@@ -38,42 +42,42 @@ The name comes from *sinawi* (시나위), Korean improvised ensemble music where
 <tr>
 <td width="50%" valign="top">
 
-### 💬 Just chat with the lead
-A **project lead** (담당) is a long-lived chat that owns one project. Keep giving it work. It splits the request, writes structured briefs (goal, context, done criteria, constraints, verification, report format) and picks the skills that fit.
+### 🔌 Your AI hands work to Sinawi; you watch
+An outside AI calls `list_leads`, then `create_session`: a new chat opens as a tab of that lead, with the agent and model it picked. `wait_for_session` waits until the turn is done and returns the new messages, `send_message` continues, `show_session` brings the chat up in the app. Its messages carry a badge like *sent by Grok Build via MCP* and the tab shows a plug icon. You can type in the same chat.
 
 </td>
 <td width="50%" valign="top">
+
+### 💬 Chat with the lead yourself
+A **project lead** (담당) owns one project. It has several chats, shown as tabs above the conversation: they share the folder, instructions and notes, each with its own history. Give it work and it splits the request, writes structured briefs (goal, context, done criteria, constraints, verification, report format) and picks the skills that fit.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
 
 ### ⚡ Parallel workers
 `delegate_task`, `check_task`, `collect_results`. When a worker is busy the lead adds another (`claude-2`, …), each in its own git worktree. Design tasks come back with screenshots.
 
 </td>
-</tr>
-<tr>
 <td valign="top">
 
 ### 🧠 The AI decides, not if-rules
-Every feature of the app is an MCP tool (**89 tools**). The lead reads the conversation and decides what to call: write a skill, create a chat, a workspace, another lead, a schedule.
-
-</td>
-<td valign="top">
-
-### 🛡️ Approval cards for risky actions
-Deletes, setting changes, merges and terminal commands (28 tools) wait for your approval in the app. There is no tool for an AI to approve its own request. Merge policy per lead: `auto`, `ask` or `never`.
+Every feature of the app is an MCP tool (**91 tools**). The lead reads the conversation and decides what to call: write a skill, create a chat, a workspace, another lead, a schedule.
 
 </td>
 </tr>
 <tr>
+<td valign="top">
+
+### 🛡️ Approval cards for risky actions
+Deletes, setting changes, merges and terminal commands (30 tools) wait for your approval in the app. There is no tool for an AI to approve its own request. Merge policy per lead: `auto`, `ask` or `never`.
+
+</td>
 <td valign="top">
 
 ### 🗓️ Schedules from conversation
 Say *"summarize yesterday's commits every morning at 9"* and the lead creates a cron schedule itself. Once or cron, in your Mac's time zone, managed in the lead's settings.
-
-</td>
-<td valign="top">
-
-### 🔌 Other AIs can drive it
-Claude Desktop, Cursor and other MCP clients can drive the whole app. **Settings → General → External AI connection (MCP)** connects Claude Desktop or Cursor in one click.
 
 </td>
 </tr>
@@ -100,16 +104,17 @@ flowchart LR
     L -. "schedule_create / write_skill / …" .-> S
     S -. "risky tools" .-> A{{Approval card}}
     A -- you approve --> S
-    X([Claude Desktop / Cursor / other MCP client]) -- "sinawi mcp (stdio bridge)" --> S
+    X([Claude Code / Codex / Grok Build / Claude Desktop / Cursor]) -- "sinawi mcp (stdio bridge)" --> S
 ```
 
 1. You talk to the lead in a normal chat.
 2. The app gives the lead its tools over MCP. The lead decides which to call.
 3. Workers run in parallel in their own worktrees; Sinawi checks their reports and sends results back.
 4. Anything destructive pauses on an approval card until you decide.
+5. An outside AI uses the `sinawi` MCP server the same way; the chats it opens show up in the app like any other.
 
 > [!NOTE]
-> Claude and Codex leads get the MCP tools. **Grok leads** have no per-run MCP flag yet, so they fall back to a text tag protocol and lack these tools.
+> Claude and Codex leads get the MCP tools. **Grok leads** have no per-run MCP flag yet, so they fall back to a text tag protocol and lack these tools. This is only about Grok as a lead inside Sinawi: Grok Build as an outside AI connects over MCP like any other client.
 
 ## Spaces
 
@@ -124,17 +129,12 @@ A space (workspace, 공간) is a separate desk inside the app. Switch with **F1*
 
 Download `Sinawi_<version>_universal.dmg` from the **[latest release](https://github.com/Rakmlabs/sinawi/releases/latest)**, open it and drag **Sinawi** to **Applications**.
 
-Or from a terminal, with the [`@rakmlabs/sinawi`](packages/sinawi) npm package:
-
-```sh
-npx @rakmlabs/sinawi
-```
-
-It downloads the latest release, checks it with `codesign` and `spctl`, asks before replacing an existing app and opens it (`--yes`, `--no-open`, `--help`).
-
 - Signed with a Developer ID and notarized by Apple, so it opens without a Gatekeeper warning.
 - Native on Apple Silicon and Intel.
 - Updates itself from GitHub Releases (you choose when to restart).
+
+> [!NOTE]
+> After the npm package is published: `npx @rakmlabs/sinawi` will download the latest release, check it with `codesign` and `spctl`, ask before replacing an existing app and open it (`--yes`, `--no-open`, `--help`). [`@rakmlabs/sinawi`](packages/sinawi) is not on npm yet, so use the DMG for now.
 
 ### Requirements
 
@@ -144,28 +144,53 @@ It downloads the latest release, checks it with `codesign` and `spctl`, asks bef
 
 Sinawi finds the CLIs on your login shell's `PATH` and in common install locations. **Settings → Help & setup assistant** in the app shows which ones it found and how to log in. Sinawi never asks for or stores API keys; it uses each CLI's own login.
 
-## Connect another AI (MCP)
+## Connect your AI (MCP)
 
-Claude Desktop, Cursor and other MCP clients can use the whole app through a small stdio bridge. Three ways to connect, easiest first:
+Any MCP client can hand work to Sinawi through a small stdio bridge that ships inside the app. The usual flow:
 
-1. **One click.** In Sinawi, open **Settings → General → External AI connection (MCP)** and press **Connect to Claude Desktop** or **Connect to Cursor**. Sinawi shows the exact JSON it will merge, writes it into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json` (other entries stay, the original is kept as `.bak`), and you restart the client. The entry reads the token from Sinawi's token file, so no secret is copied.
-2. **npx**, with the [`@rakmlabs/sinawi`](packages/sinawi) npm package. **Copy config** on the same screen gives this, with your token filled in:
+1. `list_leads` finds the lead (담당) for the project.
+2. `create_session(lead_id, prompt, title, agent, model)` opens a new chat (tab) of that lead with the agent and model the AI picked (empty = the lead's own) and starts the work.
+3. `wait_for_session(session_id, after_event_id)` waits until it is done and returns the new messages and the last answer.
+4. `send_message` continues the same chat; `show_session` asks the user to look at it (without taking the screen they are on).
 
-   ```json
-   {
-     "mcpServers": {
-       "sinawi": {
-         "command": "npx",
-         "args": ["-y", "@rakmlabs/sinawi", "mcp"],
-         "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
-       }
-     }
-   }
-   ```
+You see each of these chats live in Sinawi, with a badge on the messages the outside AI sent, and you can type in them too.
 
-3. **The bridge inside the app**, no npm needed: `"command": "node", "args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]` with the same `env` (use the full path from `which node` if the client cannot find `node`). From a checkout, `npm run sinawi-mcp` runs the same file.
+**Settings → Connect an AI** has a tab for each client (Claude Code, Codex, Grok Build, Claude Desktop, Cursor, Other MCP) with a command to copy, filled in with the exact paths on your Mac. Claude Desktop and Cursor also get a one-click connect. The same page has **instructions for the outside AI** to paste into its prompt or skill.
 
-Reads and creates run at once; risky tools wait for an approval card. Full guide: [docs/mcp.md](docs/mcp.md) · tool coverage: [docs/mcp-coverage.md](docs/mcp-coverage.md).
+The commands for the installed app:
+
+```sh
+# Claude Code
+claude mcp add sinawi --scope user -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs
+# Codex
+codex mcp add sinawi -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs
+# Grok Build
+grok mcp add sinawi -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs
+```
+
+Claude Desktop, Cursor and other clients:
+
+```json
+{
+  "mcpServers": {
+    "sinawi": {
+      "command": "node",
+      "args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]
+    }
+  }
+}
+```
+
+Use the full path from `which node` if the client cannot find `node`. On the same Mac the bridge reads the token from its file (`~/Library/Application Support/dev.sinawi.app/.data/app-mcp-token`) by itself, so no secret goes into the config. Set `SINAWI_MCP_TOKEN` only for a client on another setup. From a checkout, `npm run sinawi-mcp` runs the same bridge.
+
+Tested: Claude Code and Grok Build actually connected (Grok found 81 tools); for Codex only the config was registered, the handshake was not checked.
+
+**Cloud agents (Grok Bot, Codex dots) cannot connect today.** Both run on their own cloud computers, and Sinawi accepts connections from this Mac only. Grok Bot is a different product from Grok Build, the CLI on your Mac. What is and is not confirmed: [docs/mcp-clients.md](docs/mcp-clients.md) §6-1 and the tabs of the same names in Settings.
+
+> [!NOTE]
+> After the npm package is published: `npx -y @rakmlabs/sinawi mcp` will work in place of `node …/sinawi-mcp.mjs`.
+
+Reads and creates run at once; risky tools wait for an approval card. Full guide: [docs/mcp.md](docs/mcp.md) · per-client details (Korean): [docs/mcp-clients.md](docs/mcp-clients.md) · tool coverage: [docs/mcp-coverage.md](docs/mcp-coverage.md).
 
 ## Copy-paste prompts for your AI
 
@@ -174,9 +199,9 @@ Paste one of these into Claude Code, Codex or any assistant that can run command
 **Install and set up Sinawi**
 
 ```text
-Help me install and set up Sinawi (https://github.com/Rakmlabs/sinawi), a macOS app that runs the Claude Code, Codex and Grok Build CLIs as one team.
+Help me install and set up Sinawi (https://github.com/Rakmlabs/sinawi), a macOS app where my AI hands coding work to the Claude Code, Codex and Grok Build CLIs over MCP and I watch those chats live.
 
-1. Install the app. Run `npx @rakmlabs/sinawi`: it downloads the latest release, checks the signature with codesign and spctl, asks before replacing an existing /Applications/Sinawi.app, and opens it. Or download the latest Sinawi_<version>_universal.dmg from https://github.com/Rakmlabs/sinawi/releases/latest, open it and drag Sinawi to Applications. It is signed and notarized.
+1. Install the app: download the latest Sinawi_<version>_universal.dmg from https://github.com/Rakmlabs/sinawi/releases/latest, open it and drag Sinawi to Applications. It is signed and notarized. (The npm installer `npx @rakmlabs/sinawi` is not published yet.)
 2. Check Node.js on my login shell's PATH (`node -v`): 24.22.1 or newer is recommended; on 22.x it must be 22.23.4 or newer. On Apple Silicon it must be an arm64 Node. If it is missing or too old, install it (for example `brew install node`).
 3. Check Git (`git --version`; if missing: `xcode-select --install`).
 4. Make sure at least one agent CLI is installed and logged in, and ask me which ones I want:
@@ -193,15 +218,16 @@ Help me install and set up Sinawi (https://github.com/Rakmlabs/sinawi), a macOS 
 ```text
 Connect this AI client to Sinawi (https://github.com/Rakmlabs/sinawi) over MCP.
 
-- Sinawi must be running on this Mac; its API is http://127.0.0.1:3001.
-- Easiest for Claude Desktop or Cursor: ask me to open Sinawi → Settings → General → External AI connection (MCP) and press "Connect to Claude Desktop" or "Connect to Cursor". Sinawi shows the JSON, writes it into the client's config (keeping a .bak) and I restart the client. Then skip to "Verify".
-- Otherwise add an mcpServers entry named "sinawi" to this client's MCP config yourself:
-  - with npm (`@rakmlabs/sinawi`): command "npx", args ["-y", "@rakmlabs/sinawi", "mcp"]
-  - without npm: command "node", args ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]
-  - env: SINAWI_URL "http://127.0.0.1:3001", and SINAWI_MCP_TOKEN from Sinawi → Settings → General → External AI connection (MCP) → "Copy config". Let me paste the token; never print it back or commit it.
-  - Claude Code: `claude mcp add sinawi --env SINAWI_MCP_TOKEN=<token> -- npx -y @rakmlabs/sinawi mcp`
-  Then restart the client.
+- Sinawi must be installed in /Applications and running on this Mac.
+- Easiest: ask me to open Sinawi → Settings → Connect an AI, pick this client's tab and copy its command (it has the exact paths). For Claude Desktop or Cursor there is a one-click connect; then I restart the client and you skip to "Verify".
+- Otherwise register the bridge yourself:
+  - Claude Code: `claude mcp add sinawi --scope user -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`
+  - Codex: `codex mcp add sinawi -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`
+  - Grok Build: `grok mcp add sinawi -- node /Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`
+  - Claude Desktop, Cursor or another client: an mcpServers entry "sinawi" with command "node", args ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]. Use the full path from `which node` if the client cannot find node.
+  On this Mac the bridge reads Sinawi's token file by itself, so do not ask me for a token or put one in the config. (SINAWI_MCP_TOKEN is only for a client on another setup.) Then restart the client.
 - Verify: list the `sinawi` tools and call `app_status`.
+- To hand off work: `list_leads` → `create_session(lead_id, prompt, title, agent, model)` → `wait_for_session(session_id, after_event_id)` → `send_message` to continue → `show_session` to bring the chat up for me. I may type in the same chat, so read the new messages before your next instruction.
 - Risky tools (delete, settings, merge, terminal commands) return `pending_approval`; I approve or reject them on the approval card in Sinawi. Never try to approve them yourself.
 - Reference: https://github.com/Rakmlabs/sinawi/blob/main/docs/ai/for-ai.md
 ```
@@ -248,7 +274,9 @@ npm install
 npm run app:build
 ```
 
-The app is written to `src-tauri/target/release/bundle/macos/Sinawi.app`. A build you make yourself is not notarized and does not receive signed updates.
+The app is written to `src-tauri/target/release/bundle/macos/Sinawi.app`. A build you make yourself is not notarized and does not receive signed updates. Without `TAURI_SIGNING_PRIVATE_KEY`, `npm run app:build` skips the updater artifacts and still succeeds.
+
+npm 11 may warn about install scripts (`node-pty`, `esbuild`). `package.json` declares `allowScripts` and the server fixes the permissions of `node-pty`'s helper itself, so the warning can be ignored.
 
 Development:
 
@@ -258,7 +286,28 @@ npm run app:dev    # the same inside the Tauri window
 npm run typecheck && npm test && npm run build
 ```
 
-Both servers bind to `127.0.0.1` only. `SINAWI_PORT` and `SINAWI_DATA_DIR` change the API port and data folder.
+`npm run dev` uses port 3001, which collides with an installed Sinawi that is running. To run beside it, with throwaway data:
+
+```sh
+SINAWI_PORT=3011 SINAWI_UI_PORT=5198 SINAWI_DATA_DIR="$(mktemp -d)" npm run dev
+```
+
+Both servers bind to `127.0.0.1` only. `SINAWI_PORT` and `SINAWI_DATA_DIR` change the API port and data folder; `SINAWI_UI_PORT` accepts only 5188 and 5198.
+
+A port other than 3001 runs **isolated**: it does not watch the browser, computer and serve queues in `/tmp` that the installed app uses, and does not rewrite `~/.local/bin/ao-*` or the CLIs' skill folders (`SINAWI_ISOLATED=1` turns this on at 3001 too, `=0` turns it off).
+
+**App window key.** What only the user may do (changing settings, approvals, merges, `/ws`, the terminal) needs more than an Origin header: a key the server makes fresh on every start and keeps in memory. No HTTP route hands it out.
+
+- **Installed app:** the server offers the key on a unix socket, `<data>/run/app-key.sock`, in a folder only your user can enter. For each connection it runs the app binary with `--sinawi-check-peer`, which asks the kernel who connected (`LOCAL_PEERTOKEN`) and checks that process's running code against the app's own code signature (Security framework). argv[0], the process name or a claimed path do not count, and a modified app binary fails its signature.
+- **`npm run dev`:** `scripts/dev.mjs` hands the key to the server on an inherited pipe (not in its environment, so `ps -E` does not show it) and prints a link with the key in its `#fragment`. Open that link; the page keeps the key for that tab and removes it from the address bar. The page Vite serves does not contain it. `npm run app:dev` gets it like the installed app, from the debug binary.
+
+**What the key does not stop.** It keeps an ordinary local program (an agent running `curl`, another browser page) from acting as you. It does not stop a program that runs as your macOS user and sets out to get around it:
+- It can connect to the socket, keep a copy of the connection in a second process and then exec the real app binary; the check then sees the real app and passes. This gap is known and pinned by a test (`peer_check.rs`).
+- It can change the files the server runs from (the app bundle, the copied server in the app's data folder, the LaunchAgent plist) and restart it.
+- On a build without the hardened runtime (a local bundle made without a Developer ID, a fork) it can start the real app binary with `DYLD_INSERT_LIBRARIES` or attach a debugger as the same user, and read the key inside a process that passes the check. The released app is signed with the hardened runtime, which closes this path.
+- In dev mode it can read the key from the dev link in a terminal's scrollback, and from the history of the browser that first opened that link (the address bar drops it; the history keeps it).
+- The key socket starts the app binary for each connection, so it runs at most four checks at once and closes further connections unanswered. The app window asks again a few times (within about 3 seconds); a program that keeps flooding the socket for longer can still keep the window from getting its key.
+- Keeping an agent out of all of that needs the agent's process confined: a macOS sandbox profile or a separate user account for agent runs. Sinawi does not do that today, so treat agents in *auto* mode as programs running as you.
 
 | Path | What it holds |
 |---|---|
@@ -287,7 +336,17 @@ Data lives in `~/Library/Application Support/dev.sinawi.app/` and logs in `~/Lib
 No. It uses each CLI's own login. Your prompts, selected skills and files the agents read go to that CLI's model provider, as they would if you ran the CLI yourself.
 
 **Is it a sandbox?**
-No. *Plan* is read-only, *Auto* keeps writes inside the project folder, and *Full access* turns off the CLIs' own sandboxes, so it is off unless a workspace allows it. Approval cards guard the MCP tools only; an agent with a shell can still call Sinawi's local HTTP API directly.
+No. *Plan* is read-only, and *Full access* turns off the CLIs' own sandboxes, so it is off unless a workspace allows it.
+
+What *Auto* actually allows: file edits run without asking. Claude and Grok get `git` (by subcommand: `git status`, `git commit` …, so not `git -c …` or aliases), `gh` (read subcommands only: `gh pr view`, `list`, `diff`, `checks`, `status`, `gh issue view`, `list`, `status`, `gh run view`, `list`, `watch`, `download`, `gh repo view`, `gh search`, `gh auth status`, and GETs of `gh api`), `curl`, `rg`, `ls`, `xcrun simctl` (by subcommand, never `spawn`), `ao-serve list/logs/stop` and others pre-approved. The forms of these that reach outside the project — every `gh` command not sure to read (`gh pr create`, `new`, `merge`, `revert`, `update-branch`, `checkout`, `gh issue comment`, `gh run rerun`, `gh release` …, aliases and extensions, the same with `-R`/`--repo` before the subcommand, and `gh api` with a method other than GET, fields, `--input`, GraphQL or a header that changes the method), forced or deleting `git push`, `xcrun simctl spawn`, `curl -K`, `trash` of a path outside the folder — make Claude ask on an approval card (whatever the switch) and are denied to Grok (also with the flag first). Grok's deny rules are text patterns, so they name the subcommands and built-in aliases gh lists; gh aliases and extensions a user made are left to Grok's own judgement. Grok does not guard paths and risky flags the way Claude Code does, so forms such as `rg --pre`, `curl -o`, `sort -o` and `git -c` are denied to it by rule too. The rules only see the text: they also deny `sort -o` into the project and `gh api -X GET`, and miss a flag inside a cluster (`curl -so x`). Commands that run any code and can reach files outside the project folder — `node`, `npx`, `python3`, `npm`, `pnpm`, `yarn` (their scripts and install hooks too), `find` (`-exec`) and `ao-serve start` — are governed by **Settings › Workspaces › Pre-approve commands that run code in auto mode** (off by default). While it is off, this is what Sinawi's hook does for Claude, also in Claude Code's own auto mode. When it asks, the approval card links to the setting.
+
+- **Runs without a card**: one simple command that starts with a pre-approved program (every word fixed text, only the subcommands and options listed for that program, file arguments inside the project folder), `find` without actions (`-exec`, `-delete`, `-L` …), and chains of safe commands that stay in the folder (`cd src && cat a | head`). A chain is judged once before it runs, so a step that writes files in the working folder (a redirection inside the folder, `mkdir`, `touch`, `sort -o`, `git checkout` and the like) passes only as the last step (`cd src && cat a > b`); `git add` and `commit` write only inside `.git` and may be any step (`git add -A && git commit -m …`), and `cd` only into a folder that exists when the chain is judged. `tsc` only as `tsc --noEmit`. `git` only when the git directory, common directory and config files git would use are all outside the project or inside a `.git` folder; to check this the hook runs `git rev-parse` and `git config --list`.
+- **Gets an approval card**: Bash commands these rules do not pass. For example the commands above that run code, programs not on the list (`perl`, `./x.sh`), options and subcommands not listed (also abbreviated, attached with `=` or clustered: `sort --compress-prog`, `rg -nz`), `git fetch`, `pull` and `push`, glued quotes (`"no""de"`), `$(…)` and variables, `&&`, `;`, `|` and redirections outside safe chains, chains where a step that writes is followed by another step (`printf … > x && git diff`, `mkdir -p d && cd d`) or where any of the steps joined by `|` or `&` writes, globs, paths outside the folder, writes into a `.git` folder (Bash and the Edit and Write tools), and `git` commands that would use a folder other than `.git` as the repository (`HEAD`, `commondir` or `gitdir:` files, `GIT_DIR`) or read a config file inside the project (includes, `GIT_CONFIG_*`), and, when the hooks folder is inside the project (`core.hooksPath`, husky), `git` commands that can run a hook from it. `git log`, `show`, `rev-parse`, `ls-files`, `blame` and a `branch` that only lists run no hook, and `git status` and `diff` run none while that folder has no `post-index-change`: these pass in a husky repository too. `sort --compress-program`, `rg --pre`, `git -c`, `--exec-path`, `--upload-pack` and `--receive-pack` ask with the switch on too.
+- **Not guaranteed**: this switch is not isolation; it adds approval cards. It judges the command's text and the folder as it is at that moment, so an agent set on getting around it is not stopped (each review round found a new way around; those were fixed, but nothing promises none is left). Use *Plan* mode for repositories or prompts you do not trust. Known limits include code on the repository side that was already in place when an allowed command runs it (git hooks, config such as a filter or alias that points at a script in the project, hooks linked to project files), the build-info file `tsc --noEmit` writes where tsconfig's `tsBuildInfoFile` says, and another process (one started earlier in the background too) changing the folder between the check and the run. With the switch on, Claude decides unlisted commands by itself.
+
+Grok is always denied risky forms by text pattern (also abbreviated, `sort --co…`, `git --upl…`, and a `GIT_…` prefix), and while the switch is off also the code-running commands above, the shells and wrappers that would start them (`bash`, `env`, `xargs` …), and any command containing `$`, a backtick, `;`, `&`, `|`, `<`, `>`, `\` or glued quotes. Grok has no mode that refuses without cancelling the run, so its own classifier decides other unlisted commands, and its file writes have no hook, so the `.git` check does not apply to them. Codex runs in its own `workspace-write` sandbox, and the server refuses `ao-serve start` from a Codex run (what the server starts is outside that sandbox). While the switch is on, these commands run without asking and Claude and Grok decide unlisted commands by themselves (risky forms still ask or are denied). Use *Plan* for repositories or prompts you do not trust.
+
+Approval cards guard the MCP tools. An agent with a shell can still call most of Sinawi's local HTTP API (reading, opening chats), but the user's own requests (approving, answering a permission, changing settings, the MCP token) only work from the app window.
 
 **Can a Grok Build agent be the lead?**
 Yes, but without the MCP tools for now (see the note above). Claude or Codex leads get the full toolset.

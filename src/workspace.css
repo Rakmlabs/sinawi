@@ -100,7 +100,7 @@
 .workspace-tag.restricted { background: var(--warn-tint); color: var(--warn-fg); }
 .workspace-rule { display: grid; gap: 4px; min-width: 0; }
 .workspace-rule-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text); font-size: calc(13px * var(--font-scale)); }
-.workspace-rule > small, .workspace-defaults small { color: var(--text-subtle); font-size: calc(12px * var(--font-scale)); }
+.workspace-rule > small, .workspace-defaults small { color: var(--text-subtle); font-size: calc(12px * var(--font-scale)); word-break: keep-all; }
 .workspace-rule input[type="checkbox"] { flex-shrink: 0; width: 18px; height: 18px; accent-color: var(--accent); }
 .workspace-rules .workspace-rule select { height: 32px; min-height: 32px; padding: 0 28px 0 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-raised); color: var(--text); font: inherit; font-size: calc(13px * var(--font-scale)); }
 .workspace-rule textarea { width: 100%; min-height: 64px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-raised); color: var(--text); font: inherit; font-size: calc(13px * var(--font-scale)); resize: vertical; }

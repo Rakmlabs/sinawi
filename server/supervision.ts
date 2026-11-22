@@ -173,14 +173,101 @@ ${BROWSER_CORE}
 ${COMPUTER_CORE}`;
 
 /**
- * Programs pre-approved for headless Claude (`--allowedTools`) and Grok (`--allow`).
- * A Grok command outside this list cancels the whole run, because nobody can approve a prompt.
+ * Programs pre-approved for headless Claude (`--allowedTools`) and Grok (`--allow`), as command
+ * prefixes. A Grok command outside this list cancels the whole run, because nobody can approve a prompt.
+ * None of them runs code given on its command line (H2): git and gh by subcommand only, so
+ * `git -c core.fsmonitor=…`, git aliases and gh extensions are not covered. What git hooks or the
+ * project's own config run on commit is not covered by this list either (README, *auto* mode).
  */
-export const DEVELOPMENT_SHELL_PROGRAMS = ["git", "gh", "ls", "cat", "rg", "find", "npm", "pnpm", "yarn", "node", "npx", "tsc", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "python3", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq", "ao-computer", "xcrun simctl", "ao-serve", "ao-sim", "curl", "lsof", "trash"] as const;
+export const DEVELOPMENT_SHELL_PROGRAMS = [
+  "git status", "git diff", "git log", "git show", "git add", "git commit", "git rev-parse", "git ls-files", "git blame", "git branch",
+  "git checkout", "git switch", "git restore", "git rm", "git mv", "git stash", "git merge", "git worktree", "git tag", "git remote",
+  "gh pr list", "gh pr view", "gh pr diff", "gh pr checks", "gh pr status", "gh issue list", "gh issue view", "gh issue status",
+  "gh repo view", "gh run list", "gh run view", "gh run watch", "gh run download", "gh api", "gh auth status", "gh search",
+  "ls", "cat", "rg", "tsc --noEmit", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq",
+  "ao-computer", "xcrun simctl list", "xcrun simctl boot", "xcrun simctl shutdown", "xcrun simctl io", "xcrun simctl install", "xcrun simctl uninstall", "xcrun simctl launch", "xcrun simctl terminate", "xcrun simctl get_app_container", "xcrun simctl status_bar", "xcrun simctl ui", "ao-serve list", "ao-serve logs", "ao-serve stop", "ao-sim", "curl", "lsof", "trash",
+] as const;
+
+/**
+ * Programs that run any code, outside the project too (H2): interpreters, package managers (their
+ * `run`/`exec`/`dlx` and every script or install hook), `find` (`-exec`) and `ao-serve start` (any
+ * command, outside a CLI's sandbox). Pre-approved only where the workspace turns it on
+ * (WorkspacePolicy.runtimePrograms). Off, Claude's Bash hook answers "ask" for them even in Claude's
+ * own auto mode (claude-bash-hook.ts hookDecision), Grok is denied them and the shells that would
+ * wrap them (cli.ts GROK_RUNTIME_DENIED), Codex runs them only inside its sandbox, and the server
+ * refuses `ao-serve start` from a run that cannot ask (serve-tool.ts).
+ */
+export const RUNTIME_SHELL_PROGRAMS = ["node", "npx", "python3", "npm", "pnpm", "yarn", "find", "ao-serve start"] as const;
+
+/**
+ * Deny patterns for a short flag of `program`, as the first argument (`sort -o x`, which the fourth
+ * review ran outside the project under `sort * -o*` alone) or a later one. A flag inside a cluster
+ * (`curl -so x`) is not caught: `*` also spans spaces, so a cluster pattern would match ordinary URLs.
+ */
+const shortFlag = (program: string, flag: string) => [`${program} -${flag}*`, `${program} * -${flag}*`];
+/** Deny patterns for a long option of `program` (`--output`, `--output=x`), wherever it sits. */
+const longFlag = (program: string, flag: string) => [`${program} ${flag}*`, `${program} *${flag}*`];
+
+/**
+ * Forms of pre-approved programs that act outside the project or run code (third review H2-b, H2-c),
+ * as permission patterns (`*` anywhere). Grok denies them outright: unlike Claude Code it ran
+ * `rg --pre ./x` and `curl -o <outside>` under the plain prefix rules. Claude asks for the same
+ * forms through the Bash hook (claude-bash-hook.ts riskyWords), and there, with the workspace switch
+ * off, also for any file argument outside the folder. Patterns only see the text, so a path written
+ * outside the project in an ordinary argument (ffmpeg's output file) is not caught for Grok.
+ * Abbreviated long options are matched by their shortest unambiguous prefix (`sort --co` for
+ * --compress-program, `git --upl`/`--rece` for --upload-pack/--receive-pack, fifth review R5-2).
+ */
+/**
+ * PR #8 review P8-1: gh is pre-approved by read subcommand only (DEVELOPMENT_SHELL_PROGRAMS), and Grok,
+ * which has no approval card, is denied the rest that gh 2.98 lists (its help), their built-in
+ * aliases (`gh pr new`, `gh co`), any flag before the subcommand (`gh pr -R o/r merge`), and a
+ * `gh api` aimed at GraphQL or overriding its method. Aliases and extensions a user made have names
+ * no pattern can know: Grok's own classifier decides those (README).
+ */
+const GROK_GH_DENIED = [
+  "gh -*", "gh pr -*", "gh issue -*", "gh run -*", "gh repo -*", "gh search -*", "gh auth -*",
+  ...["create", "new", "checkout", "close", "comment", "edit", "lock", "merge", "ready", "reopen", "revert", "review", "unlock", "update-branch"].map((op) => `gh pr ${op}*`),
+  ...["create", "new", "close", "comment", "delete", "develop", "edit", "lock", "pin", "reopen", "transfer", "unlock", "unpin"].map((op) => `gh issue ${op}*`),
+  ...["cancel", "delete", "rerun"].map((op) => `gh run ${op}*`),
+  ...["create", "new", "list", "archive", "autolink", "clone", "delete", "deploy-key", "edit", "fork", "gitignore", "license", "read-dir", "read-file", "rename", "set-default", "sync", "unarchive"].map((op) => `gh repo ${op}*`),
+  ...["login", "logout", "refresh", "setup-git", "switch", "token"].map((op) => `gh auth ${op}*`),
+  ...["browse", "codespace", "cs", "discussion", "gist", "org", "project", "release", "skill", "cache", "workflow", "co", "agent-task", "alias", "attestation", "completion", "config", "copilot", "extension", "ext", "gpg-key", "label", "licenses", "preview", "ruleset", "secret", "ssh-key", "status", "variable"].map((command) => `gh ${command}*`),
+  // Built-in aliases gh 2.98 lists beside their commands (PR #8 second review P8-4).
+  "gh agent*", "gh at*", "gh rs*", "gh pr co*",
+  "gh api *graphql*", "gh api *verride*", "gh api *ethod*",
+];
+
+export const RISKY_SHELL_PATTERNS = [
+  ...longFlag("rg", "--pre"), "git -c*", "git --config-env*", "git *--output*", "git *--ext-diff*", ...longFlag("git", "--exec"), ...longFlag("git", "--upl"), ...longFlag("git", "--rece"), "GIT_*",
+  ...shortFlag("git push", "f"), ...shortFlag("git push", "d"), "git push *--force*", "git push *--delete*", "git push *--mirror*", "git push *--prune*", "git push * +*", "git push * :*",
+  ...GROK_GH_DENIED,
+  ...shortFlag("gh api", "X"), ...shortFlag("gh api", "f"), ...shortFlag("gh api", "F"), "gh api *--method*", "gh api *--field*", "gh api *--raw-field*", "gh api *--input*",
+  ...shortFlag("curl", "o"), ...shortFlag("curl", "O"), ...shortFlag("curl", "K"), ...shortFlag("curl", "T"), "curl *--output*", "curl *--remote-name*", "curl *--config*", "curl *--upload-file*", "curl *@*", "curl *file:*",
+  "xcrun simctl spawn*", "trash *..*", "trash /*", "trash * /*", "trash ~*", "trash * ~*",
+  ...shortFlag("sort", "o"), "sort *--output*", ...longFlag("sort", "--co"), "tsc *--outDir*", "tsc *--outFile*",
+] as const;
+
+/**
+ * What Grok is denied while the workspace does not pre-approve programs that run code, besides those
+ * programs (cli.ts GROK_RUNTIME_DENIED): command text whose program or arguments the shell decides
+ * only when it runs (fourth review R4-2: `"no""de"`, `n''ode`, `$(which node)`). Variables and
+ * substitutions (`$`, backticks), chains, pipes and redirections (`;&|<>`), backslashes, quotes glued
+ * together (`""`, `''`) and a command that starts with a quote. Grok decides the rest of what is not
+ * pre-approved with its own classifier (it has no mode that refuses without cancelling the run).
+ */
+export const GROK_UNREADABLE_PATTERNS = ["*$*", "*`*", "*;*", "*&*", "*|*", "*>*", "*<*", "*\\*", '*""*', "*''*", '"*', "'*", "{*"] as const;
+
+/** The programs an "auto" run may start without asking. */
+export function preapprovedPrograms(runtimePrograms = false): string[] {
+  return [...DEVELOPMENT_SHELL_PROGRAMS, ...(runtimePrograms ? RUNTIME_SHELL_PROGRAMS : [])];
+}
 
 /** Harness-specific corrections appended after the shared rules. */
 export function cliNotes(agent: AgentId, role: "orchestrator" | "worker"): string {
-  const programs = DEVELOPMENT_SHELL_PROGRAMS.join(", ");
+  // Static per agent and role (switching agents swaps this text): node, npx and python3 depend on the
+  // workspace, so the run's own rules say whether they are allowed (cli.ts grokHeadlessRules).
+  const programs = `${DEVELOPMENT_SHELL_PROGRAMS.join(", ")} (${RUNTIME_SHELL_PROGRAMS.join(", ")}은 이 실행의 규칙에 허용으로 적혀 있을 때만. 아니면 파일 찾기는 rg --files·ls로 한다)`;
   const notes: Record<AgentId, Record<"orchestrator" | "worker", string>> = {
     codex: {
       orchestrator: `## Codex 총괄
@@ -219,7 +306,7 @@ export function cliNotes(agent: AgentId, role: "orchestrator" | "worker"): strin
       worker: `## Grok 작업자
 - 이 실행은 헤드리스다. 승인 창은 없고, 미리 허용되지 않은 셸 명령은 실행 전체를 취소한다.
 - 허용된 프로그램만 쓴다: ${programs}. 각 호출은 그중 하나로 시작하는 명령 하나다.
-- cd, &&, ||, ;, 변수 대입, $(...), 반복문, bash -c 는 쓰지 않는다. 경로는 절대 경로나 작업 폴더 기준 상대 경로로 쓴다. 긴 로직은 .py로 저장한 뒤 python3로 한 번 실행한다.
+- cd, &&, ||, ;, 변수 대입, $(...), 반복문, bash -c 는 쓰지 않는다. 경로는 절대 경로나 작업 폴더 기준 상대 경로로 쓴다. 긴 로직은 python3가 허용된 실행에서만 .py로 저장해 한 번 실행한다.
 - 명령이 거부되거나 취소되면 다른 형태로 재시도하지 않는다. 즉시 막힘으로 보고하고, 거부된 명령과 이유를 증거에 적는다.
 - 도구 결과는 한 번만 읽고 반복해서 옮기지 않는다. 보고는 상태, 한 일, 증거, 남은 문제 네 줄을 빠짐없이 쓴다.`,
     },

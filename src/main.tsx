@@ -11,6 +11,7 @@ import "./GlassSelect";
 import "./FolderPicker";
 import "./chat-layout.css";
 import "./sidebar.css";
+import "./lead-chat-list.css";
 import "./team-chat.css";
 import "./agent-mark.css";
 import "./readability.css";
@@ -32,8 +33,11 @@ import { blockHistoryButtons, isStrandedShell, returnToAppServer } from "./app-o
 import { App } from "./app/App";
 import { initAppearance } from "./appearance";
 import { subscribeLang } from "./i18n";
+import { installAppKeyFetch } from "./app-key";
 
 blockHistoryButtons();
+// Every /api request carries the app window's key (app-key.ts) before anything fetches.
+installAppKeyFetch();
 // Theme, fonts and language before the first paint, so nothing flashes.
 initAppearance();
 const stranded = isStrandedShell(location.href);

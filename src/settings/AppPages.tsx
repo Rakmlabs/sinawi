@@ -37,7 +37,6 @@ export function GeneralPage() {
       <UserPreferencesRow />
     </SettingsSection>
     <LeadSettingsSection />
-    <AppMcpSection />
     <SettingsSection title={t("set.danger")} danger>
       <SettingRow id="reset" label={t("set.general.reset")} description={t("set.general.resetDesc")}>
         <button type="button" className="settings-button danger-outline" onClick={() => setConfirm(true)}>{t("set.general.resetAction")}</button>
@@ -101,95 +100,6 @@ function LeadSettingsSection() {
       </div>
     </SettingRow>
     {confirm && <ConfirmDialog title={t("set.general.bulkMergeConfirm", { policy: policyLabel(confirm) })} body={t("set.general.bulkMergeConfirmBody")} confirmLabel={t("set.general.bulkMergeApply", { policy: policyLabel(confirm) })} onConfirm={() => applyAll(confirm)} onCancel={() => setConfirm(undefined)} />}
-  </SettingsSection>;
-}
-
-type McpConnection = { token: string; tokenFile: string; script: string | null; config: unknown; scriptConfig?: unknown };
-type McpClientId = "claude" | "cursor";
-type McpClientPlan = { client: McpClientId; name: string; path: string; exists: boolean; replaces: boolean; upToDate: boolean; merge: string };
-
-/** The connect routes (server/mcp-clients.ts) answer with a `code` for files Sinawi will not rewrite. */
-async function mcpClientApi<T>(client: McpClientId, merge?: string): Promise<T> {
-  const r = await fetch(`/api/app-mcp/clients/${client}`, merge === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ merge }) });
-  const data = await r.json().catch(() => undefined);
-  if (r.ok) return data as T;
-  const code = data?.code;
-  if (code === "invalid_json" || code === "not_object" || code === "bad_servers") throw new Error(t("set.general.mcpConnectBadFile", { path: data.path }));
-  if (code === "stale") throw new Error(t("set.general.mcpConnectStale"));
-  throw new Error(data?.error || t("api.requestFailed"));
-}
-
-/** Connect Claude Desktop / Cursor: show exactly what is merged into the client's config, then write it. */
-function McpClientButtons({ fail }: { fail: (reason: unknown) => void }) {
-  const [plan, setPlan] = useState<McpClientPlan>();
-  const [done, setDone] = useState("");
-  const open = (client: McpClientId) => { setDone(""); mcpClientApi<McpClientPlan>(client).then(setPlan, fail); };
-  const write = () => {
-    const current = plan;
-    setPlan(undefined);
-    if (!current) return;
-    mcpClientApi<{ path: string; backup: string | null; name: string }>(current.client, current.merge).then((result) => {
-      setDone(result.backup ? t("set.general.mcpConnectDoneBackup", { name: result.name, path: result.path, backup: result.backup }) : t("set.general.mcpConnectDone", { name: result.name, path: result.path }));
-    }, fail);
-  };
-  return <>
-    <div className="settings-advanced-actions">
-      <button type="button" className="settings-button primary" onClick={() => open("claude")}>{t("set.general.mcpConnectClaude")}</button>
-      <button type="button" className="settings-button" onClick={() => open("cursor")}>{t("set.general.mcpConnectCursor")}</button>
-    </div>
-    {done && <p role="status">{done}</p>}
-    {plan && <ConfirmDialog title={t("set.general.mcpConnectConfirm", { name: plan.name })}
-      body={<>
-        {t(plan.exists ? (plan.replaces ? "set.general.mcpConnectReplace" : "set.general.mcpConnectMerge") : "set.general.mcpConnectCreate", { path: plan.path })}
-        <code className="settings-confirm-code" style={{ display: "block", whiteSpace: "pre", overflowX: "auto", marginTop: 8, maxHeight: 260, overflowY: "auto" }}>{plan.merge}</code>
-        {t("set.general.mcpConnectRestart", { name: plan.name })}
-      </>}
-      confirmLabel={t("set.general.mcpConnectWrite")} onConfirm={write} onCancel={() => setPlan(undefined)} />}
-  </>;
-}
-
-/**
- * How an outside AI connects: the connect buttons write the client's config; or copy `npx -y @rakmlabs/sinawi mcp`,
- * or the bridge copy in <data>/hooks without npx (server/app-mcp.ts).
- */
-function AppMcpSection() {
-  const [connection, setConnection] = useState<McpConnection>();
-  const [confirm, setConfirm] = useState(false);
-  const [error, setError] = useState("");
-  const fail = (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason));
-  useEffect(() => {
-    let live = true;
-    workspaceApi<McpConnection>("/app-mcp/connection").then((next) => { if (live) setConnection(next); }, (reason) => { if (live) fail(reason); });
-    return () => { live = false; };
-  }, []);
-  const rotate = () => {
-    setConfirm(false); setError("");
-    workspaceApi<McpConnection>("/app-mcp/token", {}).then(setConnection, fail);
-  };
-  const config = connection?.config ? JSON.stringify(connection.config, null, 2) : "";
-  const scriptConfig = connection?.scriptConfig ? JSON.stringify(connection.scriptConfig, null, 2) : "";
-  return <SettingsSection title={t("set.general.mcp")}>
-    <SettingRow id="appMcp" block label={t("set.general.mcp")} description={t("set.general.mcpDesc")} error={error || undefined}>
-      <div className="settings-json">
-        <p>{t("set.general.mcpConnectIntro")}</p>
-        <McpClientButtons fail={fail} />
-        <p>{t("set.general.mcpSteps")}</p>
-        {connection && !connection.script && <p>{t("set.general.mcpNoScript")}</p>}
-        {config && <textarea rows={10} readOnly value={config} aria-label={t("set.general.mcp")} />}
-        <div className="settings-advanced-actions">
-          {config && <CopyButton text={config} ariaLabel={t("set.general.mcpCopy")} className="settings-button" showLabel />}
-          <button type="button" className="settings-button" disabled={!connection} onClick={() => setConfirm(true)}>{t("set.general.mcpRotate")}</button>
-        </div>
-        {scriptConfig && <details>
-          <summary>{t("set.general.mcpAlt")}</summary>
-          <textarea rows={10} readOnly value={scriptConfig} aria-label={t("set.general.mcpAltCopy")} />
-          <div className="settings-advanced-actions">
-            <CopyButton text={scriptConfig} ariaLabel={t("set.general.mcpAltCopy")} className="settings-button" showLabel />
-          </div>
-        </details>}
-      </div>
-    </SettingRow>
-    {confirm && <ConfirmDialog title={t("set.general.mcpRotateConfirm")} body={t("set.general.mcpRotateBody")} confirmLabel={t("set.general.mcpRotate")} onConfirm={rotate} onCancel={() => setConfirm(false)} />}
   </SettingsSection>;
 }
 

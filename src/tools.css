@@ -35,7 +35,9 @@
 .tool-switch[aria-checked="true"] { background: var(--accent); border-color: transparent; }
 .tool-switch[aria-checked="true"] > span { background: var(--bg-active); transform: translateX(18px); }
 .tool-switch:disabled { opacity: .45; }
-.tools-empty { display: grid; place-items: center; min-height: 260px; padding: 32px; color: var(--text-muted); font-size: calc(15px * var(--font-scale)); text-align: center; }
+.tools-empty { display: grid; place-content: center; justify-items: center; gap: 8px; min-height: 260px; padding: 32px; color: var(--text-muted); font-size: calc(15px * var(--font-scale)); text-align: center; }
+.tools-empty strong { color: var(--text-secondary); font-weight: 600; }
+.tools-empty span { max-width: 460px; font-size: calc(13px * var(--font-scale)); line-height: 1.55; word-break: keep-all; }
 .tools-error { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 20px 0; padding: 12px 14px; border: 1px solid var(--danger-border); border-radius: 9px; background: var(--danger-tint); color: var(--danger-fg); font-size: calc(15px * var(--font-scale)); }
 @media (max-width: 740px) {
   .tools-page { padding: 20px 14px; }

@@ -329,8 +329,11 @@ function claudeAuthStatus(result: ModelCommandResult): ModelOptions["authStatus"
 
 function cliAuthStatus(result: ModelCommandResult, agent: AgentId): ModelOptions["authStatus"] {
   const stdout = stripVTControlCharacters(result.stdout ?? "").trim();
-  if (isAuthenticated(stdout) || (agent === "grok" && parseGrokModels(stdout).length > 0)) return "authenticated";
+  if (isAuthenticated(stdout)) return "authenticated";
+  // Check unauthenticated phrases before the Grok model-list heuristic: `grok models` prints a
+  // model catalog even when not logged in, so we must reject it when "not authenticated" appears.
   if (hasConfirmedUnauthenticatedStatus(stdout)) return "unauthenticated";
+  if (agent === "grok" && parseGrokModels(stdout).length > 0) return "authenticated";
   return hasConfirmedUnauthenticatedStatus(result.stderr ?? "") ? "unauthenticated" : "unknown";
 }
 

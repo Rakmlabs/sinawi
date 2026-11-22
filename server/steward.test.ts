@@ -15,14 +15,15 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, 
 async function waitFor(predicate: () => boolean, ms = 5_000) {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > ms) throw new Error("timed out");
+    // Polls until true, so a long limit costs nothing when it passes; it only absorbs a loaded machine.
+    if (Date.now() - start > ms * 4) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 
 async function setup(t: test.TestContext, name = "repo") {
   const base = await realpath(await mkdtemp(join(tmpdir(), "sinawi-steward-")));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const repo = join(base, name);
   git(base, "init", "-q", "-b", "main", repo);
   await writeFile(join(repo, "README.md"), "readme\n");
@@ -172,6 +173,45 @@ test("a lead asks another project's lead and gets the answer back in its own cha
   assert.ok(app.events.some((event) => event.text.includes("「api」 담당에게 물었습니다")));
 });
 
+// Ninth review R9-2: the answer belongs to the turn that answered. When the user writes to the lead
+// while that turn still settles (its merge), the asker gets that turn's text, not the user's turn's.
+test("a lead's answer is the turn that answered, even when the user writes while it settles", async (t) => {
+  const a = await setup(t, "app");
+  const b = await setup(t, "api");
+  let release!: () => void;
+  let userTurnRan = false;
+  let answerRan = false;
+  const runner = async (options: RunCliOptions) => {
+    if (options.prompt.includes("[담당 「app」이 보낸 질문]")) { answerRan = true; return { exitCode: 0, finalText: "포트는 4000입니다." }; }
+    if (options.prompt.includes("사용자 요청:\n포트 확인")) return { exitCode: 0, finalText: '<<ASK to="API">>포트가 몇 번이야?<</ASK>>' };
+    if (options.prompt.includes("사용자 요청:\n로그 정리")) { userTurnRan = true; return { exitCode: 0, finalText: "로그를 정리했습니다." }; }
+    return { exitCode: 0, finalText: "준비했습니다." };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  orchestra.worktreeDataDir = a.dataDir;
+  orchestra.stewardDataDir = a.dataDir;
+  const app = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: a.repo, steward: {} });
+  const api = await orchestra.create({ prompt: "준비", agent: "codex", workers: ["claude"], cwd: b.repo, steward: {} });
+  await waitFor(() => app.status === "done" && api.status === "done" && !orchestra.isWorking(app.id) && !orchestra.isWorking(api.id));
+  // Hold the api lead's wrap-up after its answer turn, so the user's message lands while it settles.
+  const internals = orchestra as unknown as { stewardTurnEnded: (session: Session, outcome: string) => Promise<void> };
+  const turnEnded = internals.stewardTurnEnded.bind(orchestra);
+  internals.stewardTurnEnded = async (session, outcome) => {
+    if (session.id === api.id && session.steward?.answering) await new Promise<void>((resolve) => { release = resolve; });
+    return turnEnded(session, outcome);
+  };
+  await orchestra.followup(app.id, "포트 확인");
+  await waitFor(() => answerRan && api.status === "done" && Boolean(api.steward?.answering) && orchestra.isWorking(api.id), 10_000);
+  await orchestra.followup(api.id, "로그 정리");
+  await waitFor(() => userTurnRan && api.status === "done", 10_000);
+  release();
+  await waitFor(() => app.events.some((event) => event.agent === "user" && event.text.startsWith("[담당 「api」의 답]")), 10_000);
+  const reply = app.events.find((event) => event.agent === "user" && event.text.startsWith("[담당 「api」의 답]"))!;
+  assert.match(reply.text, /포트는 4000입니다/u);
+  assert.doesNotMatch(reply.text, /로그를 정리했습니다/u);
+  await waitFor(() => !orchestra.isWorking(app.id) && !orchestra.isWorking(api.id), 10_000);
+});
+
 test("leads asking each other back and forth stop after a few hops", async (t) => {
   const a = await setup(t, "one");
   const b = await setup(t, "two");
@@ -188,9 +228,11 @@ test("leads asking each other back and forth stop after a few hops", async (t) =
   await waitFor(() => two.status === "done");
   await orchestra.followup(one.id, "시작");
   const warned = () => [...one.events, ...two.events].some((event) => event.type === "warning" && event.text.includes("주고받은 횟수"));
-  await waitFor(() => warned() && one.status !== "running" && two.status !== "running", 10_000);
+  // isWorking, not status: between hops a lead is briefly not "running" while the next ASK is delivered.
+  const idle = () => !orchestra.isWorking(one.id) && !orchestra.isWorking(two.id);
+  await waitFor(() => warned() && idle(), 10_000);
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.ok(one.status !== "running" && two.status !== "running", "the chain ended");
+  assert.ok(idle(), "the chain ended");
 });
 
 test("a lead's daily report opens a turn once its time has passed", async (t) => {

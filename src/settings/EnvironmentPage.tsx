@@ -164,7 +164,9 @@ export function EnvironmentPage({ onClose }: { onClose: () => void }) {
 }
 
 function ToolRow({ tool }: { tool: SetupTool }) {
+  const warning = tool.installed && tool.warning === "unsupported-version" ? t("set.env.node.warnUnsupported")
+    : tool.installed && tool.warning === "rosetta" ? t("set.env.node.warnRosetta") : undefined;
   return <SettingRow id={`tool-${tool.id}`} label={tool.name}
-    description={tool.installed ? (tool.agent ? t("ob.agent") : undefined) : <span className="settings-command"><code>{tool.install}</code><CopyButton text={tool.install} ariaLabel={t("ob.copyCommand", { label: tool.name })} /><WebLink className="settings-link" href={tool.docs}>{t("ob.installDocs")} <ExternalLink size={11} aria-hidden="true" /></WebLink></span>}
-    badges={tool.installed ? <StatusBadge tone="ok">{tool.version ? `v${tool.version}` : t("ob.installed")}</StatusBadge> : <StatusBadge tone={tool.agent ? "muted" : "warn"}>{tool.agent ? t("ob.missingOptional") : t("ob.installRequired")}</StatusBadge>} />;
+    description={tool.installed ? (tool.agent ? t("ob.agent") : (warning ?? undefined)) : <span className="settings-command"><code>{tool.install}</code><CopyButton text={tool.install} ariaLabel={t("ob.copyCommand", { label: tool.name })} /><WebLink className="settings-link" href={tool.docs}>{t("ob.installDocs")} <ExternalLink size={11} aria-hidden="true" /></WebLink></span>}
+    badges={tool.installed ? <StatusBadge tone={warning ? "warn" : "ok"}>{tool.version ? `v${tool.version}` : t("ob.installed")}</StatusBadge> : <StatusBadge tone={tool.agent ? "muted" : "warn"}>{tool.agent ? t("ob.missingOptional") : t("ob.installRequired")}</StatusBadge>} />;
 }

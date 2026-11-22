@@ -8,6 +8,7 @@ import type { Duplex } from "node:stream";
 import type { Express, Request, Response } from "express";
 import { WebSocketServer } from "ws";
 import { isAllowedOrigin } from "./origin-policy.js";
+import { hasAppKey } from "./app-key.js";
 
 // The server is bundled as CommonJS, where esbuild cannot preserve import.meta.url.
 // __filename points at server.cjs in the app bundle and at this module under tsx.
@@ -316,9 +317,10 @@ export class TerminalSessionManager {
   }
 }
 
-export function isTerminalRequestAllowed(remoteAddress: string | undefined, origin: string | undefined): boolean {
+/** A terminal is a shell outside any approval: the app window only (`keyed`: it carries the app key). */
+export function isTerminalRequestAllowed(remoteAddress: string | undefined, origin: string | undefined, keyed: boolean): boolean {
   const loopback = remoteAddress === "127.0.0.1" || remoteAddress === "::1" || remoteAddress === "::ffff:127.0.0.1";
-  return loopback && typeof origin === "string" && isAllowedOrigin(origin);
+  return loopback && keyed && typeof origin === "string" && isAllowedOrigin(origin);
 }
 
 function routeId(req: Request) {
@@ -357,7 +359,7 @@ export function createTerminalService(options: TerminalServiceOptions = {}) {
   const handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): boolean => {
     const url = new URL(request.url ?? "", "http://127.0.0.1");
     if (url.pathname !== "/api/terminal/ws") return false;
-    if (!isTerminalRequestAllowed(request.socket.remoteAddress, request.headers.origin)) {
+    if (!isTerminalRequestAllowed(request.socket.remoteAddress, request.headers.origin, hasAppKey(request.headers))) {
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return true;

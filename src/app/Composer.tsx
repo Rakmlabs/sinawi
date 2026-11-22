@@ -282,7 +282,7 @@ export function Composer(props: ComposerProps) {
       />
       <div className="composer-bottom">
         <button
-          className="directory-button"
+          className={`directory-button${shownCwd ? "" : " needs-folder"}`}
           disabled={Boolean(active)}
           onClick={() => openModal("directory")}
           aria-label={t("comp.folderLabel", { folder: shownCwd || t("comp.chooseFolder") })}

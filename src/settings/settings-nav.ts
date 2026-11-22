@@ -5,7 +5,7 @@ import { t, type MessageKey } from "../i18n";
 export const SETTINGS_OPEN_EVENT = "orchestra:open-settings";
 export const SETTINGS_LAST_KEY = "sinawi:settings:last";
 
-export const APP_CATEGORIES = ["general", "appearance", "notifications", "shortcuts", "environment", "updates"] as const;
+export const APP_CATEGORIES = ["general", "connect", "appearance", "notifications", "shortcuts", "environment", "updates"] as const;
 export const WORKSPACE_CATEGORIES = ["workspaces", "agents", "routing", "projects"] as const;
 export const CATEGORIES = [...APP_CATEGORIES, ...WORKSPACE_CATEGORIES] as const;
 export type SettingsCategory = typeof CATEGORIES[number];
@@ -54,7 +54,9 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "autoRun", category: "general", section: "set.general.work", label: "set.general.autoRun", description: "set.general.autoRunDesc", keywords: "auto run split goal commander 끝까지 나누기 총지휘 자동 진행 체크리스트" },
   { id: "userPreferences", category: "general", section: "set.general.work", label: "set.general.userPrefs", description: "set.general.userPrefsDesc", keywords: "preferences lead steward 선호 담당 공통 user-preferences" },
   { id: "legacyMergePolicy", category: "general", section: "set.general.leads", label: "set.general.legacyMerge", description: "set.general.legacyMergeDesc", keywords: "merge legacy lead steward 병합 이전 담당 승인 auto ask" },
-  { id: "appMcp", category: "general", section: "set.general.mcp", label: "set.general.mcp", description: "set.general.mcpDesc", keywords: "mcp claude desktop external ai token 외부 연결 토큰 도구" },
+  { id: "appMcp", category: "connect", section: "set.connect.how", label: "set.connect.pick", description: "set.connect.pickDesc", keywords: "mcp claude code codex grok desktop cursor external ai orchestrator 외부 연결 오케스트레이터 그록봇 클라이언트" },
+  { id: "appMcpBrief", category: "connect", section: "set.connect.brief", label: "set.connect.briefLabel", description: "set.connect.briefDesc", keywords: "instructions prompt agents.md 지침 사용법 프롬프트" },
+  { id: "appMcpToken", category: "connect", section: "set.connect.token", label: "set.connect.tokenLabel", description: "set.connect.tokenDesc", keywords: "token rotate 토큰 재발급" },
   { id: "bulkMergePolicy", category: "general", section: "set.general.leads", label: "set.general.bulkMerge", description: "set.general.bulkMergeDesc", keywords: "merge bulk all leads 병합 일괄 모든 담당 정책" },
   { id: "reset", category: "general", section: "set.danger", label: "set.general.reset", description: "set.general.resetDesc", keywords: "reset default 초기화 기본값" },
   { id: "theme", category: "appearance", section: "set.appearance.look", label: "appearance.theme", description: "set.appearance.themeDesc", keywords: "theme dark light 테마 다크 라이트 모드" },
@@ -79,6 +81,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { id: "workspaces", category: "workspaces", section: "wsset.title", label: "wsset.title", description: "set.ws.desc", keywords: "workspace 작업 공간 F1 F2" },
   { id: "ws-media", category: "workspaces", section: "wsset.rules", label: "wsset.media", description: "wsset.mediaHint", keywords: "image video media 이미지 영상" },
   { id: "ws-computer", category: "workspaces", section: "wsset.rules", label: "wsset.computerUse", description: "wsset.computerUseHint", keywords: "computer use 컴퓨터 조작" },
+  { id: "ws-runtime-programs", category: "workspaces", section: "wsset.rules", label: "wsset.runtimePrograms", description: "wsset.runtimeProgramsHint", keywords: "node npx python3 npm pnpm yarn find ao-serve auto 자동 인터프리터 코드 실행 미리 허용 승인" },
   { id: "ws-full-access", category: "workspaces", section: "wsset.rules", label: "wsset.fullAccess", description: "wsset.fullAccessHint", keywords: "full access permission approval 전체 권한 승인 허용 bypass" },
   { id: "ws-grok-mcp", category: "workspaces", section: "wsset.rules", label: "wsset.grokMcp", description: "wsset.grokMcpHint", keywords: "grok mcp" },
   { id: "ws-blocked", category: "workspaces", section: "wsset.rules", label: "wsset.blockedTools", description: "wsset.blockedToolsHint", keywords: "block tool mcp 차단 도구" },

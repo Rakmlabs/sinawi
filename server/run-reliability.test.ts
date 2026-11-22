@@ -3,6 +3,7 @@ import test from "node:test";
 import { buildInvocation, CLAUDE_READ_TOOLS, GROK_READ_TOOLS, meaningfulStderr, normalizeCliLine, type RunCliOptions } from "./cli.js";
 import { Orchestra } from "./orchestra.js";
 import type { Session } from "./types.js";
+import { onAbort } from "./test-abort.js";
 
 async function waitUntilSettled(session: Session, timeoutMs = 5_000) {
   const started = Date.now();
@@ -55,13 +56,22 @@ test("the orchestrator's verification run asks for read tools, workers do not ru
   assert.ok(session.events.some((event) => event.type === "message" && event.text === "verified"));
 });
 
-test("a watchdog stop names the silent step instead of a bare message", async () => {
+// The watchdog runs on mocked time from the runner's start: with a real 30 ms timer a loaded machine
+// could stop the run before the runner's line, and the message then named another step.
+test("a watchdog stop names the silent step instead of a bare message", async (t) => {
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
   const runner = (options: RunCliOptions) => new Promise<{ exitCode: number; finalText: string }>((resolve) => {
     options.onLine({ type: "tool", text: "명령: npm test" });
-    options.signal?.addEventListener("abort", () => resolve({ exitCode: 143, finalText: "" }), { once: true });
+    onAbort(options.signal, () => resolve({ exitCode: 143, finalText: "" }));
+    started();
   });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, undefined, undefined, undefined, undefined, 30);
   const session = await orchestra.create({ prompt: "Silent task", agent: "claude", workers: ["codex"], cwd: process.cwd() });
+  await running;
+  t.mock.timers.tick(35);
+  t.mock.timers.reset();
   await waitUntilSettled(session);
   assert.equal(session.status, "error");
   const text = session.events.at(-1)?.text ?? "";

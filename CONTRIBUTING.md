@@ -24,6 +24,10 @@ npm run app:dev    # the desktop app
 
 At least one of the `claude`, `codex` or `grok` CLIs must be installed and logged in to run sessions. If the Sinawi app is already running, stop it first or set `SINAWI_PORT` and `SINAWI_DATA_DIR` for the dev server, so the two do not share a port or data.
 
+**npm 11 install-script warning** — npm 11 prints a notice about `node-pty` and `esbuild` install scripts not yet reviewed. The `allowScripts` field in `package.json` already approves them; run `npm approve-scripts --allow-scripts-pending` after any `npm install` that adds new packages that have install scripts, to keep the field current.
+
+**Building the app without a signing key** — `npm run app:build` works without `TAURI_SIGNING_PRIVATE_KEY`. It prints one line saying updater artifacts were skipped and passes `bundle.createUpdaterArtifacts: false` to Tauri. The release build (CI and `scripts/bundle-macos.sh`) requires the key and behaves as before.
+
 ## Before you push
 
 ```sh
@@ -56,7 +60,7 @@ Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report s
 
 - **버그나 아이디어:** [이슈](https://github.com/Rakmlabs/sinawi/issues/new/choose)에서 버그 신고나 기능 제안 양식을 쓰세요. 한국어로 써도 됩니다. 질문은 [Discussions](https://github.com/Rakmlabs/sinawi/discussions)에 올려 주세요.
 - **작업 순서:** 최신 `main`에서 브랜치를 만들고(`fix/...`, `feat/...`), 이슈를 연결한 풀 리퀘스트(`Fixes #12`)를 보내 주세요. CI(typecheck, test, build, cargo)가 통과해야 하고, 메인테이너가 squash merge합니다.
-- **개발 환경:** `npm install` 후 `npm run dev`(서버 127.0.0.1:3001 + Vite UI) 또는 `npm run app:dev`. 설치된 앱이 켜져 있으면 끄거나 `SINAWI_PORT`, `SINAWI_DATA_DIR`를 따로 주세요.
+- **개발 환경:** `npm install` 후 `npm run dev`(서버 127.0.0.1:3001 + Vite UI) 또는 `npm run app:dev`. 설치된 앱이 켜져 있으면 끄거나 `SINAWI_PORT`, `SINAWI_DATA_DIR`를 따로 주세요. npm 11 사용 시 `node-pty`/`esbuild` 설치 스크립트 관련 안내가 출력될 수 있는데, `package.json`의 `allowScripts` 필드로 이미 승인되어 있습니다. `npm run app:build`는 `TAURI_SIGNING_PRIVATE_KEY` 없이도 동작하며, 서명 키가 없으면 업데이터 아티팩트 생성을 비활성화하고 한 줄 안내를 출력합니다.
 - **푸시 전:** `npm run typecheck`, `npm test`. 테스트는 코드 옆(`server/*.test.ts`, `src/*.test.ts`)에 두고, 가짜 CLI를 쓰므로 CLI나 네트워크가 필요 없습니다. UI 문구는 `src/i18n.ts`에 한국어와 영어 둘 다 넣어 주세요.
 - **커밋/PR 제목:** 이제 무엇이 참인지로 씁니다. 한 PR에는 변경 하나만 담고, 비밀값이나 `.data/`는 커밋하지 마세요.
 - **릴리즈:** 메인테이너가 `main`에서 냅니다. [docs/RELEASING.md](docs/RELEASING.md) 참고.

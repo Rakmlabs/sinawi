@@ -1,13 +1,13 @@
 import { terminalOwnsKeyboardEvent } from "./terminal-events";
 import { AgentMark } from "./AgentMark";
 import { goalProgress } from "./goal-progress";
-import { leadGroups, leadHue, leadName, leadPreview, stewardDescription, stewardIdOf, type LeadGroup } from "./lead";
-import { memo, useEffect, useMemo, useReducer, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { leadGroups, leadHue, leadName, leadSummary, stewardDescription, stewardIdOf, type LeadGroup } from "./lead";
+import { memo, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, groupTree, type MenuItem } from "./SidebarMenu";
 import { delegationWorkers } from "./conversation";
 import type { Group, Session, SessionStatus, Steward, WorkspaceId } from "../server/types";
-import { BarChart3, Bot, Check, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, RotateCw, Search, Settings2, SquarePen, UserCheck, WandSparkles, Wrench, X } from "lucide-react";
+import { BarChart3, Bot, Check, Plug, ChevronRight, CircleHelp, Eye, FolderInput, Folder, Pencil, Trash2, ArrowLeftRight, FolderOpen, MoreHorizontal, Plus, RotateCw, Search, Settings2, SquarePen, UserCheck, WandSparkles, Wrench, X } from "lucide-react";
 import { searchWorkspace, workspaceName } from "./workspaces";
 import { useWorkspaces } from "./workspace-context";
 import { reloadApp } from "./reload";
@@ -15,6 +15,10 @@ import { isMacPlatform } from "./sidebar-rail";
 import { Beat } from "./Beat";
 import { DeleteDialog } from "./DeleteDialog";
 import { t, translatedMap, useT } from "./i18n";
+import { originLabel } from "./origin";
+import { LeadChatList } from "./app/LeadChatList";
+import { appKeyStatus } from "./app-key";
+import { useNeedsYou } from "./app/needs-you";
 
 const agentNames: Record<Session["agent"], string> = { claude: "Claude", codex: "Codex", grok: "Grok Build" };
 const statusLabels = translatedMap<SessionStatus>({ running: "status.running", done: "status.done", error: "status.error", stopped: "status.stopped" });
@@ -96,6 +100,9 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
   useT();
   const { closed: railClosed, tab, onNavigate, onSkills, connected, sessions, groups, busy, selected, onNew, onSelect, onHelp } = props;
   const { workspaces } = useWorkspaces();
+  // Without the app key the server refuses this window's live feed: say that, not "reconnecting".
+  const keyMissing = useSyncExternalStore(appKeyStatus.subscribe, appKeyStatus.missing, () => false);
+  const waiting = useNeedsYou();
   const [footerMenu, setFooterMenu] = useState<{ x: number; y: number }>();
   const [workerTree, dispatchWorkerTree] = useReducer(workerTreeReducer, { expanded: new Set(selected ? [selected] : []) });
   const [closed, setClosed] = useState<Set<string>>(new Set());
@@ -250,7 +257,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
       onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}
       onPointerDown={(event) => startDrag(event, session)}>
       <button className={`sidebar-chat-open ${parentActive ? "active" : ""}`} aria-current={parentActive ? "page" : undefined} title={`${session.title} · ${agentNames[session.agent]} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
-        {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}{session.steward && <UserCheck size={13} className="sidebar-steward" aria-label={t("steward.badge")} />}<span className="sidebar-session-title">{session.title}</span>
+        {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : <span className={`status-dot ${session.status}`} role="img" aria-label={statusLabels[session.status]} />}{session.steward && <UserCheck size={13} className="sidebar-steward" aria-label={t("steward.badge")} />}{session.origin && <Plug size={12} className="sidebar-origin" aria-label={t("origin.openedBy", { name: originLabel(session.origin) })} />}<span className="sidebar-session-title">{session.title}</span>
         {(() => { const progress = goalProgress(session); return progress && <small className="sidebar-goal-progress" title={t("goal.progressTitle", progress)}>{progress.done}/{progress.total}</small>; })()}
       </button>
       <button className={`sidebar-chat-toggle${open ? " open" : ""}`} aria-label={t(open ? "side.collapseWorkers" : "side.expandWorkers", { title: session.title })} aria-expanded={open} aria-controls={`workers-${session.id}`} onClick={() => dispatchWorkerTree({ type: "toggle", id: session.id })}><ChevronRight size={14} className={`folder-chevron ${open ? "open" : ""}`} /></button>
@@ -294,26 +301,42 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
           onClick={(event) => menu === group.id ? setMenu(undefined) : openMenu("steward", group.id, event, true)}><MoreHorizontal size={15} /></button>
       </div>
     </div>;
-    const active = selected === session.id && tab === "workspace" && !props.selectedWorker;
-    const preview = leadPreview(session).replace(/\s+/gu, " ").slice(0, 140);
+    const chats = [session, ...group.others];
+    const running = chats.filter((chat) => chat.status === "running").length;
+    const needsYou = chats.filter((chat) => waiting.has(chat.id)).length;
+    const failed = !running && session.status === "error";
+    // What the lead said last in any of its chats: a chat an outside AI just opened empty does not
+    // blank the lead's line (review L1).
+    const preview = leadSummary(chats).replace(/\s+/gu, " ").slice(0, 140);
     const progress = goalProgress(session);
+    const folded = closed.has(group.id) && !searching;
+    const anyActive = chats.some((chat) => chat.id === selected) && tab === "workspace";
+    // The lead itself on top (who, and what it is doing now); every chat of it below, each with the
+    // workers it put to work (src/app/LeadChatList.tsx). The row is the lead, not its latest chat.
     return <div key={group.id} className="sidebar-chat sidebar-lead">
       <div className="sidebar-row" onContextMenu={(event) => { event.preventDefault(); openMenu("session", session.id, event); }}>
-        <button className={`sidebar-lead-open${active ? " active" : ""}`} aria-current={active ? "page" : undefined} title={`${name} · ${session.title} · ${statusLabels[session.status]}`} onClick={() => onSelect(session.id)}>
+        <button className={`sidebar-lead-open${anyActive && folded ? " active" : ""}`} title={`${name} · ${statusLabels[session.status]}`}
+          aria-expanded={!folded} aria-controls={`lead-chats-${group.id}`}
+          onClick={() => setClosed((old) => { const next = new Set(old); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next; })}>
           {leadAvatar(name)}
           <span className="sidebar-lead-copy">
             <span className="sidebar-lead-name"><span className="sidebar-session-title">{name}</span>
-              {session.status === "running" ? <span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span> : session.status === "error" ? <span className="status-dot error" role="img" aria-label={statusLabels.error} /> : null}
+              {running > 0 ? <small className="sidebar-lead-running"><span className="status-beat" role="img" aria-label={statusLabels.running}><Beat /></span>{t("lcl.running", { n: running })}</small> : failed ? <span className="status-dot error" role="img" aria-label={statusLabels.error} /> : null}
               {progress && <small className="sidebar-goal-progress" title={t("goal.progressTitle", progress)}>{progress.done}/{progress.total}</small>}
             </span>
-            <small className="sidebar-lead-preview">{preview || t("side.leadNoMessages")}</small>
+            {needsYou > 0
+              ? <small className="sidebar-lead-preview needs" title={t("lcl.needsYouTitle")}>{t("side.leadNeedsYou", { n: needsYou })}</small>
+              : <small className="sidebar-lead-preview">{preview || t("side.leadNoMessages")}</small>}
           </span>
+          <ChevronRight size={14} className={`folder-chevron ${folded ? "" : "open"}`} aria-hidden="true" />
         </button>
         {newThreadButton(group)}
         <button className="sidebar-row-action" aria-label={t("side.chatMenuNamed", { title: name })} aria-haspopup="menu" aria-expanded={menu === session.id} onClick={(event) => menu === session.id ? setMenu(undefined) : openMenu("session", session.id, event, true)}><MoreHorizontal size={15} /></button>
       </div>
-      {subChats(session.id).length > 0 && <div className="sidebar-subchats" aria-label={t("side.subChats", { title: name })}>{subChats(session.id).map(sessionRow)}</div>}
-      {group.others.length > 0 && <div className="sidebar-subchats sidebar-lead-threads" aria-label={t("side.leadThreads", { name, count: group.others.length + 1 })}>{group.others.map(sessionRow)}</div>}
+      {!folded && <div id={`lead-chats-${group.id}`} aria-label={t("side.leadThreads", { name, count: chats.length })}>
+        <LeadChatList chats={chats} query={query} selectedId={tab === "workspace" ? selected : undefined} selectedWorker={props.selectedWorker}
+          onSelect={onSelect} onSelectWorker={props.onSelectWorker} childChats={subChats} limit={5} />
+      </div>}
     </div>;
   };
   const ungrouped = visibleSessions.filter((session) => !visibleGroups.some((group) => group.id === session.groupId));
@@ -322,7 +345,7 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
   const searchKey = mac ? "⌘K" : "Ctrl+K";
   const footerItems: MenuItem[] = [
     { kind: "action", label: t("side.settings"), icon: <Settings2 size={15} />, meta: <kbd>{mac ? "⌘," : "Ctrl+,"}</kbd>, onSelect: () => props.onSettings ? props.onSettings() : onNavigate("routing") },
-    { kind: "action", label: t("header.tools"), icon: <Wrench size={15} />, meta: <kbd>{mac ? "⌘⇧T" : "F3"}</kbd>, onSelect: () => onNavigate("tools") },
+    { kind: "action", label: t("header.tools"), icon: <Wrench size={15} />, meta: <kbd>F3</kbd>, onSelect: () => onNavigate("tools") },
     { kind: "action", label: t("side.bots"), icon: <Bot size={15} />, onSelect: () => onNavigate("bots") },
     { kind: "action", label: t("side.skills"), icon: <WandSparkles size={15} />, onSelect: onSkills },
     ...(props.onUsage ? [{ kind: "action" as const, label: t("side.usage"), icon: <BarChart3 size={15} />, onSelect: props.onUsage }] : []),
@@ -344,7 +367,8 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
       <section className="sidebar-projects" aria-label={t("side.projects")}>
         <div className="sidebar-section-heading"><h2>{t("side.projects")}</h2><button aria-label={t("ob.createProject")} title={t("ob.createProject")} disabled={busy} onClick={() => { setEditor({ kind: "create", id: "", value: "" }); setMenu(undefined); }}><Plus size={15} /></button></div>
         {editor?.kind === "create" && editForm(editor)}
-        {!searching && !visibleGroups.length && <p className="sidebar-empty">{t("side.projectsEmpty")}</p>}
+        {/* Once leads hold the work, empty-section hints are noise (review round 2, §6). */}
+        {!searching && !visibleGroups.length && !leads.length && <p className="sidebar-empty">{t("side.projectsEmpty")}</p>}
         {visibleGroups.map((group) => {
           const open = searching || !closed.has(group.id);
           const chats = visibleSessions.filter((session) => session.groupId === group.id);
@@ -360,15 +384,15 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
           </div>;
         })}
       </section>
-      <section className={`sidebar-recents${dropClass(UNGROUPED)}`} aria-label={t("side.recentChats")} data-drop-group={UNGROUPED}><div className="sidebar-section-heading"><h2>{t("side.recent")}</h2>{drag && <small className="drop-hint">{t("side.dropUnsorted")}</small>}</div>{dropTarget === UNGROUPED && drag && <div className="drop-slot" aria-hidden="true">{t("side.moveUnsorted", { title: drag.title })}</div>}{ungrouped.length ? ungrouped.map(sessionRow) : !searching ? <p className="sidebar-empty">{t("side.noChats")}</p> : null}</section>
+      <section className={`sidebar-recents${dropClass(UNGROUPED)}`} aria-label={t("side.recentChats")} data-drop-group={UNGROUPED}><div className="sidebar-section-heading"><h2>{t("side.recent")}</h2>{drag && <small className="drop-hint">{t("side.dropUnsorted")}</small>}</div>{dropTarget === UNGROUPED && drag && <div className="drop-slot" aria-hidden="true">{t("side.moveUnsorted", { title: drag.title })}</div>}{ungrouped.length ? ungrouped.map(sessionRow) : !searching && !leads.length ? <p className="sidebar-empty">{t("side.noChats")}</p> : null}</section>
     </nav>
     <div className="sidebar-footer">
       <button className={`sidebar-settings${managementTab ? " active" : ""}`} aria-haspopup="menu" aria-expanded={Boolean(footerMenu)} aria-current={managementTab ? "page" : undefined}
         onClick={(event) => { if (footerMenu) { setFooterMenu(undefined); return; } const box = event.currentTarget.getBoundingClientRect(); setFooterMenu({ x: box.left, y: box.top - 6 }); }}>
         <Settings2 size={16} aria-hidden="true" /><span>{t("side.settings")}</span>
       </button>
-      <span className="rail-connection" role="status" title={connected && typeof window !== "undefined" && window.location?.hostname ? `${t("side.connected")} · ${window.location.hostname}` : undefined}>
-        <span className={`rail-status ${connected ? "online" : "offline"}`} aria-hidden="true" /><span>{connected ? t("side.connected") : t("side.reconnecting")}</span>
+      <span className="rail-connection" role="status" title={keyMissing && !connected ? t("side.noAppKeyHint") : connected && typeof window !== "undefined" && window.location?.hostname ? `${t("side.connected")} · ${window.location.hostname}` : undefined}>
+        <span className={`rail-status ${connected ? "online" : "offline"}`} aria-hidden="true" /><span>{connected ? t("side.connected") : keyMissing ? t("side.noAppKey") : t("side.reconnecting")}</span>
       </span>
     </div>
     {footerMenu && <ContextMenu x={footerMenu.x} y={footerMenu.y} placement="above" className="sidebar-footer-menu" label={t("side.tools")} items={footerItems} onClose={() => setFooterMenu(undefined)} />}

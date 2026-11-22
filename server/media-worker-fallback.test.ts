@@ -4,9 +4,11 @@ import { Orchestra } from "./orchestra.js";
 import type { RunCliOptions } from "./cli.js";
 import type { Session, AgentId } from "./types.js";
 
-async function settled(session: Session) {
-  const deadline = Date.now() + 3000;
-  while (session.status === "running" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+// Waits on isWorking, not status: between a worker's failure and the fallback worker, or before the lead
+// verifies the result, the status is briefly not "running". The limit is only a safety net for a stuck run.
+async function settled(orchestra: Orchestra, session: Session) {
+  const deadline = Date.now() + 30_000;
+  while (orchestra.isWorking(session.id) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(session.status, "done", session.events.at(-1)?.text);
 }
 
@@ -29,7 +31,7 @@ for (const [primary, alternate] of [["grok", "codex"], ["codex", "grok"]] as con
     const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, undefined, undefined,
       async () => ({ enabled: true, threshold: 3, quotas: [], order: { codex: ["claude"], grok: ["claude"] }, authenticated: ["grok", "codex", "claude"] }));
     const session = await orchestra.create({ prompt: "이미지 만들어 줘", cwd: process.cwd(), agent: "grok", workers: [primary] });
-    await settled(session);
+    await settled(orchestra, session);
     assert.deepEqual(calls.filter((call) => call.role === "worker").map((call) => call.agent), [primary, alternate]);
     assert.equal(session.agent, "grok");
     assert.deepEqual(session.workers, [alternate]);
@@ -41,10 +43,10 @@ for (const prompt of ["Docker image 버그 수정", "video player 버그 수정"
   test(`company coding request stays available: ${prompt}`, async () => {
     const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "fixed" }));
     const session = await orchestra.create({ prompt, cwd: process.cwd(), agent: "claude", workers: ["grok"], workspaceId: "company" });
-    await settled(session);
+    await settled(orchestra, session);
     assert.equal(session.agent, "claude");
     await orchestra.followup(session.id, prompt);
-    await settled(session);
+    await settled(orchestra, session);
   });
 }
 
@@ -55,11 +57,11 @@ test("an orchestrator picked by hand stays: auto-switch turns off and media keyw
     return { exitCode: 0, finalText: "done" };
   });
   const session = await orchestra.create({ prompt: "시작", cwd: process.cwd(), agent: "grok", workers: ["grok"], mode: "auto" });
-  await settled(session);
+  await settled(orchestra, session);
   orchestra.updateTeam(session.id, { agent: "claude", workers: ["claude"] });
   assert.equal(session.autoSwitch, false);
   await orchestra.followup(session.id, "로고 이미지 다시 확인해봐");
-  await settled(session);
+  await settled(orchestra, session);
   assert.equal(session.agent, "claude");
   assert.equal(leads.at(-1), "claude");
   orchestra.setAutoSwitch(session.id, true);

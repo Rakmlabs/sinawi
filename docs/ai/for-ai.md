@@ -37,26 +37,19 @@ Both surfaces read the same registry (`APP_TOOLS` in `server/app-tools.ts`). App
 
 ### Connect an MCP client
 
-Sinawi must be running. In order of preference:
+Sinawi must be running. **Settings → Connect an AI** shows a ready setup per client with this Mac's paths filled in (`clientSetups` in `server/app-mcp.ts`, served by `GET`/`POST /api/app-mcp/connection`):
 
-1. **In-app button** (Claude Desktop, Cursor): **Settings → General → External AI connection (MCP) → Connect to Claude Desktop / Connect to Cursor**. After the user confirms the exact JSON, the app merges `mcpServers.sinawi` into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json`, keeping other entries and a `.bak` copy. The entry is `"command": "<node>", "args": ["<data>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<data>/app-mcp-token"}` (no token copied). Routes: `GET`/`POST /api/app-mcp/clients/:client` (`claude`, `cursor`); not MCP tools, and `POST` needs the app's own Origin and the confirmed JSON. Tests move the paths with `SINAWI_CLAUDE_DESKTOP_CONFIG` and `SINAWI_CURSOR_MCP_CONFIG`.
-2. **npx**, with the npm package `@rakmlabs/sinawi`: **Copy config** on the same screen gives
+- **Claude Code**: `claude mcp add sinawi --scope user -e SINAWI_URL=<url> -e SINAWI_MCP_TOKEN_FILE=<data>/app-mcp-token -- <node> <data>/hooks/sinawi-mcp.mjs`
+- **Codex**: `codex mcp add sinawi --env … -- <node> <bridge>`, or the same as a `[mcp_servers.sinawi]` block in `~/.codex/config.toml`
+- **Grok Build**: `grok mcp add sinawi -e … -- <node> <bridge>`, or `[mcp_servers.sinawi]` with `enabled = true` in `~/.grok/config.toml`
+- **Claude Desktop, Cursor**: a button. After the user confirms the exact JSON, the app merges `mcpServers.sinawi` into `~/Library/Application Support/Claude/claude_desktop_config.json` or `~/.cursor/mcp.json`, keeping other entries and a `.bak` copy. Routes: `GET`/`POST /api/app-mcp/clients/:client/plan` and `POST /api/app-mcp/clients/:client` (`claude`, `cursor`); not MCP tools, and only the app's own window (allowed Origin) may call them. Tests move the paths with `SINAWI_CLAUDE_DESKTOP_CONFIG` and `SINAWI_CURSOR_MCP_CONFIG`.
+- **Any other client**: `{"mcpServers": {"sinawi": {"command": "<node>", "args": ["<data>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<data>/app-mcp-token"}}}}`.
 
-```json
-{
-  "mcpServers": {
-    "sinawi": {
-      "command": "npx",
-      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
-      "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<token from the settings screen>" }
-    }
-  }
-}
-```
+The entries read the token from its file (no token copied). `/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs` is the same bridge; the copy in `<data>/hooks/` survives app updates and moves. From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`) starts it too. Every form runs one implementation, `packages/sinawi/lib/mcp.mjs`, which has no dependencies (Node 18+).
 
-3. **The bridge bundled in the app**: `"command": "node"`, `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, same `env`. The settings screen's "without npx" config points at the copy in `<data>/hooks/sinawi-mcp.mjs` instead (it survives app updates and moves).
+The npm package `@rakmlabs/sinawi` is **not published yet** (`npx` answers 404). Once it is, `npx -y @rakmlabs/sinawi mcp` can replace `<node> <bridge>`, and `npx @rakmlabs/sinawi` installs the app (macOS; downloads the latest release, verifies it with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`).
 
-From a checkout, `npm run sinawi-mcp` (= `node scripts/sinawi-mcp.mjs`) starts the same stdio bridge. Every form runs one implementation, `packages/sinawi/lib/mcp.mjs`, which has no dependencies (Node 18+). The same npm package installs the app: `npx @rakmlabs/sinawi` (macOS; downloads the latest release, verifies it with `codesign --verify --deep --strict` and `spctl -a -t exec`, asks before replacing `/Applications/Sinawi.app`).
+**Orchestrator loop:** `list_leads` → `create_session(lead_id, prompt, agent?, model?)` opens a new chat (tab) under that lead, sharing its folder, instructions and notes → `wait_for_session(session_id)` until `done`, passing `after_event_id = lastEventId` on later calls → `send_message` + `wait_for_session` to continue → `show_session` to bring the chat up in the app. The user sees each chat live, labelled with the client's name, and can type into it.
 
 ### Bridge environment variables (`sinawi mcp`)
 
@@ -82,7 +75,7 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 <!-- tools:start -->
 <!-- Generated from server/app-tools.ts by `npm run docs:ai`. Do not edit by hand. -->
 
-89 tools (85 on the lead surface, 79 on the external surface), 30 of them need approval.
+91 tools (85 on the lead surface, 81 on the external surface), 30 of them need approval.
 
 ### Lead-only (inside a lead's run)
 
@@ -91,8 +84,8 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 | `delegate_task` | lead only | no | Hand a brief to a worker (Claude/Codex/Grok CLI) and get a task_id back at once; several calls run in parallel. `kind: "design"` returns screenshots. |
 | `check_task` | lead only | no (read) | Status of delegated tasks (running/done/error/stopped); all of this turn's tasks when task_id is empty. |
 | `collect_results` | lead only | no (read) | Receive results of delegated tasks, optionally waiting (wait, timeout_sec). While `still_running` is returned the work is not failed: call again. Results are returned once unless `include_collected` is set. |
-| `write_skill` | lead only | no | Save a reusable skill (instructions in Markdown) for this lead or the project, to attach to later briefs. |
-| `update_skill` | lead only | no | Edit the description or body of a skill made with write_skill. |
+| `write_skill` | lead only | no | Save a reusable skill (instructions in Markdown) for this lead or the project, to attach to later briefs. scope:'project' writes into the repo and waits for the user's approval. |
+| `update_skill` | lead only | no | Edit the description or body of a skill made with write_skill. Project skills (scope:'project') change only after the user's approval. |
 | `list_skills` | lead only | no (read) | Skills this lead can attach to worker briefs (lead skills and project skills). |
 | `schedule_create` | lead only | no | Create a schedule for this lead: at the given time the prompt arrives in the lead's chat. |
 | `schedule_list` | lead only | no (read) | This lead's schedules (ID, time, repeat, enabled) plus the current time and time zone. |
@@ -112,12 +105,14 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 
 | Tool | Surface | Approval | Summary |
 |---|---|---|---|
-| `list_sessions` | lead, external | no (read) | Chats: ID, title, status, agent, folder, whether it is a lead chat. |
-| `get_session` | lead, external | no (read) | One chat with its recent messages and events (answers, tool runs, errors). |
+| `list_sessions` | lead, external | no (read) | Chats: ID, title, status, agent, folder, their lead and who opened them; lead_id lists one lead's chats. |
+| `get_session` | lead, external | no (read) | One chat with its recent messages and events (answers, tool runs, errors); after_event_id returns only newer ones, before_event_id pages back (old events of a long chat come from its archive). cursorLost: true means the id was not found and the latest came back. |
 | `get_session_summary` | lead, external | no (read) | A chat at a glance: status, the lead's last answer, checklist progress, pending merge, lead info. |
-| `create_session` | lead, external | no | Open a new chat; with a prompt it starts working, without one it stays empty. Can open a new thread of a lead (lead_id). |
-| `send_message` | lead, external | no | Send a follow-up message to a chat (starts the next turn). |
+| `create_session` | lead, external | no | Open a new chat (the user watches it live in the app); with a prompt it starts working, without one it stays empty. With lead_id it opens a new chat (tab) of that lead sharing its folder, instructions and memory; agent/model then pick that chat's CLI and model. |
+| `send_message` | lead, external | no | Send a follow-up message to a chat (starts the next turn). A running chat refuses it: wait_for_session first. |
 | `ask_running_session` | lead, external | no | Ask a running chat in the caller's workspace a side question without stopping it. Cross-workspace asking is unavailable. The answer is attached separately. |
+| `wait_for_session` | external only | no (read) | Wait until a chat's turn is done (or timeout_sec, default 50, max 600) and get its status, the lead's last answer and the messages since after_event_id. While done is false, call again with lastEventId. |
+| `show_session` | external only | no | Bring a chat to the front of the Sinawi window so the user sees it; a chat in another workspace raises a notification instead. |
 | `rename_session` | lead, external | no | Rename a chat (the name shown in the sidebar). |
 | `move_session_to_group` | lead, external | no | Put a chat into a project group, or take it out (empty group_id). |
 | `move_session_to_workspace` | lead, external | **yes** | Move a chat to another workspace; it then follows that workspace's policy. |

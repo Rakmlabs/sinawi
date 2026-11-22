@@ -39,7 +39,10 @@ import { FileViewer } from "../FileViewer";
 import type { MediaRef } from "../viewer-model";
 import { ToolsPanel, toolsShortcut } from "../ToolsPanel";
 import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SessionDraft, SkillInfo as Skill, Bot as Preset, Steward } from "../../server/types";
-import { stewardDescription, stewardIdOf } from "../lead";
+import { leadName, stewardDescription, stewardIdOf } from "../lead";
+import { LeadTabs, threadTabs } from "./LeadTabs";
+import { showSessionAction } from "./show-session";
+import { originLabel } from "../origin";
 import { accountScopeKey, scopedApi, workspaceApi, workspacePath, type Bootstrap } from "./api";
 import { names, promptChips, statusLabels } from "./labels";
 import type { ServerMessage } from "./socket";
@@ -49,6 +52,7 @@ import { useStableHandlers } from "./stable-callbacks";
 import { draftKey, draftStore } from "./draft-store";
 import { useAttachments } from "./useAttachments";
 import { useChatScroll } from "./useChatScroll";
+import { SidebarResizer, useSidebarWidth } from "./SidebarResizer";
 import { useComposerCompletion } from "./useComposerCompletion";
 import { useModalFocusTrap } from "./useModalFocusTrap";
 import { ActivityPanel } from "./ActivityPanel";
@@ -58,6 +62,8 @@ import { BotEditor } from "./BotEditor";
 import { SessionPopover } from "./SessionPopover";
 import { SETTINGS_REOPEN_KEY, SettingsWindow } from "../settings/SettingsWindow";
 import { GeneralPage, NotificationsPage, ShortcutsPage, UpdatesPage } from "../settings/AppPages";
+import { ConnectPage } from "../settings/ConnectPage";
+import { NEW_LEAD_EVENT } from "../onboarding-state";
 import { EnvironmentPage } from "../settings/EnvironmentPage";
 import { AgentsPage, ProjectsPage, RoutingPage } from "../settings/WorkspacePages";
 import { SettingsPage } from "../settings/controls";
@@ -392,6 +398,14 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   // Messages agents are still writing live in draftStore, not in this component's state: a draft
   // frame arrives ~every 50ms and must re-render only the message that shows it.
   useEffect(() => () => draftStore.clear(), []);
+  // When the user last typed or clicked: show_session waits until they leave the app alone.
+  const lastInputAt = useRef(0);
+  useEffect(() => {
+    const touched = () => { lastInputAt.current = Date.now(); };
+    window.addEventListener("keydown", touched, true);
+    window.addEventListener("pointerdown", touched, true);
+    return () => { window.removeEventListener("keydown", touched, true); window.removeEventListener("pointerdown", touched, true); };
+  }, []);
   const onServerMessage = (message: ServerMessage) => {
     if (message.type === "draft" && typeof message.sessionId === "string") {
       draftStore.put(message as unknown as SessionDraft);
@@ -409,10 +423,20 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       setSelected((current) => current === message.sessionId ? undefined : current);
     }
     if (message.type === "session") setSessions((old) => upsertPushedSession(old, message.session as Session, Boolean(message.incremental)));
+    // An outside AI asked to show the user a chat (show_session). The server always notifies; the chat
+    // opens by itself only from an empty, untouched new-chat screen (review M3).
+    if (message.type === "show-session" && typeof message.sessionId === "string" && message.workspaceId === workspaceId) {
+      const action = showSessionAction({ requested: message.sessionId, tab, selected, prompt, drafting: Boolean(stewardDraft), lastInputAt: lastInputAt.current });
+      if (action === "open") selectConversation(message.sessionId);
+    }
   };
   useEffect(() => { void load(); }, []);
   const connected = useAppSocket(onServerMessage, () => { draftStore.clear(); void load(); });
+  const emptyChat = Boolean(active && active.status !== "running" && !active.events.some((event) => event.type === "message"));
+  // A new lead owns one project: it starts only once a folder is picked, never in the home folder.
+  const leadNeedsFolder = !active && Boolean(stewardDraft && !stewardDraft.id) && (!cwd || cwd === boot.homeCwd);
   const canSendBase = Boolean(
+    !leadNeedsFolder &&
     new Set([...skills, ...messageSkills]).size <= 20 &&
     (sessionRunning || !busy) &&
     allowedAgents.length >= 1 &&
@@ -421,7 +445,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     connected,
   );
   const canSend = Boolean((prompt.trim() || attachments.some((item) => item.kind === "element" || item.screenshotPath)) && canSendBase && attachmentsReady);
-  const { bottom, chatBody, showChatBottom, scrollToChatBottom, chatScrollHandlers } = useChatScroll({
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
+  const { bottom, chatBody, showChatBottom, hasAbove, scrollToChatBottom, chatScrollHandlers } = useChatScroll({
     resetKey: [selected, workerSelection?.taskId],
     followKey: [active?.events.at(-1)?.id, active?.events.at(-1)?.text, pendingRecommendation, editingRecommendation],
     observeKey: [selected, workerSelection?.taskId, active?.events.length],
@@ -712,6 +737,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const renderSettingsPage = (section: SettingsCategory, close: () => void) => {
     switch (section) {
       case "general": return <GeneralPage />;
+      case "connect": return <ConnectPage />;
       case "appearance": return <AppearanceSettings />;
       case "notifications": return <NotificationsPage openSystemSettings={() => { void workspaceApi("/setup/open-settings", { pane: "notifications" }).catch(() => undefined); }} />;
       case "shortcuts": return <ShortcutsPage />;
@@ -820,6 +846,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       if (cleanup?.kept.length) setError(t("wt.deleteKept", { branches: cleanup.kept.map((item) => item.branch).join(", ") }));
     }),
   });
+  useEffect(() => {
+    const onNewLead = () => sidebarHandlers.onNewSteward();
+    window.addEventListener(NEW_LEAD_EVENT, onNewLead);
+    return () => window.removeEventListener(NEW_LEAD_EVENT, onNewLead);
+  }, [sidebarHandlers]);
   const teamHandlers = useStableHandlers({
     onAdvanced: () => setSessionOptions(true),
     onSave: (next: AgentSelection, crew: AgentSelection[]) => safe(async () => {
@@ -834,6 +865,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     }),
   });
   const manualTeam = useMemo(() => ({ agent, model, reasoningEffort, workers, workerConfigs }), [agent, model, reasoningEffort, workers, workerConfigs]);
+  // A lead's chats as tabs over the conversation: the open chat's lead, or the lead a new chat is being written for.
+  const tabStewardId = active ? stewardIdOf(active) : chosenSteward?.id;
+  const leadThreads = useMemo(() => tabStewardId ? threadTabs(sessions, tabStewardId) : [], [sessions, tabStewardId]);
+  const tabLeadName = tabStewardId ? stewards.find((item) => item.id === tabStewardId)?.name ?? (active ? leadName(active) : "") : "";
   const agentPolicy = useMemo(() => ({ workspaceId, allowedAgents }), [workspaceId, allowedAgents]);
   return (
     <WorkspacesContext.Provider value={scopedWorkspaces}>
@@ -841,8 +876,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     <MarkdownSessionContext.Provider value={active?.id}>
     <ViewerContext.Provider value={viewerApi}>
     <MotionConfig reducedMotion="user">
-      <div style={{ "--terminal-height": `${terminalHeight}px` } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
-        <WindowHeader title={tab === "workspace" ? active?.title : viewTitles[tab]} project={tab === "workspace" ? activeProject : undefined} runningSince={tab === "workspace" ? runningSince : undefined}
+      <div style={{ "--terminal-height": `${terminalHeight}px`, "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
+        <WindowHeader title={tab === "workspace" ? active?.title : viewTitles[tab]} project={tab === "workspace" && !leadNeedsFolder ? activeProject : undefined} runningSince={tab === "workspace" ? runningSince : undefined}
           sidebar={{ open: sidebarOpen, controls: SIDEBAR_ID, onToggle: toggleSidebar, buttonRef: sidebarToggle }}
           workspace={<WorkspaceSwitcher onManage={openWorkspaceSettings} />}
           extra={desktopMode !== "none" && desktopMode !== "max" && tab === "workspace" ? <button type="button" className="header-icon-button" aria-label={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} title={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} aria-pressed={chatCollapsed} onClick={() => setChatCollapsed((value) => !value)}>{chatCollapsed ? <PanelRightOpen size={18} aria-hidden="true" /> : <PanelRightClose size={18} aria-hidden="true" />}</button> : undefined}
@@ -855,6 +890,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         <Sidebar key={workspaceId} id={SIDEBAR_ID} closed={!sidebarOpen} workspaceId={workspaceId} tab={tab}
           connected={connected} sessions={sessions} groups={groups} busy={busy} selected={selected}
           stewards={stewards} selectedWorker={selectedWorker?.id} {...sidebarHandlers} />
+        {sidebarOpen && !sidebarOverlay && <SidebarResizer width={sidebarWidth} onChange={setSidebarWidth} />}
         <div
           className="sr-only"
           role="status"
@@ -891,22 +927,26 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     <span className="chat-actions-context" title={selectedWorker.label}>{t("ws.workerSession")} · {selectedWorker.label}</span>
                     {active.status === "running" && <button type="button" className="chat-action-text" disabled={busy} onClick={() => stopSession(active.id)}><Square size={11} fill="currentColor" aria-hidden="true" />{t("ws.stop")}</button>}
                   </div>}
+                  {tabStewardId && !selectedWorker && <LeadTabs stewardId={tabStewardId} name={tabLeadName} threads={leadThreads} activeId={active?.id} busy={busy} leadAgent={stewards.find((item) => item.id === tabStewardId)?.agent}
+                    onSelect={sidebarHandlers.onSelect} onSelectWorker={sidebarHandlers.onSelectWorker} onNew={() => sidebarHandlers.onNewStewardThread(tabStewardId)} onRename={sidebarHandlers.onRenameSession} />}
                   {active && active.status !== "running" && <QuotaReturnBanner active={active} threshold={quotaThreshold} allowedAgents={allowedAgents} busy={busy}
                     onReturn={(eventId) => void sessionAction(`/sessions/${active.id}/quota/return`, { eventId })} />}
-                  <div ref={chatBody} className={`chat-body ${!active && !pendingRecommendation ? "empty-chat" : ""}`} {...chatScrollHandlers}>
+                  <div ref={chatBody} className={`chat-body ${(!active && !pendingRecommendation) || (emptyChat && !selectedWorker) ? "empty-chat" : ""}${hasAbove ? " has-above" : ""}`} {...chatScrollHandlers}>
                     {selectedWorker ? <><WorkerThread key={`${active?.id}-${selectedWorker.id}`} worker={selectedWorker} draftKey={active?.status === "running" ? draftKey(active.id, selectedWorker.id) : undefined} /><div ref={bottom} /></> : !active ? (
                       pendingRecommendation ? <div className="messages routing-message">
                         <div className="message user-message"><div className="message-author"><strong>{t("names.user")}</strong></div><div className="message-text">{prompt}</div></div>
                         <RecommendationCard value={pendingRecommendation} settings={routingSettings} skills={boot.skills} editing={editingRecommendation} busy={busy} runDisabled={!canSend || Boolean(unavailableWarning)} availableAgents={teamAgents} onEdit={() => setEditingRecommendation((old) => !old)} onChange={(value) => setRecommendation({ key: routingKey, value })} onRun={() => void send(true)} />
                         <div ref={bottom} />
                       </div> : <div className="minimal-empty">
-                        {activeProject && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
+                        {activeProject && !leadNeedsFolder && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
                         {stewardDraft ? <>
                           <h2><UserCheck size={20} aria-hidden="true" /> {chosenSteward ? t("steward.threadTitle", { name: chosenSteward.name }) : t("steward.newTitle")}</h2>
                           <p className="minimal-empty-note">{chosenSteward ? t("steward.pickHint") : t("steward.newBody")}</p>
-                          {stewards.length > 0 && <div className="steward-picker" role="radiogroup" aria-label={t("steward.pickTitle")}>
+                          {leadNeedsFolder && <button type="button" className="button primary lead-pick-folder" onClick={() => setModal("directory")}><Folder size={15} aria-hidden="true" />{t("steward.pickFolder")}</button>}
+                          {stewards.length > 0 && <p className="steward-picker-title" id="steward-picker-title"><strong>{t("steward.pickTitle")}</strong> {t("steward.pickExplain")}</p>}
+                          {stewards.length > 0 && <div className="steward-picker" role="radiogroup" aria-labelledby="steward-picker-title">
                             <button type="button" role="radio" aria-checked={!chosenSteward} onClick={() => setStewardDraft({})}><strong>{t("steward.pickNew")}</strong><small>{t("steward.pickNewHint")}</small></button>
-                            {stewards.map((item) => <button type="button" role="radio" key={item.id} aria-checked={chosenSteward?.id === item.id} onClick={() => pickSteward(item.id)}><strong>{item.name}</strong><small>{stewardDescription(item) || "\u00a0"}</small></button>)}
+                            {stewards.map((item) => <button type="button" role="radio" key={item.id} aria-checked={chosenSteward?.id === item.id} onClick={() => pickSteward(item.id)}><strong>{item.name}</strong><small>{stewardDescription(item) || t("steward.pickExisting")}</small></button>)}
                           </div>}
                           <div className="prompt-chips">
                             {!chosenSteward && <button onClick={() => { setPrompt(t("steward.newChipText")); composerInput.current?.focus(); }}>{t("steward.newChip")}</button>}
@@ -918,6 +958,15 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                             {promptChips().map(([label, text]) => <button key={label} onClick={() => { setPrompt(text); composerInput.current?.focus(); }}>{label}</button>)}
                           </div>
                         </>}
+                      </div>
+                    ) : emptyChat ? (
+                      // A chat opened with nothing said yet (an outside AI's create_session, a new thread):
+                      // say what it is and what to do, instead of a blank page (review L5).
+                      <div className="minimal-empty">
+                        {activeProject && <p className="minimal-empty-project"><Folder size={14} aria-hidden="true" />{activeProject}</p>}
+                        <h2>{active.steward ? <><UserCheck size={20} aria-hidden="true" /> {t("ws.emptyChatLead", { name: active.steward.name ?? "" })}</> : t("ws.emptyChatTitle")}</h2>
+                        <p className="minimal-empty-note">{active.origin ? t("ws.emptyChatOpenedBy", { name: originLabel(active.origin) }) : active.steward ? t("ws.emptyChatLeadHint") : t("ws.emptyChatHint")}</p>
+                        <div ref={bottom} />
                       </div>
                     ) : (
                       <MessageList active={active} events={conversationEvents} tasksById={tasksById} latestHandoffId={latestHandoffId} latestAssistantId={latestAssistant?.id}
@@ -936,7 +985,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     mode={mode} setMode={setMode} autoSwitch={active ? active.autoSwitch ?? autoSwitch : autoSwitch}
                     setAutoSwitch={(enabled) => { if (!active) setAutoSwitch(enabled); else void safe(async () => { replaceFromServer(await api<Session>(`/sessions/${active.id}/auto-switch`, { enabled }, "PATCH")); }); }}
                     permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed}
-                    setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={cwd} shownCwd={shownCwd} canSend={canSend} choiceOptions={choiceOptions}
+                    setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={leadNeedsFolder ? "" : cwd} shownCwd={leadNeedsFolder ? "" : shownCwd} canSend={canSend} choiceOptions={choiceOptions}
                     send={send} runCommand={runCommand} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
                       manual={manualTeam} availableAgents={teamAgents}

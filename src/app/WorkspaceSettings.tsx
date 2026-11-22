@@ -8,6 +8,7 @@ import { workspaceName } from "../workspaces";
 import { names } from "./labels";
 import type { AgentId, WorkspaceId, WorkspacePolicy } from "../../server/types";
 import { t } from "../i18n";
+import { Switch } from "../settings/controls";
 
 const AGENTS: AgentId[] = ["codex", "claude", "grok"];
 
@@ -139,11 +140,12 @@ function restrictionCount(policy: WorkspacePolicy) {
 }
 
 function RuleToggle({ id, settingId, label, hint, checked, disabled, onChange }: { id: string; settingId?: string; label: string; hint: string; checked: boolean; disabled: boolean; onChange: (value: boolean) => void }) {
+  // The same switch as every other on/off setting (src/settings/controls.tsx), not a checkbox.
   return <div className="workspace-rule" data-setting-id={settingId}>
-    <label className="workspace-rule-head" htmlFor={id}>
-      <span>{label}</span>
-      <input id={id} type="checkbox" role="switch" checked={checked} disabled={disabled} aria-describedby={`${id}-hint`} onChange={(event) => onChange(event.target.checked)} />
-    </label>
+    <div className="workspace-rule-head">
+      <label id={`${id}-label`} htmlFor={id}>{label}</label>
+      <Switch id={id} checked={checked} disabled={disabled} labelledBy={`${id}-label`} describedBy={`${id}-hint`} onChange={onChange} />
+    </div>
     <small id={`${id}-hint`}>{hint}</small>
   </div>;
 }
@@ -193,12 +195,13 @@ function WorkspaceRules({ workspaceId, policy, open, locked, save, login }: { lo
   const key = workspaceId;
   const draftPrompt = prompt ?? policy.mediaPrompt ?? "";
   return <details className="workspace-rules" open={open}>
-    <summary><span>{t("wsset.rules")}</span><span className={`workspace-tag${count ? " restricted" : ""}`}>{count ? t("wsset.rulesSummary", { count }) : t("wsset.rulesNone")}</span>{policy.computerUse && <span className="workspace-tag">{t("wsset.computerUse")}</span>}{policy.fullAccess && <span className="workspace-tag restricted">{t("wsset.fullAccess")}</span>}</summary>
+    <summary><span>{t("wsset.rules")}</span><span className={`workspace-tag${count ? " restricted" : ""}`}>{count ? t("wsset.rulesSummary", { count }) : t("wsset.rulesNone")}</span>{policy.computerUse && <span className="workspace-tag">{t("wsset.computerUse")}</span>}{policy.runtimePrograms && <span className="workspace-tag restricted">{t("wsset.runtimeTag")}</span>}{policy.fullAccess && <span className="workspace-tag restricted">{t("wsset.fullAccess")}</span>}</summary>
     <div className="workspace-rules-body">
     <p className="muted">{t("wsset.rulesBody")}</p>
     <RuleToggle id={`ws-${key}-media`} label={t("wsset.media")} hint={t("wsset.mediaHint")} checked={policy.mediaGeneration} disabled={locked} onChange={(value) => void save({ mediaGeneration: value })} />
     <RuleToggle id={`ws-${key}-computer`} settingId={open ? "ws-computer" : undefined} label={t("wsset.computerUse")} hint={t("wsset.computerUseHint")} checked={policy.computerUse} disabled={locked} onChange={(value) => void save({ computerUse: value })} />
     <RuleToggle id={`ws-${key}-full-access`} settingId={open ? "ws-full-access" : undefined} label={t("wsset.fullAccess")} hint={t("wsset.fullAccessHint")} checked={Boolean(policy.fullAccess)} disabled={locked} onChange={(value) => void save({ fullAccess: value })} />
+    <RuleToggle id={`ws-${key}-runtime`} settingId={open ? "ws-runtime-programs" : undefined} label={t("wsset.runtimePrograms")} hint={t("wsset.runtimeProgramsHint")} checked={Boolean(policy.runtimePrograms)} disabled={locked} onChange={(value) => void save({ runtimePrograms: value })} />
     <RuleToggle id={`ws-${key}-grok-mcp`} label={t("wsset.grokMcp")} hint={t("wsset.grokMcpHint")} checked={policy.grokMcp} disabled={locked} onChange={(value) => void save({ grokMcp: value })} />
     <ToolList id={`ws-${key}-blocked`} label={t("wsset.blockedTools")} hint={t("wsset.blockedToolsHint")} values={policy.blockedTools} scoped disabled={locked} onChange={(next) => save({ blockedTools: next })} />
     <ToolList id={`ws-${key}-alerts`} label={t("wsset.alertTools")} hint={t("wsset.alertToolsHint")} values={policy.authAlertTools} scoped={false} disabled={locked} onChange={(next) => save({ authAlertTools: next })} />

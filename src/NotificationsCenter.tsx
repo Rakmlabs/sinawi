@@ -155,10 +155,22 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
     toastTimers.current.clear();
   }, []);
 
+  // What was already there when the app opened sits in the bell, it does not pop up again (M4).
+  const primed = useRef<string | undefined>(undefined);
   useEffect(() => {
     const seen = loadSeenToasts(workspaceId);
+    if (primed.current !== workspaceId) {
+      if (!notifications.length) return;
+      primed.current = workspaceId;
+      const opened = Date.now() - 15_000;
+      for (const notification of notifications) if (new Date(notification.updatedAt).getTime() < opened) seen.add(toastVersion(notification));
+      saveSeenToasts(workspaceId, seen);
+    }
     const fresh = notifications.filter((notification) => {
-      if (notification.read || !toastEnabled(notification.type)) return false;
+      // An outside AI asking the user to look at a chat (show_session) is the one info that pops up:
+      // it no longer switches the screen, so the toast is how the user learns of it (review M3).
+      const asked = notification.key?.startsWith("show:") ?? false;
+      if (notification.read || !(toastEnabled(notification.type) || asked)) return false;
       const version = toastVersion(notification);
       return !seen.has(version);
     }).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()).slice(0, 3);
@@ -170,13 +182,14 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
     if (invoke && (document.hidden || !document.hasFocus())) {
       for (const notification of fresh.filter((item) => item.type === "lead")) void invoke("notify", { title: notification.title, body: notification.body }).catch(() => undefined);
     }
-    setToasts((current) => [...current, ...fresh]
+    // A notification updated again (one per lead) replaces its toast instead of adding another.
+    setToasts((current) => [...current.filter((toast) => !fresh.some((item) => item.id === toast.id)), ...fresh]
       .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
       .slice(0, 3));
     for (const notification of fresh) {
       const timer = window.setTimeout(() => {
         toastTimers.current.delete(timer);
-        setToasts((current) => current.filter((toast) => toast.id !== notification.id));
+        setToasts((current) => current.filter((toast) => toastVersion(toast) !== toastVersion(notification)));
       }, 4_000);
       toastTimers.current.add(timer);
     }

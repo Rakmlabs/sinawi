@@ -1,8 +1,10 @@
 import { numberedOptions } from "../src/composer.js";
 import { maxEvents, trimEvents } from "./events.js";
 import { randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { killSessionProcessGroups, runCli } from "./cli.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
@@ -18,7 +20,7 @@ import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
 import type { AutoSwitchRecommendation } from "./auto-routing.js";
-import { accountDirFor, allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, fullAccessBlockedMessage, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
+import { accountDirFor, accountLoginCommand, loginNeededText, allowedAgentsForWorkspace, assertAgentsAllowed, assertMediaAllowed, fullAccessBlockedMessage, lockedToolsFor, policyDenyPatterns, type AllowedAgentResolver, type WorkspacePolicyResolver } from "./workspace-policy.js";
 import { normalizeWorkerConfigs, workerLabel } from "./workers.js";
 import { mediaRouteRequired, mediaSkills, mediaUnavailableMessage, isMediaRule } from "./media-routing.js";
 import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, isPureNoise, WORKER_RULES, type StallOptions, type StallSignal } from "./supervision.js";
@@ -41,6 +43,8 @@ const stallCheckMs = 15_000;
 const STOPPED = Symbol("stopped");
 /** A failed CLI run whose feature diagnostic should still reach tag-based leads. */
 class WorkerFeatureError extends Error {}
+/** A failure the chat already shows in its own words (a sign-in error): the turn ends without repeating it. */
+class AlreadyShownError extends Error {}
 const guardKey = (sessionId: string, workerId: string) => `${sessionId}:${workerId}`;
 
 /** What a lead's tools need from the turn that is running (Orchestra.leadTurns). */
@@ -209,6 +213,48 @@ function runExhausted(run: { exitCode: number; cliText: string; quotaErrorEviden
   return run.quotaErrorEvidence || run.exitCode !== 0 && isQuotaExhaustion(run.cliText);
 }
 
+/** Front-matter line a lead writes into the project skills it creates (writeLeadSkill). */
+const LEAD_SKILL_MARK = /^\s*created-by:\s*sinawi-lead\s*$/mu;
+/** The mark counts only in the skill's front matter, not anywhere in its body. */
+const leadMarked = (text: string) => LEAD_SKILL_MARK.test(/^---\n([\s\S]*?)\n---/u.exec(text)?.[1] ?? "");
+
+/**
+ * A lead owns one project: its folder is never the home folder, `/`, or a folder that holds the home
+ * folder (`/Users`), whoever asks (the app, the HTTP API, an outside AI's create_lead, a lead creating
+ * another, a new chat of an existing lead). The folder is compared as the file system sees it
+ * (device and inode of its real path), so another spelling (`/USERS/me` on a case-insensitive disk,
+ * `$HOME/.`, a symlink to the home folder) is the same folder. It must be an existing absolute folder.
+ * Returns the real path it checked; callers keep that value, not the spelling they were given, so a
+ * symlink swapped after the check cannot move the lead (fourth review F2).
+ */
+export function assertLeadFolder(cwd: string, home?: string): string;
+export function assertLeadFolder(cwd: string | undefined, home?: string): string | undefined;
+export function assertLeadFolder(cwd: string | undefined, home = homedir()): string | undefined {
+  if (!cwd) return undefined;
+  const refuse = (folder: string) => new Error(`담당은 프로젝트 폴더에서 일합니다. 홈 폴더나 / (${folder})는 담당 폴더가 될 수 없으니 프로젝트 폴더를 고르세요.`);
+  if (!isAbsolute(cwd)) throw new Error(`담당 폴더는 절대 경로여야 합니다: ${cwd}`);
+  let real: string;
+  try {
+    real = realpathSync.native(cwd);
+    if (!statSync(real).isDirectory()) throw new Error("not a folder");
+  } catch { throw new Error(`담당 폴더가 없거나 폴더가 아닙니다: ${cwd}`); }
+  const id = (path: string) => { try { const info = statSync(path); return `${info.dev}:${info.ino}`; } catch { return undefined; } };
+  const mine = id(real);
+  // The home folder and every folder above it, as the file system identifies them.
+  const above = new Set<string>();
+  let walk: string;
+  try { walk = realpathSync.native(home); } catch { walk = resolve(home); }
+  for (;;) {
+    const found = id(walk);
+    if (found) above.add(found);
+    const parent = dirname(walk);
+    if (parent === walk) break;
+    walk = parent;
+  }
+  if (real === "/" || (mine && above.has(mine))) throw refuse(real);
+  return real;
+}
+
 export class Orchestra {
   private sessions = new Map<string, Session>();
   private controllers = new Map<string, AbortController>();
@@ -220,6 +266,12 @@ export class Orchestra {
   private turnChoices = new Set<string>();
   /** Goal sessions whose next followup is a turn the app opens itself. */
   private goalAutoNext = new Set<string>();
+  /** Chats between a follow-up call and its turn running (Orchestra.isWorking). */
+  private starting = new Set<string>();
+  /** Lead chats whose turn ended and whose merge and next step are still being worked out. */
+  private settling = new Set<string>();
+  /** The lead's end-of-turn merge in flight per chat: the next turn waits for it (L8). */
+  private settlingDone = new Map<string, Promise<void>>();
   /** Goals that had stopped before the user's current message: restored when the turn was only an answer. */
   private goalPaused = new Map<string, { stopped: string; outcome?: NonNullable<Session["goal"]>["outcome"]; checklist: string }>();
   /** Goal sessions whose running turn the app opened itself. */
@@ -265,6 +317,8 @@ export class Orchestra {
    * session folder; the server sets it so workers in a git repository get their own worktree.
    */
   worktreeDataDir?: string;
+  /** Where trimmed events go (server/event-archive.ts); unset in tests that do not care. */
+  archive?: (sessionId: string, events: SessionEvent[]) => void;
   /** Throttle state for heartbeats: last inactivity re-arm and last client publish per session. */
   private heartbeats = new Map<string, { touched: number; published: number }>();
   /** How often a quiet-but-alive run tells clients it is still alive. */
@@ -527,7 +581,13 @@ export class Orchestra {
     if (type === "delegation" && metadata.taskStatus === "running") event.delegationId = id;
     session.events.push(event);
     this.eventOrder.set(event, ++this.eventCount);
-    trimEvents(session.events, maxEvents);
+    const dropped: SessionEvent[] = [];
+    trimEvents(session.events, maxEvents, dropped);
+    if (dropped.length) {
+      // Kept, not lost: the archive is what `before`/`after` readers page through (review M5).
+      session.archivedEvents = (session.archivedEvents ?? 0) + dropped.length;
+      this.archive?.(session.id, dropped);
+    }
     this.lastEventAt.set(session.id, Date.now());
     this.touchInactivityTimer(session);
     this.broadcast(session);
@@ -541,7 +601,11 @@ export class Orchestra {
     if (requested.parentId && entity) throw new Error("나눠 맡긴 채팅은 담당이 될 수 없습니다.");
     let input: StartSessionInput = entity ? {
       // A lead's threads live in the lead's workspace, wherever they were asked for from.
-      ...requested, ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}), agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort,
+      // A caller may pick this one thread's own CLI and model (an outside orchestrator: "do it with Codex").
+      ...requested, ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}),
+      ...(requested.steward?.agent || requested.steward?.model
+        ? { agent: requested.steward.agent ?? entity.agent, model: requested.steward.model, reasoningEffort: undefined }
+        : { agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort }),
       ...(entity.workers.length ? { workers: entity.workers.map((worker) => worker.agent), workerConfigs: structuredClone(entity.workers) } : {}),
       systemPrompt: entity.systemPrompt, skills: requested.skills ?? [],
     } : requested;
@@ -573,7 +637,9 @@ export class Orchestra {
     // A new thread of a lead opens in the lead's first folder unless the user picked another.
     const folder = input.cwd || entity?.cwds[0];
     if (!folder) throw new Error("작업 폴더가 올바르지 않습니다.");
-    const cwd = resolve(folder);
+    // A new lead, or a new chat of a lead (in another folder, which joins the lead's list below, or in
+    // the lead's own folder, checked again in case it was changed since): the checked real path is used.
+    const cwd = input.steward ? assertLeadFolder(folder) : resolve(folder);
     if (!(await stat(cwd)).isDirectory()) throw new Error("작업 폴더가 올바르지 않습니다.");
     const selectedSkills = [...new Set([...(input.skills ?? []), ...mediaSkills(input.prompt, await enabledPublicSkills(cwd, false, workspaceToolSettings(await loadToolSettings(this.usageDataDir), workspaceId).disabledSkills, this.accountsOf(workspaceId)))])];
     const session: Session = {
@@ -592,6 +658,7 @@ export class Orchestra {
       skills: selectedSkills, systemPrompt: input.systemPrompt ?? "",
       ...(input.commander ? { commander: { goals: [], forced: true } } : input.goal || input.autoRun || input.steward ? { goal: freshGoal() } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.origin ? { origin: { ...input.origin } } : {}),
       ...(input.steward && !input.parentId ? { steward: { turns: 0, since: new Date().toISOString(), ...(entity ? { id: entity.id, name: entity.name } : input.steward.name?.trim() ? { name: input.steward.name.trim().slice(0, 80) } : {}) } } : {}),
     };
     this.sessions.set(session.id, session);
@@ -614,7 +681,7 @@ export class Orchestra {
     this.controllers.set(session.id, controller);
     this.event(session, agent, "status", `${agentNames[agent]} 세션을 시작했습니다.`);
     if (session.steward) this.event(session, agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
-    this.event(session, "user", "message", input.prompt);
+    this.event(session, "user", "message", input.prompt, input.origin ? { metadata: { via: { ...input.origin } } } : {});
     if (mediaRequest && !mediaOn) this.mediaPolicyNotice(session);
     else if (autoMedia && !mediaLead) this.mediaFallbackNotice(session);
     void this.execute(session, `${input.prompt}${mediaRequest && !mediaOn ? MEDIA_OFF_NOTE : ""}`, selectedSkills, input.systemPrompt ?? "", controller, mediaLead || (mediaOn && agent === "grok"))
@@ -690,7 +757,7 @@ export class Orchestra {
     const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, leadResume, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     this.rememberLeadSession(session, first);
-    if (first.exitCode !== 0) throw new Error(first.resumeRetryFailed ? resumeRetryFailed(first.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
+    if (first.exitCode !== 0) throw first.loginNeeded ? new AlreadyShownError(first.lastError) : new Error(first.resumeRetryFailed ? resumeRetryFailed(first.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
     this.noteChecklist(session, first.finalText);
     delete session.handoffContext;
     // Plan mode: the lead's read-only answer is the plan; nothing is handed to workers.
@@ -937,6 +1004,11 @@ export class Orchestra {
   private async prepareWorktree(session: Session, workerId: string, label: string): Promise<{ info?: NonNullable<Session["worktrees"]>[number]; error?: string }> {
     if (!this.worktreeDataDir) return {};
     const dataDir = this.worktreeDataDir;
+    // The lead's merge after the last turn finishes first: a new turn's worker must not reuse a
+    // worktree while it is being merged and removed (L8). Only the worktree waits, not the turn: the
+    // merge itself can start the next turn (an answer from another lead), which must not wait on it.
+    const settling = this.settlingDone.get(session.id);
+    if (settling) await settling;
     return this.withWorktreeLock(session.id, () => this.prepareWorktreeLocked(session, workerId, label, dataDir));
   }
 
@@ -1218,6 +1290,7 @@ export class Orchestra {
     // The CLI said the resumed conversation does not exist: runAgentOnce retries fresh, so the line is not shown.
     let resumeMissing = false;
     let lastError = "";
+    let loginNeeded = false;
     const disabledMcp = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledMcp;
     this.requireCurrentRun(session, signal);
     const blockedMcp = disabledMcp.filter((key) => key.startsWith(`${agent}:`))
@@ -1241,6 +1314,7 @@ export class Orchestra {
       // Review/planning runs are read-only but must still be able to read files to verify (see readTools).
       agent, prompt, cwd, model, reasoningEffort, readOnly, readTools: readOnly, resumeSessionId, signal: runSignal,
       ...(permissionMode === "full" ? { fullAccess: true } : {}),
+      ...(policy?.runtimePrograms ? { runtimePrograms: true } : {}),
       extraDirs,
       ...(worktreeRoot ? { readOnlyDirs: [worktreeRoot] } : {}),
       // The lead's own writable run carries its tools (lead-tools.ts); reviews and plans do not.
@@ -1283,7 +1357,10 @@ export class Orchestra {
           if (line.text === lastCompleteMessage) return;
           lastCompleteMessage = line.text;
         }
-        this.event(session, agent, line.type, line.text, { role, workerId, workerLabel: workerName, delegationId, model, reasoningEffort });
+        // Not signed in: the CLI's own words, with the login command for this workspace's account.
+        const login = line.type === "error" && loginNeededText(line.text) ? { agent, command: accountLoginCommand(agent, accountDirFor(policy, agent)) } : undefined;
+        if (login) loginNeeded = true;
+        this.event(session, agent, line.type, line.text, { role, workerId, workerLabel: workerName, delegationId, model, reasoningEffort, ...(login ? { metadata: { loginNeeded: login } } : {}) });
       },
     });
     const inflight = this.inflightRuns.get(session.id) ?? new Set<Promise<unknown>>();
@@ -1298,7 +1375,7 @@ export class Orchestra {
     if (leadStall) throw new Error(`총괄 검증 반복을 멈췄습니다: ${leadStall.reason} 확인된 증거와 남은 문제를 사용자에게 보고하고, 다른 진단·방법으로 이어가거나 병합 여부를 물어보세요.`);
     // A run the stall guard stopped ended because the app killed it, not because a quota ran out.
     const stoppedByApp = Boolean(guard?.kill.signal.aborted);
-    return { ...result, agent, model, reasoningEffort, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false, resumeMissing, lastError, resumeRetried: false, resumeRetryFailed: false };
+    return { ...result, agent, model, reasoningEffort, loginNeeded, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false, resumeMissing, lastError, resumeRetried: false, resumeRetryFailed: false };
   }
 
   /** The account config dir a run of `agent` uses in this session's workspace, with the agent: where its resume ids live. */
@@ -1475,7 +1552,28 @@ export class Orchestra {
   async followup(id: string, prompt: string, skills: string[] = [], settings: ConversationSettings = {}, alreadyLogged = false): Promise<Session> {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
-    if (session.status === "running") throw new Error("세션이 이미 실행 중입니다.");
+    // A second message while the first is still starting (it awaits before the status flips) would
+    // replace the first run's controller and drop that message silently: refuse it like a running chat.
+    if (session.status === "running" || this.starting.has(id)) throw new Error("세션이 이미 실행 중입니다.");
+    // From here until the turn is running (or refused) the chat counts as working (isWorking).
+    this.starting.add(id);
+    try { return await this.startFollowup(session, prompt, skills, settings, alreadyLogged); }
+    finally { this.starting.delete(id); }
+  }
+
+  /**
+   * The chat is still at work: a turn runs, the app is about to open the next one (a checklist turn,
+   * a message typed during the run, the lead's merge after a turn), or goal chats it split into run.
+   * What an outside caller waiting for the result (wait_for_session) must not mistake for "done".
+   */
+  isWorking(id: string): boolean {
+    const session = this.sessions.get(id);
+    if (!session) return false;
+    return session.status === "running" || this.starting.has(id) || this.settling.has(id) || this.goalAutoNext.has(id) || Boolean(session.commander?.goals.length && commanderActive(session));
+  }
+
+  private async startFollowup(session: Session, prompt: string, skills: string[], settings: ConversationSettings, alreadyLogged: boolean): Promise<Session> {
+    const id = session.id;
     // Left over from a run that was stopped or failed: older than this message, so it must not read as newer.
     const carried = session.pendingInstructions ?? [];
     delete session.pendingInstructions;
@@ -1483,6 +1581,8 @@ export class Orchestra {
     const mediaOn = mediaRequest && this.mediaPolicyOn(session.workspaceId);
     this.assertSessionPolicy(session);
     this.assertPermissionMode(session.workspaceId, settings.permissionMode);
+    // The answer turn already ended (the user wrote while it settled): answer with that turn, not this one.
+    if (session.steward?.answering?.result) this.settleStewardAnswer(session, session.steward.answering.result.outcome);
     session.status = "running";
     delete session.endedAt;
     const auto = this.goalAutoNext.delete(id);
@@ -1509,7 +1609,7 @@ export class Orchestra {
     session.turnCount = (session.turnCount ?? session.events.filter((event) => event.agent === "user" && event.type === "message").length) + 1;
     // An empty chat (create without a prompt) takes its title from its first message.
     if (session.title === EMPTY_TITLE && !session.events.some((event) => event.agent === "user" && event.type === "message")) session.title = titleFrom(prompt);
-    if (!alreadyLogged) this.event(session, "user", "message", prompt);
+    if (!alreadyLogged) this.event(session, "user", "message", prompt, settings.origin ? { metadata: { via: { ...settings.origin } } } : {});
     const allowed = new Set(this.allowedAgents(session));
     // Media keywords pick Grok only while auto-switch is on and Grok is usable: the user's own choice wins,
     // and an unusable Grok means the current team carries on, never an error.
@@ -1860,15 +1960,21 @@ export class Orchestra {
   private finish(session: Session, blocked = false) {
     if (session.status !== "running") return;
     session.status = blocked ? "error" : "done"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
+    this.endAnswerTurn(session, "done");
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     const tracking = this.trackingChecklist(session);
     if (blocked && !tracking) this.event(session, session.agent, "error", "워커가 막힌 채로 끝났고 총괄이 다시 맡기지 않았습니다. 작업은 끝나지 않았습니다.");
     else this.event(session, session.agent, "status", tracking ? "이번 턴을 마쳤습니다." : "세션이 완료되었습니다.");
     // A project lead's work goes into the main checkout before anything else starts.
     if (session.steward) {
-      void this.stewardTurnEnded(session, "done")
+      this.settling.add(session.id);
+      const done = this.stewardTurnEnded(session, "done")
         .catch((error) => this.event(session, session.agent, "warning", error instanceof Error ? error.message : String(error)))
-        .finally(() => { if (session.status !== "running") this.afterFinish(session); });
+        .finally(() => {
+          try { if (session.status !== "running") this.afterFinish(session); }
+          finally { this.settling.delete(session.id); this.settlingDone.delete(session.id); }
+        });
+      this.settlingDone.set(session.id, done.then(() => undefined, () => undefined));
       return;
     }
     this.afterFinish(session);
@@ -1889,6 +1995,7 @@ export class Orchestra {
     if (controller && this.controllers.get(session.id) !== controller) return;
     if (session.status !== "running") return;
     session.status = "stopped"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
+    this.endAnswerTurn(session, "stopped");
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     this.event(session, session.agent, "status", "중지됨");
     if (session.steward) void this.stewardTurnEnded(session, "stopped").catch(() => undefined);
@@ -1899,9 +2006,11 @@ export class Orchestra {
     if (controller && this.controllers.get(session.id) !== controller) return;
     if (session.status !== "running") return;
     session.status = "error"; session.endedAt = new Date().toISOString(); this.controllers.delete(session.id); this.clearInactivityTimer(session.id);
+    this.endAnswerTurn(session, "error");
     this.heartbeats.delete(session.id); this.lastEventAt.delete(session.id); delete session.lastActivityAt; void this.pruneWorktrees(session);
     const message = error instanceof Error ? error.message : String(error);
-    this.event(session, session.agent, "error", message);
+    // The chat already shows why (a sign-in error with its login button): no second, vaguer line.
+    if (!(error instanceof AlreadyShownError)) this.event(session, session.agent, "error", message);
     if (session.steward) void this.stewardTurnEnded(session, "error").catch(() => undefined);
     this.afterTurn(session, "error", false);
     this.stewardIdle(session, "error");
@@ -1925,6 +2034,8 @@ export class Orchestra {
     const enabled = patch.enabled ?? Boolean(session.steward);
     const destination = existing?.workspaceId ?? session.workspaceId;
     const enabledName = newName || existing?.name || basename(session.cwd) || session.cwd;
+    // A chat that becomes a lead keeps to the lead-folder rule too (fourth review F1).
+    const leadFolder = enabled && !session.steward ? assertLeadFolder(session.cwd) : undefined;
     if (enabled && !session.steward) {
       this.assertStewardNameFree(enabledName, existing?.id, destination);
       if (existing?.workspaceId && existing.workspaceId !== session.workspaceId && session.status === "running") {
@@ -1945,6 +2056,7 @@ export class Orchestra {
         ...(existing ? { id: existing.id, name: existing.name } : newName ? { name: newName } : {}),
       };
       session.goal ??= freshGoal();
+      if (leadFolder) session.cwd = leadFolder;
       this.adoptSteward(session);
       delete session.disabledStewardId;
       this.event(session, session.agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
@@ -2126,6 +2238,7 @@ export class Orchestra {
     const name = input.name.trim().slice(0, 80);
     if (!name) throw new Error("담당 이름이 필요합니다.");
     this.assertStewardNameFree(name, undefined, input.workspaceId);
+    if (input.cwds) input = { ...input, cwds: input.cwds.map((cwd) => assertLeadFolder(cwd)) };
     const now = new Date().toISOString();
     const base: Steward = { id: randomUUID(), name, agent: input.agent ?? "claude", skills: [], systemPrompt: "", workers: [], mergePolicy: DEFAULT_MERGE_POLICY, cwds: [], ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}), createdAt: now };
     const steward = applyStewardPatch(base, { ...input, name }, now);
@@ -2145,6 +2258,7 @@ export class Orchestra {
     if (patch.name !== undefined && !name) throw new Error("담당 이름이 필요합니다.");
     const destination = workspaceId ?? current.workspaceId;
     this.assertStewardNameFree(name ?? current.name, id, destination);
+    if (patch.cwds) patch = { ...patch, cwds: patch.cwds.map((cwd) => assertLeadFolder(cwd)) };
     if (workspaceId) {
       for (const session of this.stewardThreads(id)) if (session.status === "running") this.assertSessionPolicy({ ...session, workspaceId });
     }
@@ -2440,6 +2554,15 @@ export class Orchestra {
     return { lead: view(records.filter((item) => item.source === "담당")), others: view(records.filter((item) => item.source !== "담당")) };
   }
 
+  /** A lead made this project skill: some chat in that folder recorded creating it (leadSkill metadata). */
+  private leadCreatedProjectSkill(cwd: string, name: string): boolean {
+    for (const other of this.sessions.values()) {
+      if (other.cwd !== cwd) continue;
+      if (other.events.some((event) => event.metadata?.leadSkill?.name === name && event.metadata.leadSkill.scope === "project" && event.metadata.leadSkill.action === "created")) return true;
+    }
+    return false;
+  }
+
   private async writeLeadSkill(session: Session, args: Record<string, unknown>, update: boolean): Promise<{ name: string; scope: "lead" | "project"; path: string; action: "created" | "updated" }> {
     const name = skillSlug(typeof args.name === "string" ? args.name : "");
     if (!name) throw new Error("스킬 이름은 영문 소문자·숫자·하이픈으로 정하세요 (예: api-review).");
@@ -2451,10 +2574,15 @@ export class Orchestra {
     if (update && existing === undefined && args.scope === undefined) {
       const projectFile = join(session.cwd, ".claude", "skills", name, "SKILL.md");
       const project = await readFile(projectFile, "utf8").catch(() => undefined);
-      if (project !== undefined) return this.writeLeadSkill(session, { ...args, scope: "project" }, true);
+      // A project skill is changed only through scope:"project", which waits for the user's approval.
+      if (project !== undefined) throw new Error(`${name}은 프로젝트 스킬입니다. update_skill에 scope:"project"를 주면 사용자 승인 후에 고쳐집니다.`);
     }
     if (update && existing === undefined) throw new Error(`스킬 ${name}이 없습니다. write_skill로 만드세요.`);
     if (!update && existing !== undefined) throw new Error(`스킬 ${name}이 이미 있습니다. update_skill로 고치세요.`);
+    // A project skill someone else wrote (the user, a teammate, another tool) is theirs: a lead only
+    // edits the project skills a lead made, marked in their front matter.
+    // Skills a lead made before the mark existed are known by the "created" record in that folder's chats.
+    if (scope === "project" && existing !== undefined && !leadMarked(existing) && !this.leadCreatedProjectSkill(session.cwd, name)) throw new Error(`프로젝트 스킬 ${name}은 담당이 만든 것이 아니라 고칠 수 없습니다. 다른 이름으로 write_skill 하세요.`);
     existing ??= "";
     const front = /^---\n([\s\S]*?)\n---\n?/u.exec(existing);
     const oldDescription = front?.[1].match(/^description:\s*(.*)$/mu)?.[1]?.trim() ?? "";
@@ -2463,7 +2591,7 @@ export class Orchestra {
     const content = (typeof args.content === "string" && args.content.trim() ? args.content : oldBody).trim().slice(0, 30_000);
     if (!description || !content) throw new Error("스킬에는 설명(description)과 본문(content)이 필요합니다.");
     await mkdir(directory, { recursive: true });
-    await writeFile(file, `---\nname: ${name}\ndescription: ${description}\n---\n\n${content}\n`);
+    await writeFile(file, `---\nname: ${name}\ndescription: ${description}\n${scope === "project" ? "metadata:\n  created-by: sinawi-lead\n" : ""}---\n\n${content}\n`);
     if (scope === "project") clearSkillsCache(session.cwd);
     const action = update ? "updated" : "created";
     this.event(session, session.agent, "status", `담당이 ${scope === "project" ? "프로젝트" : "담당"} 스킬 ${name}을 ${update ? "고쳤습니다" : "만들었습니다"}.`, { role: "orchestrator", metadata: { leadSkill: { name, scope, action } } });
@@ -2700,7 +2828,8 @@ export class Orchestra {
   }
 
   private drainIfIdle(session: Session): void {
-    if (session.status !== "running" && !this.goalAutoNext.has(session.id) && !this.stewardStarting.has(session.id)) this.drainStewardInbox(session);
+    // While the last turn still settles (merge, then stewardIdle), its stewardIdle takes the next message.
+    if (session.status !== "running" && !this.goalAutoNext.has(session.id) && !this.stewardStarting.has(session.id) && !this.settling.has(session.id)) this.drainStewardInbox(session);
   }
 
   private drainStewardInbox(session: Session): void {
@@ -2730,9 +2859,17 @@ export class Orchestra {
    * the next waiting message. A stop answers but takes nothing new; the user stopped it.
    */
   private stewardIdle(session: Session, outcome: "done" | "error" | "stopped"): void {
-    if (!session.steward || session.status === "running" || this.goalAutoNext.has(session.id)) return;
+    // A turn that is starting (status not yet "running") owns `answering` now: settling it here would
+    // answer the asker with the previous turn's text and turn the answer turn into an ordinary one.
+    if (!session.steward || session.status === "running" || this.starting.has(session.id) || this.goalAutoNext.has(session.id)) return;
     this.settleStewardAnswer(session, outcome);
     if (outcome !== "stopped") this.drainStewardInbox(session);
+  }
+
+  /** The turn that answers another lead ended: keep its outcome and text with the question. */
+  private endAnswerTurn(session: Session, outcome: "done" | "error" | "stopped"): void {
+    const asked = session.steward?.answering;
+    if (asked && !asked.result) asked.result = { outcome, text: this.stewardLastAnswer.get(session.id) ?? "" };
   }
 
   /** `run` false while restoring: the message waits for the first stewardTick. */
@@ -2742,8 +2879,9 @@ export class Orchestra {
     delete session.steward!.answering;
     const asker = this.sessions.get(asked.id);
     if (!asker?.steward) return;
+    if (asked.result) outcome = asked.result.outcome;
     const answer = outcome === "done"
-      ? stripLeadBlocks(this.stewardLastAnswer.get(session.id) ?? "") || "(답이 비어 있습니다)"
+      ? stripLeadBlocks(asked.result ? asked.result.text : this.stewardLastAnswer.get(session.id) ?? "") || "(답이 비어 있습니다)"
       : `(이 담당이 답하지 못했습니다: ${outcome === "stopped" ? "사용자가 중지했습니다" : "실행 중 오류가 났습니다"})`;
     this.deliverToSteward(asker, { prompt: replyPrompt(stewardName(session), asked.question, answer), depth: asked.depth }, run);
   }
@@ -3156,7 +3294,7 @@ export class Orchestra {
     const result = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, resume, controller.signal, true, true, "orchestrator");
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     this.rememberLeadSession(session, result);
-    if (result.exitCode !== 0) throw new Error(result.resumeRetryFailed ? resumeRetryFailed(result.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`);
+    if (result.exitCode !== 0) throw result.loginNeeded ? new AlreadyShownError(result.lastError) : new Error(result.resumeRetryFailed ? resumeRetryFailed(result.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`);
     delete session.handoffContext;
     state.reporting = false;
     this.addGoals(session, result.finalText);

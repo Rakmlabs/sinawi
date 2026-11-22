@@ -8,7 +8,7 @@ import { delimiter, join } from "node:path";
 import type { Express, Request, Response } from "express";
 
 export type SetupToolId = "node" | "npm" | "git" | "claude" | "codex" | "grok";
-export type SetupTool = { id: SetupToolId; name: string; agent: boolean; installed: boolean; version?: string; install: string; docs: string; login?: string };
+export type SetupTool = { id: SetupToolId; name: string; agent: boolean; installed: boolean; version?: string; install: string; docs: string; login?: string; warning?: string };
 export type PermissionId = "notifications" | "screen" | "accessibility" | "files";
 export type PermissionState = "granted" | "denied" | "unknown";
 
@@ -42,6 +42,22 @@ export function parseVersion(output: string): string | undefined {
   return output.match(/v?(\d+\.\d+(?:\.\d+)?(?:[-.][0-9A-Za-z]+)*)/)?.[1];
 }
 
+/** Returns true when the version satisfies the engines range: "^22.23.4 || ^24.22.1 || >=26.12.1". */
+export function nodeInSupportedRange(version: string): boolean {
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const [major, minor, patch] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  if (major === 22) return minor > 23 || (minor === 23 && patch >= 4);
+  if (major === 24) return minor > 22 || (minor === 22 && patch >= 1);
+  if (major >= 26) return major > 26 || minor > 12 || (minor === 12 && patch >= 1);
+  return false;
+}
+
+/** Returns true when an x64 Node binary is running on Apple Silicon Mac (Rosetta mismatch). */
+export function nodeArchShouldWarn(nodeArch: string, appleSilicon: boolean): boolean {
+  return appleSilicon && nodeArch === "x64";
+}
+
 type Runner = (command: string, args: string[]) => Promise<string>;
 const defaultRunner: Runner = (command, args) => new Promise((resolve, reject) => {
   execFile(resolveCli(command) ?? command, args, { timeout: 8000, env: { ...process.env, PATH: searchPath() } }, (error, stdout, stderr) => error ? reject(error) : resolve(`${stdout}\n${stderr}`));
@@ -52,7 +68,26 @@ const binary = (id: SetupToolId) => ({ claude: envVar("CLAUDE_BIN"), codex: envV
 export async function detectTools(run: Runner = defaultRunner): Promise<SetupTool[]> {
   return Promise.all(SETUP_TOOLS.map(async (tool) => {
     // `xcode-select` stub git exists on every Mac; it fails until the command line tools are installed.
-    try { const version = parseVersion(await run(binary(tool.id), ["--version"])); return { ...tool, installed: true, version }; }
+    try {
+      const version = parseVersion(await run(binary(tool.id), ["--version"]));
+      let warning: string | undefined;
+      if (tool.id === "node" && version) {
+        if (!nodeInSupportedRange(version)) {
+          warning = "unsupported-version";
+        } else if (platform() === "darwin") {
+          try {
+            const [sysctl, archOut] = await Promise.all([
+              run("/usr/sbin/sysctl", ["-n", "hw.optional.arm64"]).catch(() => ""),
+              run(binary("node"), ["-p", "process.arch"]).catch(() => ""),
+            ]);
+            const appleSilicon = sysctl.trim() === "1";
+            const nodeArch = archOut.trim().split(/\r?\n/)[0]?.trim() ?? "";
+            if (nodeArchShouldWarn(nodeArch, appleSilicon)) warning = "rosetta";
+          } catch { /* ignore */ }
+        }
+      }
+      return { ...tool, installed: true, version, ...(warning ? { warning } : {}) };
+    }
     catch { return { ...tool, installed: false }; }
   }));
 }

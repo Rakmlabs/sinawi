@@ -185,18 +185,36 @@ const inlineMarkdown = (line: string) => line
   .replace(/\s+/g, " ")
   .trim();
 
-/** One plain line for a markdown brief: a short generic heading ("## 목표") yields to the line under it. */
+/**
+ * One plain line for a markdown brief: a short generic heading ("## 목표") yields to the line under it,
+ * and a later section's heading ("## 맥락") is never the title (fourth review R4-3: a goal line that
+ * opened with the folder was skipped and the next heading became the worker's summary).
+ */
 export function cleanBriefTitle(markdown: string, max = 140): string {
   let heading = "";
+  let folderLine = "";
   let fenced = false;
   for (const raw of markdown.replace(/\r\n?/g, "\n").split("\n")) {
     if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; continue; }
     if (fenced || /^\s*([-*_])(\s*\1){2,}\s*$/.test(raw)) continue;
     const isHeading = /^\s*#{1,6}\s/.test(raw);
-    const line = inlineMarkdown(raw.replace(/^(\s*(#{1,6}\s+|>\s*|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+))+/, "").replace(/\s#+\s*$/, ""));
+    let line = inlineMarkdown(raw.replace(/^(\s*(#{1,6}\s+|>\s*|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+))+/, "").replace(/\s#+\s*$/, ""));
     if (!line) continue;
-    if (isHeading && !heading && line.length <= 12) { heading = line; continue; }
+    if (isHeading) {
+      // The first short heading waits for the line under it; later headings are section names.
+      if (!heading && line.length <= 12) heading = line;
+      else if (!heading) return clipLine(line, max);
+      continue;
+    }
+    // A lead's brief often opens with where to work: "작업 폴더 `/p`에 있는 파일 목록을 조회해…" keeps
+    // what follows the folder; a line that only says where ("작업 폴더(/p)에서") is not the task.
+    if (/^(?:작업\s*폴더|working\s+(?:folder|directory)|cwd)(?=[\s(:：]|$)/iu.test(line)) {
+      const rest = /^작업\s*폴더\s*[:：]?\s*\(?\S*?\)?(?:에서는|에서|에 있는|안의|안에서|의|에)\s+(.*)$/u.exec(line)?.[1]?.trim();
+      // "…에서 일한다." says only that work happens there.
+      if (!rest || !/[\p{L}\p{N}]/u.test(rest) || /^(?:일|작업)(?:한다|합니다|하라|하세요|해|해라)[.!]?$/u.test(rest)) { folderLine ||= line; continue; }
+      line = rest;
+    }
     return clipLine(line, max);
   }
-  return clipLine(heading, max);
+  return clipLine(folderLine || heading, max);
 }

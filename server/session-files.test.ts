@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveSessionImage } from "./session-files";
+import { mentionedSharedFiles, resolveSessionImage } from "./session-files";
 
 test("session images resolve inside the work folder only", async () => {
   const base = mkdtempSync(join(tmpdir(), "ao-img-"));
@@ -68,4 +68,17 @@ test("download copies into the downloads folder without overwriting", async () =
   assert.equal(first, join(dir, "Downloads", "shot.png"));
   assert.equal(second, join(dir, "Downloads", "shot (1).png"));
   assert.equal(await readFile(second, "utf8"), "x");
+});
+
+test("a chat opens only the shared screenshots its own events name (L7)", async () => {
+  const shots = mkdtempSync(join(tmpdir(), "ao-shots-"));
+  const cwd = mkdtempSync(join(tmpdir(), "ao-cwd-"));
+  writeFileSync(join(shots, "mine.png"), "x"); writeFileSync(join(shots, "other.png"), "x");
+  const mine = { cwd, events: [{ text: `스크린샷: ${join(shots, "mine.png")}.` }, { text: JSON.stringify({ path: join(shots, "mine.png") }) }, {}] };
+  const roots = mentionedSharedFiles(mine, [shots]);
+  assert.deepEqual(roots, [join(shots, "mine.png")]);
+  assert.ok(await resolveSessionImage(cwd, join(shots, "mine.png"), roots));
+  await assert.rejects(resolveSessionImage(cwd, join(shots, "other.png"), roots), /밖/);
+  assert.deepEqual(mentionedSharedFiles({ cwd, events: [{ text: "nothing here" }] }, [shots]), []);
+  assert.deepEqual(mentionedSharedFiles(undefined, [shots]), []);
 });

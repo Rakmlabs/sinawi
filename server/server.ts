@@ -1,12 +1,15 @@
 import { installAccountSkills } from "./account-tooling.js";
+import { archiveEvents, eventsBefore, eventsSince, removeArchivedEvents } from "./event-archive.js";
+import { originLabel } from "../src/origin.js";
 import { previewAssetsDir, registerPreviewRoutes } from "./preview.js";
 import { registerSetupRoutes, SETUP_TOOLS } from "./setup.js";
 import { BrowserBridge, QUEUE_DIR, registerBrowserRoutes, watchQueue } from "./browser-bridge.js";
 import { ComputerBridge, registerComputerRoutes, SHOT_DIR, watchComputerQueue, type ComputerHint } from "./computer-bridge.js";
-import { findTool, handleToolMcp, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
+import { findTool, handleToolMcp, needsApproval, inProcess, isUserOnlyRoute, nameLookup, routeDispatcher, type ToolContext, type ToolSurface } from "./app-tools.js";
 import { withJosa } from "./korean.js";
 import { ApprovalStore, approvalRequester, type AppApproval, type ApprovalStatus } from "./app-approvals.js";
-import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, connectEntry, ensureAppMcpToken, scriptClientConfig, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
+import { waitResult } from "./session-wait.js";
+import { APP_MCP_SERVER, appMcpTokenPath, clientConfig, clientSetups, connectEntry, ensureAppMcpToken, scriptClientConfig, installAppMcpLauncher, installAppMcpScript, presentedToken, rotateAppMcpToken, tokenMatches } from "./app-mcp.js";
 import { LEAD_MCP_SERVER } from "./lead-tools.js";
 import { loadSchedules, saveSchedules, type ScheduleInput } from "./schedules.js";
 import { isComputerUseAllowed } from "./workspace-policy.js";
@@ -32,7 +35,9 @@ import { authNotification, sessionNotifications } from "./notification-sources.j
 import type { NotificationInput, NotificationType } from "./notification-types.js";
 import { createTerminalService } from "./terminal.js";
 import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
+import { hasAppKey } from "./app-key.js";
 import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from "./mcp-clients.js";
+import { mcpClientsSeen, noteMcpClient } from "./mcp-seen.js";
 import { commandAvailable, runCli } from "./cli.js";
 import { recommendAutoSwitch } from "./auto-routing.js";
 import { mediaRouteRequired } from "./media-routing.js";
@@ -47,9 +52,9 @@ import { enabledPublicSkills, publicSkills } from "./skills.js";
 import { RoutingService, type ModelCommandRunner, type PlannerRunner } from "./routing.js";
 import { workspaceIdPattern, createCoalescedSaver, loadBots, loadGroups, loadSessions, loadStewards, loadToolSettings, loadWorkspaceState, workspaceToolSettings, mutateBots, mutateGroups, mutateToolSettings, mutateWorkspaceState, saveSessions, saveStewards } from "./store.js";
 import { discoverMcpTools, updateMcpTool, type ToolCommandRunner } from "./tools.js";
-import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, Session, SessionDraft, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
+import type { AgentId, AgentSelection, Bot, ConversationInput, ConversationSettings, Group, RequestOrigin, Session, SessionDraft, StartSessionInput, UpdateTeamInput, WorkspaceDefaults, WorkspaceId, WorkspaceState } from "./types.js";
 import { randomUUID } from "node:crypto";
-import { registerSessionFileRoutes } from "./session-files.js";
+import { mentionedSharedFiles, registerSessionFileRoutes } from "./session-files.js";
 import { registerLinkPreviewRoute } from "./link-preview.js";
 import { registerWorktreeRoutes } from "./worktree-routes.js";
 import { cleanupSessionWorktrees } from "./worktrees.js";
@@ -97,6 +102,10 @@ export async function recoverStaleSessions(
 }
 
 /** `full` forces a whole snapshot: the client merges incremental events by id, so it never learns about edits or removals. */
+const WS_PING_MS = 30_000;
+/** Bytes a window may have unread before its session updates wait (M4). */
+const WS_BUFFER_LIMIT = 8 * 1024 * 1024;
+
 export function sessionStreamMessage(session: Session, lastEventId?: string, full = false) {
   const lastIndex = lastEventId && !full ? session.events.findIndex((event) => event.id === lastEventId) : -1;
   if (lastEventId && lastIndex >= 0) {
@@ -125,6 +134,25 @@ function localGuard(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/**
+ * The user's own decisions and secrets (USER_ONLY_ROUTES: approving, answering a permission, the MCP
+ * token, deleting a workspace, every tool that needs approval) only from the app window or from the
+ * server itself (an approved tool's in-process run). The window proves itself with the app key
+ * (app-key.ts), not with its Origin: any local program can write an Origin header. A local program,
+ * such as an agent's curl, gets 403 here; it can still use everything else and should go through MCP,
+ * where these become approval cards.
+ */
+const USER_ONLY_ERROR = "이 작업은 시나위 앱 화면에서만 할 수 있습니다. MCP 도구를 쓰면 승인 요청으로 올라갑니다. / Only the Sinawi app window can do this; through MCP it becomes an approval request.";
+/** The app window (its key, from an app Origin) or the server's own in-process run of a tool. */
+const fromUser = (req: Request) => inProcess(req) || Boolean(req.headers.origin && isAllowedOrigin(req.headers.origin) && hasAppKey(req.headers));
+
+export function userOnlyGuard(req: Request, res: Response, next: NextFunction) {
+  if (fromUser(req) || !isUserOnlyRoute(req.method, req.originalUrl.split("?")[0])) { next(); return; }
+  // Tells the app window its key is missing or stale (a restarted server), so it asks again once.
+  res.setHeader("x-sinawi-app-key", "required");
+  res.status(403).json({ error: USER_ONLY_ERROR });
+}
+
 function string(value: unknown, max = 100_000): string {
   if (typeof value !== "string") throw new Error("문자열 값이 필요합니다.");
   const trimmed = value.trim();
@@ -135,6 +163,13 @@ function string(value: unknown, max = 100_000): string {
 function optionalString(value: unknown, max = 10_000): string | undefined {
   if (value == null || value === "") return undefined;
   return string(value, max);
+}
+
+/** A model name for `--model <name>`: never an option ("--help"), never spaces (review L3). */
+export function optionalModel(value: unknown): string | undefined {
+  const model = optionalString(value, 200);
+  if (model && !/^[A-Za-z0-9][\w.:/@[\]+-]*$/u.test(model)) throw new Error(`모델 이름이 올바르지 않습니다: ${model.slice(0, 40)}`);
+  return model;
 }
 
 function optionalReasoningEffort(value: unknown): string | undefined {
@@ -187,7 +222,7 @@ function agentSelection(value: unknown): AgentSelection {
     ...(input.id ? { id: string(input.id, 100) } : {}),
     ...(input.label ? { label: string(input.label, 100) } : {}),
     ...(input.sessionMode ? { sessionMode: input.sessionMode as "new" | "resume" } : {}),
-    ...(input.model ? { model: string(input.model, 200) } : {}),
+    ...(input.model ? { model: optionalModel(input.model)! } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: optionalReasoningEffort(input.reasoningEffort) } : {}),
     ...(input.reason ? { reason: string(input.reason, 500) } : {}),
   };
@@ -208,12 +243,32 @@ function agents(value: unknown, max = 20): AgentId[] {
   return value.map(agent);
 }
 
+/**
+ * The outside AI's name: the bridge sends its client's `clientInfo.name` (or SINAWI_CLIENT_NAME) as
+ * `x-sinawi-client`; an `initialize` names it too. A bridge from before this header reads "MCP".
+ */
+export function mcpClientName(header: unknown, body?: any): string {
+  let name = "";
+  if (typeof header === "string") { try { name = decodeURIComponent(header); } catch { name = header; } }
+  if (!name && body?.method === "initialize") name = typeof body.params?.clientInfo?.name === "string" ? body.params.clientInfo.name : "";
+  return requestOrigin({ kind: "mcp", client: name })!.client;
+}
+
+/** Who asked, when an outside AI (MCP) or a lead sent the request: a short name, never markup. */
+export function requestOrigin(value: any): RequestOrigin | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  if (value.kind !== "mcp" && value.kind !== "lead") return undefined;
+  const client = typeof value.client === "string" ? value.client.replace(/[\u0000-\u001f<>]/gu, "").trim().slice(0, 60) : "";
+  return { kind: value.kind, client: client || (value.kind === "mcp" ? "MCP" : "lead") };
+}
+
 function conversationSettings(body: any): ConversationSettings {
   if (body?.mode !== undefined && body.mode !== "auto" && body.mode !== "manual") throw new Error("배정 방식이 올바르지 않습니다.");
   if (body?.autoSwitch !== undefined && typeof body.autoSwitch !== "boolean") throw new Error("자동 전환 설정이 올바르지 않습니다.");
   if (body?.permissionMode !== undefined && !["plan", "auto", "full"].includes(body.permissionMode)) throw new Error("권한 모드가 올바르지 않습니다.");
   if (body?.autoRun !== undefined && typeof body.autoRun !== "boolean") throw new Error("끝까지 진행 설정이 올바르지 않습니다.");
-  return { mode: body?.mode, autoSwitch: body?.autoSwitch, permissionMode: body?.permissionMode, autoRun: body?.autoRun };
+  const origin = requestOrigin(body?.origin);
+  return { mode: body?.mode, autoSwitch: body?.autoSwitch, permissionMode: body?.permissionMode, autoRun: body?.autoRun, ...(origin ? { origin } : {}) };
 }
 
 /** Schedule fields from a request body; schedules.ts checks the values. */
@@ -243,7 +298,7 @@ export function startInput(body: any, workspace: WorkspaceResolver, fallbackWork
     agent: body?.agent == null || body.agent === "" ? undefined as unknown as AgentId : agent(body.agent),
     // A new thread of a lead may leave the folder out: it opens in the lead's (Orchestra.create).
     workers: agents(body?.workers, 3), cwd: body?.steward?.id && (body?.cwd == null || body.cwd === "") ? "" : string(body?.cwd, 4_096),
-    model: optionalString(body?.model, 200), reasoningEffort: optionalReasoningEffort(body?.reasoningEffort),
+    model: optionalModel(body?.model), reasoningEffort: optionalReasoningEffort(body?.reasoningEffort),
     workerConfigs: agentSelections(body?.workerConfigs), planner: body?.planner == null ? undefined : agentSelection(body.planner),
     skills: ids(body?.skills),
     systemPrompt: optionalString(body?.systemPrompt, 50_000), resumeSessionId: optionalString(body?.resumeSessionId, 500),
@@ -251,7 +306,11 @@ export function startInput(body: any, workspace: WorkspaceResolver, fallbackWork
     workspaceId: workspace(body?.workspaceId, fallbackWorkspace),
     // A commander's goal sessions are started by the app (parentId), never from a request.
     ...(body?.commander === true ? { commander: true } : body?.goal === true ? { goal: true } : {}),
-    ...(body?.steward === true || body?.steward && typeof body.steward === "object" ? { steward: { name: optionalString(body.steward?.name, 80), ...(body.steward?.id ? { id: string(body.steward.id, 100) } : {}) } } : {}),
+    ...(body?.steward === true || body?.steward && typeof body.steward === "object" ? { steward: {
+      name: optionalString(body.steward?.name, 80), ...(body.steward?.id ? { id: string(body.steward.id, 100) } : {}),
+      // This thread's own CLI and model instead of the lead's (an outside orchestrator picking the model).
+      ...(body.steward?.agent ? { agent: agent(body.steward.agent) } : {}), ...(body.steward?.model ? { model: optionalModel(body.steward.model) } : {}),
+    } } : {}),
   };
 }
 
@@ -294,7 +353,7 @@ export function workspaceDefaults(value: unknown): WorkspaceDefaults {
     ...conversationSettings(input),
     ...(input.agent == null ? {} : { agent: agent(input.agent) }),
     ...(input.workers == null ? {} : { workers: agents(input.workers, 3) }),
-    ...(input.model == null || input.model === "" ? {} : { model: string(input.model, 200) }),
+    ...(input.model == null || input.model === "" ? {} : { model: optionalModel(input.model)! }),
     ...(input.reasoningEffort == null || input.reasoningEffort === "" ? {} : { reasoningEffort: optionalReasoningEffort(input.reasoningEffort) }),
     ...(input.workerConfigs == null ? {} : { workerConfigs: agentSelections(input.workerConfigs) }),
   };
@@ -311,7 +370,7 @@ export function stewardInput(body: any, create = false): StewardPatch {
     ...(body.systemPrompt !== undefined ? { systemPrompt: body.systemPrompt.trim() } : {}),
     ...(body.skills !== undefined ? { skills: ids(body.skills) } : {}),
     ...(body.agent !== undefined ? { agent: agent(body.agent) } : {}),
-    ...(body.model !== undefined ? { model: optionalString(body.model, 200) ?? "" } : {}),
+    ...(body.model !== undefined ? { model: optionalModel(body.model) ?? "" } : {}),
     ...(body.reasoningEffort !== undefined ? { reasoningEffort: optionalReasoningEffort(body.reasoningEffort) ?? "" } : {}),
     ...(body.workers !== undefined ? { workers: agentSelections(body.workers) } : {}),
     ...(body.mergePolicy !== undefined ? { mergePolicy: body.mergePolicy } : {}),
@@ -372,7 +431,7 @@ export function withWorkspaceAccounts(runner: PlannerRunner, policyFor?: Workspa
   };
 }
 
-export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean } = {}) {
+export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean; wsPingMs?: number; wsBufferLimit?: number } = {}) {
   const app = express();
   app.disable("x-powered-by");
   const smallJson = express.json({ limit: "1mb" });
@@ -391,33 +450,71 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const message = JSON.stringify({ type: "notifications", workspaceId });
     for (const client of websocket.clients) if (client.readyState === WebSocket.OPEN) client.send(message);
   });
-  const notify = (input: NotificationInput) => { void notifications.add(input).catch((error) => console.error("알림 저장 실패:", error.message)); };
+  const notify = (input: NotificationInput, options?: { renew?: boolean }) => { void notifications.add(input, options).catch((error) => console.error("알림 저장 실패:", error.message)); };
   const terminal = createTerminalService({ onError: (message) => {
     notify({ workspaceId: workspaceState.currentWorkspaceId, key: "terminal:load", type: "error", title: "통합 터미널 시작 실패", body: message });
   } });
   const observedEvents = new Set<string>();
   const completedRuns = new Set<string>();
   const broadcast = (session: Session, publishOptions?: { full?: boolean }) => {
-    for (const note of sessionNotifications(session, workspaceState.settings?.[session.workspaceId]?.accounts)) {
+    for (const { once, ...note } of sessionNotifications(session, workspaceState.settings?.[session.workspaceId]?.accounts)) {
       const seen = note.type === "run-finished" || note.type === "lead" ? completedRuns : observedEvents;
-      if (note.key && !seen.has(note.key)) {
-        seen.add(note.key); notify(note);
+      const occurrence = once ?? note.key;
+      if (occurrence && !seen.has(occurrence)) {
+        seen.add(occurrence); notify(note);
         if (seen.size > 10000) seen.delete(seen.values().next().value!);
       }
     }
-    for (const client of websocket.clients) {
-      if (client.readyState !== WebSocket.OPEN) continue;
-      let delivered = deliveredEvents.get(client);
-      if (!delivered) {
-        delivered = new Map();
-        deliveredEvents.set(client, delivered);
-      }
-      const message = sessionStreamMessage(session, delivered.get(session.id), publishOptions?.full);
-      client.send(JSON.stringify(message));
-      const latest = session.events.at(-1)?.id;
-      if (latest) delivered.set(session.id, latest);
-    }
+    for (const client of websocket.clients) sendSession(client, session, publishOptions?.full);
   };
+  /**
+   * One session's new events to one window. A window that is not reading (a stalled WebView, a
+   * sleeping Mac) is skipped while its socket buffer is full: what it missed goes in one message
+   * once it drains (the ping tick below catches it up), instead of piling up in server memory.
+   */
+  const behind = new WeakSet<WebSocket>();
+  // Sessions whose skipped update was a full one (an event edited or removed): the last event id
+  // may not have moved, so the catch-up sends them whole.
+  const missedFull = new WeakMap<WebSocket, Set<string>>();
+  const sendSession = (client: WebSocket, session: Session, full?: boolean) => {
+    if (client.readyState !== WebSocket.OPEN) return;
+    if (client.bufferedAmount > (options.wsBufferLimit ?? WS_BUFFER_LIMIT)) {
+      behind.add(client);
+      if (full) { const missed = missedFull.get(client) ?? new Set<string>(); missed.add(session.id); missedFull.set(client, missed); }
+      return;
+    }
+    let delivered = deliveredEvents.get(client);
+    if (!delivered) {
+      delivered = new Map();
+      deliveredEvents.set(client, delivered);
+    }
+    const message = sessionStreamMessage(session, delivered.get(session.id), full);
+    client.send(JSON.stringify(message));
+    const latest = session.events.at(-1)?.id;
+    if (latest) delivered.set(session.id, latest);
+  };
+  // Every 30s: a window that did not answer the last ping is gone (half-open after sleep or a
+  // network change) and is closed, so it no longer counts as an open app window (ao-browser,
+  // ao-computer, /api/health). A window that was behind gets what it missed.
+  const alive = new WeakSet<WebSocket>();
+  const keepalive = setInterval(() => {
+    for (const client of websocket.clients) {
+      if (!alive.has(client)) { client.terminate(); continue; }
+      alive.delete(client);
+      try { client.ping(); } catch { client.terminate(); continue; }
+      if (behind.has(client) && client.bufferedAmount <= (options.wsBufferLimit ?? WS_BUFFER_LIMIT)) {
+        behind.delete(client);
+        const missed = missedFull.get(client);
+        missedFull.delete(client);
+        for (const session of orchestra.list()) {
+          if (missed?.has(session.id)) sendSession(client, session, true);
+          else if (deliveredEvents.get(client)?.get(session.id) !== session.events.at(-1)?.id) sendSession(client, session);
+        }
+      }
+    }
+  }, options.wsPingMs ?? WS_PING_MS);
+  keepalive.unref();
+  httpServer.once("close", () => clearInterval(keepalive));
   const broadcastRemoval = (sessionId: string) => {
     for (const client of websocket.clients) {
       if (client.readyState !== WebSocket.OPEN) continue;
@@ -486,6 +583,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   }, allowedFor, options.dataDir, (session) => fallbackContext(session.workspaceId),
   (prompt) => routing.loadSettings().then((settings) => mediaRouteRequired(prompt, settings.rules)), options.inactivityTimeoutMs, policyFor);
   // Per-worker git worktrees (server/worktrees.ts). Opt-in so tests and embedders never create branches.
+  orchestra.archive = (sessionId, events) => { void archiveEvents(sessionId, events, options.dataDir).catch((error) => console.error("이벤트 보관 실패:", error.message)); };
   if (options.worktrees) orchestra.worktreeDataDir = options.dataDir ?? join(homedir(), ".sinawi");
   // Leads' notes, transcripts and the user's preferences live in the data folder the stores use
   // (SINAWI_DATA_DIR when set), never in ~/.sinawi behind a custom one's back.
@@ -542,6 +640,13 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     orchestra.restore(sessions, stewards, { legacyMergePolicy: state.stewardSettings?.legacyMergePolicy, defaultWorkspaceId: state.workspaces[0]?.id ?? state.currentWorkspaceId });
     // Missed while the app was off: the first stewardTick runs or skips them (MISSED_GRACE_MS).
     orchestra.restoreSchedules(schedules);
+  });
+  // A failed start (an unreadable data file, no permission) is reported by /api/health and logged;
+  // the server stays up instead of dying on an unhandled rejection and crash-looping under launchd.
+  let startError = "";
+  ready.catch((error: unknown) => {
+    startError = error instanceof Error ? error.message : String(error);
+    console.error("[sinawi] 데이터를 불러오지 못했습니다 / could not load data:", startError);
   });
   // Start discovery even when settings were saved by an earlier app version.
   // Settings errors remain visible through the API without blocking session recovery.
@@ -608,7 +713,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     return limitsRefresh;
   };
 
-  app.use("/api", localGuard);
+  app.use("/api", localGuard, userOnlyGuard);
   const previewProxies = registerPreviewRoutes(app, { dataDir: options.dataDir, appPort: Number(envVar("PORT") ?? 3001) });
   httpServer.once("close", () => previewProxies.close());
   const browserBridge = new BrowserBridge((command) => {
@@ -690,7 +795,14 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   registerSimRoutes(app, simOptions);
   registerSimViewRoutes(app);
   if (options.browserQueue) { const stop = watchSimQueue(simOptions); httpServer.once("close", stop); }
-  app.use("/api", async (_req, _res, next) => { await ready; next(); });
+  app.use("/api", async (req, res, next) => {
+    try { await ready; }
+    catch {
+      // Health still answers (with the reason) so the app can tell the server is up but broken.
+      if (req.path !== "/health") { res.status(503).json({ error: `시나위가 데이터를 불러오지 못했습니다 / Sinawi could not load its data: ${startError}` }); return; }
+    }
+    next();
+  });
 
   terminal.registerRoutes(app);
   registerSetupRoutes(app);
@@ -924,6 +1036,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     } catch (error) { errorResponse(res, error, workspaceNotFound(error) ? 404 : 400); }
   });
   app.post("/api/workspaces", async (req, res) => {
+    // A new space's policy (full access, computer use ...) is the user's, like PATCH: see userOnlyGuard.
+    if (req.body?.settings != null && !fromUser(req)) { res.setHeader("x-sinawi-app-key", "required"); res.status(403).json({ error: USER_ONLY_ERROR }); return; }
     try {
       const name = workspaceName(req.body?.name);
       if (req.body?.settings != null) normalizeWorkspacePolicy(req.body.settings, true);
@@ -968,6 +1082,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     try {
       const id = workspaceIdFormat(routeParam(req.params.id));
       const hasSettings = req.body?.settings != null;
+      // Renaming is open (rename_workspace); a policy (full access, computer use ...) is the user's: see userOnlyGuard.
+      if (hasSettings && !fromUser(req)) { res.setHeader("x-sinawi-app-key", "required"); res.status(403).json({ error: USER_ONLY_ERROR }); return; }
       // Rename, update settings (merged onto the stored ones), or both.
       const name = req.body?.name == null && hasSettings ? undefined : workspaceName(req.body?.name);
       if (hasSettings) normalizeWorkspacePolicy(req.body.settings, true);
@@ -1052,8 +1168,9 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   // Chat attachments and results, scoped to the session work folder (plus pasted/dropped uploads).
   registerSessionFileRoutes(app, {
     lookup: (id) => orchestra.get(id),
-    // A worker's result (a design screenshot copied into its worktree) shows in the chat too.
-    extraRoots: (session) => [previewAssetsDir(options.dataDir), ...(session?.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR],
+    // A worker's result (a design screenshot copied into its worktree) shows in the chat too; from the
+    // screenshot folders every session shares, only the files this chat's own events name.
+    extraRoots: (session) => [previewAssetsDir(options.dataDir), ...(session?.worktrees?.map((item) => item.path) ?? []), ...mentionedSharedFiles(session, [QUEUE_DIR, SHOT_DIR])],
     previewRoot: () => previewAssetsDir(options.dataDir),
     cacheDir: () => join(options.dataDir ?? join(homedir(), ".sinawi"), "file-previews"),
   });
@@ -1136,6 +1253,70 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.get("/api/sessions/:id/summary", async (req, res) => {
     try { await ready; res.json(orchestra.summary(routeParam(req.params.id))); }
     catch (error) { errorResponse(res, error, 404); }
+  });
+  // An outside orchestrator waiting for a chat's turn (wait_for_session): answers when the chat is no
+  // longer working (Orchestra.isWorking) or at the timeout, with the lines said since `after`.
+  // One chat's events, paged: `after` resumes where a reader left off (an id since trimmed into the
+  // archive still works), `before` reads further back into the archive (review M5).
+  app.get("/api/sessions/:id/events", async (req, res) => {
+    try {
+      await ready;
+      const session = orchestra.get(routeParam(req.params.id));
+      if (!session) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 30));
+      const before = typeof req.query.before === "string" && req.query.before ? req.query.before : undefined;
+      const after = typeof req.query.after === "string" && req.query.after ? req.query.after : undefined;
+      const { events: _events, ...rest } = session;
+      if (before) { res.json({ ...rest, events: await eventsBefore(session, before, limit, options.dataDir) }); return; }
+      const since = await eventsSince(session, after, options.dataDir);
+      res.json({ ...rest, events: since.events.slice(-limit), ...(since.found ? {} : { cursorLost: true }), skipped: Math.max(0, since.events.length - limit) });
+    } catch (error) { errorResponse(res, error, 400); }
+  });
+  app.get("/api/sessions/:id/wait", async (req, res) => {
+    try {
+      await ready;
+      const id = routeParam(req.params.id);
+      if (!orchestra.get(id)) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
+      const seconds = Number(req.query.timeout);
+      const deadline = Date.now() + Math.min(600, Math.max(0, Number.isFinite(seconds) && req.query.timeout !== undefined ? seconds : 50)) * 1_000;
+      let gone = false;
+      res.on("close", () => { if (!res.writableFinished) gone = true; });
+      // Settled twice in a row: a turn that just ended may open the next one a moment later.
+      let quiet = 0;
+      while (!gone && Date.now() < deadline) {
+        quiet = orchestra.isWorking(id) ? 0 : quiet + 1;
+        if (quiet >= 2) break;
+        await new Promise((done) => setTimeout(done, quiet ? 400 : 500));
+      }
+      const session = orchestra.get(id);
+      if (!session) { res.status(404).json({ error: "세션이 지워졌습니다." }); return; }
+      if (gone) return;
+      const after = typeof req.query.after === "string" ? req.query.after : undefined;
+      const since = await eventsSince(session, after, options.dataDir);
+      res.json(waitResult(session, orchestra.isWorking(id), after, orchestra.stewardOf(session), undefined, since));
+    } catch (error) { errorResponse(res, error, 400); }
+  });
+  // Brings a chat to the front of the app window (show_session): an outside AI shows the user its work.
+  app.post("/api/sessions/:id/show", async (req, res) => {
+    try {
+      await ready;
+      const session = orchestra.get(routeParam(req.params.id));
+      if (!session) { res.status(404).json({ error: "세션을 찾을 수 없습니다." }); return; }
+      const windows = openClients();
+      // The user's screen is theirs (review M3): a notification always says who asks to show what, and
+      // the window opens the chat by itself only when the user is on an empty, untouched new-chat screen
+      // (src/app/show-session.ts). Another workspace is never switched to under the user's hands.
+      const asker = originLabel(requestOrigin(req.body?.origin));
+      const here = session.workspaceId === currentWorkspace();
+      notify({ workspaceId: session.workspaceId, type: "info", key: `show:${session.id}`, title: asker && asker !== "MCP" ? `${asker}: 이 채팅을 봐 달라고 합니다` : "이 채팅을 봐 달라는 요청", body: session.title, action: { label: "채팅 열기", sessionId: session.id } }, { renew: true });
+      if (here) {
+        const message = JSON.stringify({ type: "show-session", sessionId: session.id, workspaceId: session.workspaceId });
+        for (const client of windows) client.send(message);
+      }
+      // Honest about what happened (review R3): the notification went out; an open window got the
+      // request and decides itself; whether the user actually sees the chat is not known here.
+      res.json({ ok: true, notified: true, windowAsked: here && windows.length > 0, opensOnlyWhenIdle: true, workspaceId: session.workspaceId, title: session.title });
+    } catch (error) { errorResponse(res, error, 400); }
   });
   app.post("/api/sessions/:id/merge/approve", async (req, res) => {
     try {
@@ -1297,7 +1478,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     }
     void sendApprovals().catch(() => undefined);
   });
-  type CallerContext = { surface: ToolSurface; sessionId?: string; workspaceId: string; touch?: () => void };
+  type CallerContext = { surface: ToolSurface; sessionId?: string; workspaceId: string; touch?: () => void; origin?: RequestOrigin; signal?: AbortSignal };
   /** Names for the IDs an approval's line mentions, read when it is asked for. */
   const approvalNames = async () => {
     const [groups, bots] = await Promise.all([loadGroups(options.dataDir).catch(() => []), loadBots(options.dataDir).catch(() => [])]);
@@ -1315,7 +1496,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const session = caller.sessionId ? orchestra.get(caller.sessionId) : undefined;
     const workspaceName = workspaceState.workspaces.find((item) => item.id === caller.workspaceId)?.name;
     return {
-      ...(session?.steward ? { requester: stewardName(session) } : {}),
+      // A lead by its name; an outside AI by its MCP client's name (Claude Code, Codex, Grok ...).
+      ...(session?.steward ? { requester: stewardName(session) } : caller.surface === "external" && caller.origin?.client && caller.origin.client !== "MCP" ? { requester: originLabel(caller.origin) } : {}),
       ...(session?.title ? { sessionTitle: session.title } : {}),
       ...(workspaceName ? { workspaceName } : {}),
     };
@@ -1330,7 +1512,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
         if (target && target.workspaceId !== caller.workspaceId) throw new Error("같은 공간의 채팅에만 질문하거나 지시할 수 있습니다. 먼저 담당을 같은 공간으로 옮기세요.");
       }
       if (/^\/api\/(?:stewards|settings)(?:\/|$)/.test(url.pathname) && !url.searchParams.has("workspace")) url.searchParams.set("workspace", caller.workspaceId);
-      return dispatch(method, `${url.pathname}${url.search}`, body);
+      // Work an outside AI or a lead asks for carries who asked: the chat shows it (RequestOrigin).
+      const startsWork = method === "POST" && /^\/api\/sessions(?:\/[^/]+\/(?:messages|show))?$/.test(url.pathname);
+      const ownChat = caller.sessionId && url.pathname === `/api/sessions/${encodeURIComponent(caller.sessionId)}/messages`;
+      if (startsWork && caller.origin && !ownChat && body && typeof body === "object") body = { ...(body as Record<string, unknown>), origin: caller.origin };
+      return dispatch(method, `${url.pathname}${url.search}`, body, caller.signal);
     }, workspaceId: caller.workspaceId,
     ...(caller.surface === "lead" && caller.sessionId ? { leadCall: (name: string, args: Record<string, unknown>) => orchestra.leadToolCall(caller.sessionId!, name, args, caller.touch) } : {}),
   });
@@ -1338,7 +1524,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   const callTool = async (caller: CallerContext, name: string, args: Record<string, unknown>) => {
     const tool = findTool(caller.surface, name);
     if (!tool) throw new Error(`알 수 없는 도구: ${name}`);
-    if (tool.risk !== "approval") return tool.run(args, toolContext(caller));
+    if (!needsApproval(tool, args)) return tool.run(args, toolContext(caller));
     const item = await approvals.create({ tool: name, args, summary: tool.summary?.(args, await approvalNames()) ?? name, source: caller.surface, ...(caller.sessionId ? { sessionId: caller.sessionId } : {}), workspaceId: caller.workspaceId, ...approvalContext(caller) });
     return { status: "pending_approval", approvalId: item.id, summary: item.summary, next: "사용자가 앱의 승인 카드에서 승인하면 실행됩니다. 결과는 list_approvals(approval_id)로 확인하세요. 같은 요청을 다시 보내지 마세요." };
   };
@@ -1358,7 +1544,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     }
     try {
       await ready;
-      const caller: CallerContext = { surface: "lead", sessionId: run.sessionId, workspaceId: session.workspaceId, touch: () => touchRunActivity(token) };
+      const caller: CallerContext = { surface: "lead", sessionId: run.sessionId, workspaceId: session.workspaceId, touch: () => touchRunActivity(token), origin: { kind: "lead", client: stewardName(session) } };
       const answer = await handleToolMcp(req.body ?? {}, "lead", LEAD_MCP_SERVER, (name, args) => callTool(caller, name, args));
       if (!answer) { res.status(202).end(); return; }
       res.json(answer);
@@ -1368,11 +1554,16 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   app.post("/api/app-mcp", async (req, res) => {
     try {
       if (!tokenMatches(await ensureAppMcpToken(mcpDataDir), presentedToken(req.headers))) {
-        res.status(401).json({ error: "Sinawi: MCP 토큰이 없거나 틀렸습니다. 설정 → 일반 → 외부 AI 연결에서 확인하세요." });
+        res.status(401).json({ error: "Sinawi: MCP 토큰이 없거나 틀렸습니다. 설정 → 외부 AI 연결에서 확인하세요." });
         return;
       }
       await ready;
-      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace() };
+      // The MCP client hanging up ends what it waits on (wait_for_session), not only at its deadline.
+      const hungUp = new AbortController();
+      res.on("close", () => { if (!res.writableFinished) hungUp.abort(); });
+      const client = mcpClientName(req.headers["x-sinawi-client"], req.body);
+      noteMcpClient(client);
+      const caller: CallerContext = { surface: "external", workspaceId: currentWorkspace(), origin: { kind: "mcp", client }, signal: hungUp.signal };
       const answer = await handleToolMcp(req.body ?? {}, "external", APP_MCP_SERVER, (name, args) => callTool(caller, name, args));
       if (!answer) { res.status(202).end(); return; }
       res.json(answer);
@@ -1380,14 +1571,21 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   const connectionPayload = async (token: string) => {
     const script = await installAppMcpScript(mcpDataDir).catch(() => undefined);
-    // `config` runs the npm package through npx; `scriptConfig` is the offline alternative (the copy in <data>/hooks).
-    return { token, tokenFile: appMcpTokenPath(mcpDataDir), script: script ?? null, server: APP_MCP_SERVER, config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token) : null };
+    // `clients`: per-client setup running the app's copy of the bridge (<data>/hooks) with the token
+    // file. `config` is the npm package through npx, which works only once @rakmlabs/sinawi is
+    // published; `scriptConfig` is the same entry as `clients` with the token written in.
+    const tokenFile = appMcpTokenPath(mcpDataDir);
+    const node = script ? await installAppMcpLauncher(mcpDataDir) : undefined;
+    return { token, tokenFile, script: script ?? null, server: APP_MCP_SERVER, clients: script ? clientSetups(script, tokenFile, node) : [], config: clientConfig(token), scriptConfig: script ? scriptClientConfig(script, token, node) : null, seen: mcpClientsSeen() };
   };
   // For the settings page: how to connect Claude Desktop (shows the token, so not a tool).
-  app.get("/api/app-mcp/connection", async (_req, res) => {
+  // POST from the app (a browser sends its Origin on POST, not on a same-origin GET); GET stays for in-process callers.
+  const sendConnection = async (_req: Request, res: Response) => {
     try { res.json(await connectionPayload(await ensureAppMcpToken(mcpDataDir))); }
     catch (error) { errorResponse(res, error, 500); }
-  });
+  };
+  app.get("/api/app-mcp/connection", sendConnection);
+  app.post("/api/app-mcp/connection", sendConnection);
   app.post("/api/app-mcp/token", async (_req, res) => {
     try { res.json(await connectionPayload(await rotateAppMcpToken(mcpDataDir))); }
     catch (error) { errorResponse(res, error, 500); }
@@ -1399,18 +1597,21 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     await ensureAppMcpToken(mcpDataDir);
     const script = await installAppMcpScript(mcpDataDir);
     if (!script) throw new Error("Sinawi: 연결 스크립트를 찾지 못했습니다. / The bridge script was not found.");
-    return connectEntry(script, appMcpTokenPath(mcpDataDir));
+    return connectEntry(script, appMcpTokenPath(mcpDataDir), await installAppMcpLauncher(mcpDataDir));
   };
   const clientError = (res: Response, error: unknown) => {
     if (error instanceof McpClientConfigError) { res.status(409).json({ error: error.message, code: error.code, path: error.path }); return; }
     errorResponse(res, error, 500);
   };
-  app.get("/api/app-mcp/clients/:client", async (req, res) => {
+  // The plan holds the token: the app asks with POST (it then sends its Origin, see userOnlyGuard).
+  const sendClientPlan = async (req: Request, res: Response) => {
     const client = routeParam(req.params.client);
     if (!isMcpClient(client)) { res.status(404).json({ error: `Unknown client ${client}` }); return; }
     try { res.json(await planMcpClient(client, await clientEntry())); }
     catch (error) { clientError(res, error); }
-  });
+  };
+  app.get("/api/app-mcp/clients/:client", sendClientPlan);
+  app.post("/api/app-mcp/clients/:client/plan", sendClientPlan);
   app.post("/api/app-mcp/clients/:client", async (req, res) => {
     const client = routeParam(req.params.client);
     if (!isMcpClient(client)) { res.status(404).json({ error: `Unknown client ${client}` }); return; }
@@ -1488,6 +1689,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       if (target?.status === "running") throw new Error("실행 중인 세션은 삭제할 수 없습니다.");
       const cleanup = req.query.worktrees === "remove" && target?.worktrees?.length ? await cleanupSessionWorktrees(target.worktrees) : undefined;
       await orchestra.remove(routeParam(req.params.id));
+      await removeArchivedEvents(routeParam(req.params.id), options.dataDir).catch(() => undefined);
       await persistSessions(orchestra.list());
       if (cleanup) res.json(cleanup);
       else res.status(204).end();
@@ -1636,7 +1838,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
 
   app.post("/api/bots", async (req, res) => {
     try {
-      const bot: Bot = { id: randomUUID(), name: string(req.body?.name, 100), agent: agent(req.body?.agent), model: optionalString(req.body?.model, 200), skills: ids(req.body?.skills), systemPrompt: optionalString(req.body?.systemPrompt, 50_000) ?? "", createdAt: new Date().toISOString() };
+      const bot: Bot = { id: randomUUID(), name: string(req.body?.name, 100), agent: agent(req.body?.agent), model: optionalModel(req.body?.model), skills: ids(req.body?.skills), systemPrompt: optionalString(req.body?.systemPrompt, 50_000) ?? "", createdAt: new Date().toISOString() };
       await mutateBots((bots) => { bots.push(bot); }, options.dataDir);
       res.status(201).json(bot);
     } catch (error) { errorResponse(res, error); }
@@ -1660,7 +1862,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       res.status(201).json(await orchestra.conversation(input, await loadBots(options.dataDir)));
     } catch (error) { errorResponse(res, error); }
   });
-  const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, app: "sinawi", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: envVar("SERVER_VERSION") ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });
+  const sendHealth = (_req: Request, res: Response) => res.json({ ok: true, ...(startError ? { error: startError } : {}), app: "sinawi", mode: options.staticDir ? "production" : "development", running: orchestra.list().filter((session) => session.status === "running").length, version: envVar("SERVER_VERSION") ?? "", windows: [...websocket.clients].filter((client) => client.readyState === WebSocket.OPEN).length });
   app.get("/api/health", sendHealth);
   app.get("/health", sendHealth);
   // Unknown API routes must never become a successful HTML response.
@@ -1679,19 +1881,30 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
 
   httpServer.on("upgrade", (request, socket, head) => {
     if (terminal.handleUpgrade(request, socket, head)) return;
-    if (request.url !== "/ws" || !isLoopbackHost(request.headers.host) || !isLocalOrigin(request.headers.origin)) {
+    // Every session, live: the app window only (its key, see app-key.ts), never just a matching Origin.
+    if (request.url !== "/ws" || !isLoopbackHost(request.headers.host) || !request.headers.origin || !isAllowedOrigin(request.headers.origin) || !hasAppKey(request.headers)) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n"); socket.destroy(); return;
     }
     websocket.handleUpgrade(request, socket, head, (client) => websocket.emit("connection", client, request));
   });
   websocket.on("connection", async (client) => {
-    await ready;
-    const sessions = orchestra.list();
-    client.send(JSON.stringify({ type: "sessions", sessions }));
-    deliveredEvents.set(client, new Map(sessions.flatMap((session) => {
-      const latest = session.events.at(-1)?.id;
-      return latest ? [[session.id, latest] as const] : [];
-    })));
+    alive.add(client);
+    client.on("pong", () => alive.add(client));
+    client.on("error", (error) => console.error("[sinawi] websocket:", error.message));
+    try {
+      await ready;
+      if (client.readyState !== WebSocket.OPEN) return;
+      const sessions = orchestra.list();
+      client.send(JSON.stringify({ type: "sessions", sessions }));
+      deliveredEvents.set(client, new Map(sessions.flatMap((session) => {
+        const latest = session.events.at(-1)?.id;
+        return latest ? [[session.id, latest] as const] : [];
+      })));
+    } catch (error) {
+      // The data could not be loaded (startError): tell the window instead of an unhandled rejection.
+      console.error("[sinawi] websocket connection:", error instanceof Error ? error.message : error);
+      client.close(1011, "server data unavailable");
+    }
   });
 
   const flushSessions = () => persistAllSessions(orchestra.list());

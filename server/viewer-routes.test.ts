@@ -52,7 +52,7 @@ test("pdf conversion is cached from an injected converter", async () => {
     const second = await convertToPdf(source, join(root, "cache"), "/opt/soffice", async () => { throw new Error("should use cache"); });
     assert.equal(first, second);
     assert.match(first, /preview\.pdf$/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("session and preview file routes stay inside their roots", async () => {
@@ -110,7 +110,7 @@ test("session and preview file routes stay inside their roots", async () => {
     assert.equal(office.status, 415);
   } finally {
     await close(server);
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

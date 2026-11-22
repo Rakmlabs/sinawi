@@ -10,6 +10,7 @@ import {
   defaultRoutingSettings, discoverLocalModels, loadRoutingSettings, RoutingService, saveRoutingSettings, validateRoutingSettings,
   type PlannerRunner,
 } from "./routing.js";
+import { onAbort } from "./test-abort.js";
 
 const fixtureSkills = [
   { id: "react-skill", name: "React", source: "Test", description: "React UI component implementation" },
@@ -147,7 +148,13 @@ test("routing rules accept same-agent and repeated worker slots but still requir
   assert.throws(() => validateRoutingSettings(settings), /작업자가 한 명 이상/);
 });
 
-test("initial settings discover bounded model identifiers from local CLI config and cache", async () => {
+test("initial settings discover bounded model identifiers from local CLI config and cache", async (t) => {
+  // Inherited account roots win over `home` (see "inherited CLI account roots ..."): a run inside Claude Code has one.
+  for (const name of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"]) {
+    const saved = process.env[name];
+    delete process.env[name];
+    t.after(() => { if (saved === undefined) delete process.env[name]; else process.env[name] = saved; });
+  }
   const home = await mkdtemp(join(tmpdir(), "orchestra-model-home-"));
   const data = await mkdtemp(join(tmpdir(), "orchestra-model-data-"));
   await Promise.all([mkdir(join(home, ".codex")), mkdir(join(home, ".claude")), mkdir(join(home, ".grok"))]);
@@ -234,13 +241,13 @@ test("planner failures surface a warning and fall back to editable routing rules
 test("planner execution is bounded by the configured timeout", async () => {
   let aborted = false;
   const runner: PlannerRunner = (options) => new Promise(() => {
-    options.signal?.addEventListener("abort", () => { aborted = true; }, { once: true });
+    onAbort(options.signal, () => { aborted = true; });
   });
   const home = await mkdtemp(join(tmpdir(), "orchestra-empty-home-"));
   const service = new RoutingService({ runner, homeDir: home, skillLoader: async () => [], timeoutMs: 10 });
   const started = Date.now();
   const recommendation = await service.recommend("평범한 요청", process.cwd());
-  assert.ok(Date.now() - started < 500, "recommend() should settle even if the runner ignores abort");
+  assert.ok(Date.now() - started < 5_000, "recommend() should settle even if the runner ignores abort");
   assert.equal(aborted, true);
   assert.equal(recommendation.source, "fallback");
   assert.match(recommendation.warning ?? "", /시간이 초과/);

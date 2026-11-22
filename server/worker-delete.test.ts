@@ -8,6 +8,7 @@ import { sessionStreamMessage } from "./server.js";
 import type { RunCliOptions } from "./cli.js";
 import type { Session } from "./types.js";
 import { delegationWorkers, mainConversation } from "../src/conversation.js";
+import { whenAborted } from "./test-abort.js";
 
 const settle = (session: Session) => new Promise<void>((resolve, reject) => {
   const deadline = setTimeout(() => reject(new Error("timeout")), 2_000);
@@ -19,7 +20,7 @@ function scripted(calls: Array<{ agent: string; role?: string; resume?: string }
   return async (options: RunCliOptions) => {
     calls.push({ agent: options.agent, role: options.usageContext?.role, resume: options.resumeSessionId });
     if (options.usageContext?.role === "worker") {
-      if (hangWorker) await new Promise<void>((resolve) => options.signal?.addEventListener("abort", () => resolve()));
+      if (hangWorker) await whenAborted(options.signal);
       options.onLine({ type: "message", text: "worker log", finalText: "worker done", sessionId: `w-${calls.length}` });
       return { exitCode: 0, finalText: "worker done", sessionId: `w-${calls.length}` };
     }

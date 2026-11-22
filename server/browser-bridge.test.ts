@@ -10,6 +10,11 @@ import { BrowserBridge, CLI_SOURCE, SKILL_MD, installBrowserTooling, isBrowserAc
 import { buildInvocation } from "./cli.js";
 import { clearComputerTokens, issueComputerToken } from "./computer-tokens.js";
 
+/** Listens on the 127.0.0.1 the CLI dials (not the wildcard, which another bind can take that address from). */
+function listenLoopback(app: express.Express): Promise<{ server: import("node:http").Server; port: number }> {
+  return new Promise((resolve) => { const server = app.listen(0, "127.0.0.1", () => resolve({ server, port: (server.address() as { port: number }).port })); });
+}
+
 test("bridge resolves a command with the frontend result", async () => {
   const sent: BrowserCommand[] = [];
   const bridge = new BrowserBridge((c) => { sent.push(c); return 1; });
@@ -100,7 +105,7 @@ test("http routes relay to the frontend and reject unknown actions", async () =>
   let bridge!: BrowserBridge;
   bridge = new BrowserBridge((c) => { setTimeout(() => bridge.resolve(c.id, { ok: true, result: { echo: c.args } }), 5); return 1; });
   registerBrowserRoutes(app, bridge);
-  const server = app.listen(0); const port = (server.address() as { port: number }).port;
+  const { server, port } = await listenLoopback(app);
   try {
     const ok = await (await fetch(`http://127.0.0.1:${port}/api/browser/click`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ref: "e1" }) })).json();
     assert.deepEqual(ok.result, { echo: { ref: "e1" } });
@@ -134,7 +139,7 @@ test("file queue survives its directory vanishing before the response is written
   let stop = () => undefined as void;
   bridge = new BrowserBridge((c) => {
     stop();
-    void rm(dir, { recursive: true, force: true }).then(() => { bridge.resolve(c.id, { ok: true, result: {} }); answered(); });
+    void rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).then(() => { bridge.resolve(c.id, { ok: true, result: {} }); answered(); });
     return 1;
   });
   stop = watchQueue(bridge, dir, 10);
@@ -161,9 +166,10 @@ test("CLI prints usage and parses refs vs selectors via the http route", async (
   let bridge!: BrowserBridge;
   bridge = new BrowserBridge((c) => { seen.push(c); setTimeout(() => bridge.resolve(c.id, c.action === "snapshot" ? { ok: true, result: { snapshot: "[e1] button \"저장\"" } } : { ok: false, error: "없음" }), 5); return 1; });
   registerBrowserRoutes(app, bridge);
-  const server = app.listen(0); const port = (server.address() as { port: number }).port;
+  const { server, port } = await listenLoopback(app);
   try {
-    const env = { ...process.env, SINAWI_PORT: String(port) };
+    // The CLI's queue fallback goes to this run's own folder, never the shared one a running app watches.
+    const env = { ...process.env, SINAWI_PORT: String(port), TMPDIR: join(dir, "tmp") };
     assert.match((await run("node", [cli, "snapshot"], { env })).stdout, /\[e1\] button "저장"/);
     await assert.rejects(run("node", [cli, "click", "e7"], { env }), /오류: 없음/);
     await assert.rejects(run("node", [cli, "fill", "#name", "홍", "길동"], { env }));
@@ -171,6 +177,30 @@ test("CLI prints usage and parses refs vs selectors via the http route", async (
     assert.deepEqual(seen[2].args, { selector: "#name", text: "홍 길동" });
   } finally { server.close(); }
   await mkdir(dir, { recursive: true });
+});
+
+// Tenth review R10-2: in a full run the CLI test once got "no run token". Only a Sinawi server says
+// that, and the test's own route does not ask for a token: the CLI had fallen back from HTTP to the
+// shared queue folder, which the owner's running app watches. The test server now listens on the
+// 127.0.0.1 the CLI dials (a wildcard listener can lose that address to another process's bind on the
+// same port), and the CLI's queue is a folder of the test's own.
+test("the CLI's queue fallback stays in the folder its TMPDIR names", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aobf-"));
+  await installBrowserTooling(dir);
+  const cli = join(dir, ".local", "bin", "ao-browser");
+  const queue = join(dir, "tmp", "sinawi-browser");
+  await mkdir(queue, { recursive: true });
+  const seen: BrowserCommand[] = [];
+  let bridge!: BrowserBridge;
+  bridge = new BrowserBridge((c) => { seen.push(c); setTimeout(() => bridge.resolve(c.id, { ok: true, result: { snapshot: "[e1] link \"큐\"" } }), 5); return 1; });
+  const stop = watchQueue(bridge, queue, 10);
+  const { server: closed, port } = await listenLoopback(express());
+  await new Promise((resolve) => closed.close(resolve));
+  try {
+    const out = await promisify(execFile)("node", [cli, "snapshot"], { env: { ...process.env, SINAWI_PORT: String(port), TMPDIR: join(dir, "tmp") }, encoding: "utf8" });
+    assert.match(out.stdout, /link "큐"/);
+    assert.equal(seen.length, 1);
+  } finally { stop(); }
 });
 
 test("CLI parses viewport, dialog, upload, tabs, and keyboard", async () => {
@@ -189,8 +219,8 @@ test("CLI parses viewport, dialog, upload, tabs, and keyboard", async () => {
   let bridge!: BrowserBridge;
   bridge = new BrowserBridge((c) => { seen.push(c); setTimeout(() => bridge.resolve(c.id, { ok: true, result: c.action === "click" ? { clicked: "e1", snapshot: "[e1] button \"저장\"" } : { echo: c.action } }), 5); return 1; });
   registerBrowserRoutes(app, bridge);
-  const server = app.listen(0); const port = (server.address() as { port: number }).port;
-  const env = { ...process.env, SINAWI_PORT: String(port) };
+  const { server, port } = await listenLoopback(app);
+  const env = { ...process.env, SINAWI_PORT: String(port), TMPDIR: join(dir, "tmp") };
   const exec = (args: string[]) => run("node", [cli, ...args], { env, encoding: "utf8" });
   try {
     assert.match((await exec(["click", "e1"])).stdout, /클릭 e1/);
@@ -271,7 +301,7 @@ test("the app server refuses a browser command without a live run token", async 
   let bridge!: BrowserBridge;
   bridge = new BrowserBridge((c) => { seen.push(c); setTimeout(() => bridge.resolve(c.id, { ok: true }), 5); return 1; });
   registerBrowserRoutes(app, bridge, true);
-  const server = app.listen(0); const port = (server.address() as { port: number }).port;
+  const { server, port } = await listenLoopback(app);
   const call = (token?: string) => fetch(`http://127.0.0.1:${port}/api/browser/snapshot`, { method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-sinawi-token": token } : {}) }, body: "{}" });
   try {
     const bare = await call();

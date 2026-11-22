@@ -7,7 +7,7 @@ import { briefSkillNames, skillCatalog, workerSkillInstructions, workerSkillSect
 async function waitFor(predicate: () => boolean) {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > 2_000) throw new Error("timed out waiting for the running session");
+    if (Date.now() - start > 15_000) throw new Error("timed out waiting for the running session");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -54,12 +54,16 @@ test("different workers run at once; one worker's briefs run in order; reports k
   assert.ok(answer.indexOf("A1 끝") < answer.indexOf("B 끝") && answer.indexOf("B 끝") < answer.indexOf("A2 끝"), "reports in the lead's delegation order");
 });
 
+// B's runner may start after A's failure is already recorded (a loaded machine delays its setup), so
+// the test waits until B is actually waiting before it releases B; releasing earlier left B waiting forever.
 test("a failing worker fails the session once the others have finished", async () => {
   let releaseB = () => {};
+  let bWaiting!: () => void;
+  const bStarted = new Promise<void>((resolve) => { bWaiting = resolve; });
   const runner = async (options: RunCliOptions) => {
     if (options.usageContext?.role === "worker") {
       if (options.usageContext.workerId === "claude-1") return { exitCode: 3, finalText: "" };
-      await new Promise<void>((resolve) => { releaseB = resolve; });
+      await new Promise<void>((resolve) => { releaseB = resolve; bWaiting(); });
       return { exitCode: 0, finalText: "상태: 완료" };
     }
     return { exitCode: 0, finalText: '<<DELEGATE to="claude-1">>작업 A<</DELEGATE>><<DELEGATE to="claude-2">>작업 B<</DELEGATE>>' };
@@ -71,6 +75,7 @@ test("a failing worker fails the session once the others have finished", async (
   });
   await waitFor(() => session.events.some((event) => event.type === "error" && /종료 코드 3/u.test(event.text)));
   assert.equal(session.status, "running", "B is still working");
+  await bStarted;
   releaseB();
   await waitFor(() => session.status !== "running");
   assert.equal(session.status, "error");

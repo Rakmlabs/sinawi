@@ -12,7 +12,8 @@ const SEOUL = "Asia/Seoul";
 async function waitFor(predicate: () => boolean, ms = 5_000) {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > ms) throw new Error("timed out");
+    // Polls until true, so a long limit costs nothing when it passes; it only absorbs a loaded machine.
+    if (Date.now() - start > ms * 4) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -88,7 +89,7 @@ test("missed-fire rule: due within a day runs once, older is skipped; a one-off 
 
 test("schedules are saved to schedules.json and read back", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "sinawi-schedules-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   assert.deepEqual(await loadSchedules(dir), []);
   const item = createSchedule("s1", { prompt: "p", cron: "0 9 * * *", timezone: SEOUL }, "user");
   await saveSchedules(dir, [item]);
@@ -98,7 +99,7 @@ test("schedules are saved to schedules.json and read back", async (t) => {
 
 test("a schedule fires into the lead's latest chat, shows cards, persists and survives a restart", async (t) => {
   const dataDir = await realpath(await mkdtemp(join(tmpdir(), "sinawi-schedule-fire-")));
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  t.after(() => rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const prompts: string[] = [];
   let chatId = "";
   let made: any;
@@ -113,7 +114,9 @@ test("a schedule fires into the lead's latest chat, shows cards, persists and su
   const orchestra: Orchestra = new Orchestra(undefined, runner);
   orchestra.stewardDataDir = dataDir;
   const saved: Schedule[][] = [];
-  orchestra.persistSchedules = async (list) => { saved.push(structuredClone(list)); await saveSchedules(dataDir, list); };
+  // saveSchedules returns its write queue: awaiting the last one waits for every write before it.
+  let written: Promise<void> = Promise.resolve();
+  orchestra.persistSchedules = (list) => { saved.push(structuredClone(list)); written = saveSchedules(dataDir, list); return written; };
   const steward = orchestra.createSteward({ name: "ops", agent: "claude", workers: [{ agent: "codex" }], cwds: [dataDir] });
   const chat = await orchestra.create({ prompt: "매일 아침 배포 확인해야 해", steward: { id: steward.id } } as never);
   chatId = chat.id;
@@ -138,7 +141,8 @@ test("a schedule fires into the lead's latest chat, shows cards, persists and su
   assert.equal(after.nextRunAt, new Date(next.getTime() + 24 * 60 * 60_000).toISOString(), "a daily schedule moves to tomorrow");
 
   // Restart: a new Orchestra reads the file; a run missed by more than a day is skipped, not sent.
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // The file is written in the background; read it once the writes are done, not after a guessed delay.
+  await written;
   const restored = new Orchestra(undefined, async (options: RunCliOptions) => { if (!options.readOnly && options.usageContext?.role === "orchestrator") prompts.push(options.prompt); return { exitCode: 0, finalText: "네" }; });
   restored.stewardDataDir = dataDir;
   restored.restore(orchestra.list(), orchestra.listStewards());
@@ -168,7 +172,7 @@ test("a schedule fires into the lead's latest chat, shows cards, persists and su
 
 test("the minute tick reads the clock: with fake timers a schedule fires once its time comes", async (t) => {
   const dataDir = await realpath(await mkdtemp(join(tmpdir(), "sinawi-schedule-clock-")));
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  t.after(() => rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "네" }));
   orchestra.stewardDataDir = dataDir;
   const steward = orchestra.createSteward({ name: "clock", agent: "claude", workers: [{ agent: "codex" }], cwds: [dataDir] });

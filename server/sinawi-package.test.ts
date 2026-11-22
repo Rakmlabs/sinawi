@@ -52,7 +52,7 @@ async function bridge(env: Record<string, string>, messages: object[], expected 
       await Promise.race([done, new Promise((_, reject) => setTimeout(() => reject(new Error("no answer from sinawi-mcp")), 5_000))]);
     } finally { child.kill(); }
     return lines.sort((a, b) => a.id - b.id);
-  } finally { await rm(home, { recursive: true, force: true }); }
+  } finally { await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 }
 
 const rpc = (id: number, method: string) => ({ jsonrpc: "2.0", id, method });
@@ -70,6 +70,16 @@ test("`sinawi mcp` forwards each JSON-RPC line to /api/app-mcp with the token as
   assert.deepEqual(app.seen.map((request) => JSON.parse(request.body).method).sort(), ["initialize", "tools/list"], "the message is forwarded as is");
 });
 
+test("`sinawi mcp` names its client to the app (clientInfo from initialize, or SINAWI_CLIENT_NAME), so chats show who asked", async (t) => {
+  const app = await stubApp(t);
+  const init = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "grok-cli", title: "Grok Build", version: "1" } } };
+  await bridge({ SINAWI_PORT: String(app.port), SINAWI_MCP_TOKEN: "good-token" }, [init, rpc(2, "tools/list")]);
+  assert.deepEqual(app.seen.map((request) => request.headers["x-sinawi-client"]), ["Grok%20Build", "Grok%20Build"], "the title wins over the id, every later call carries it");
+  const named = await stubApp(t);
+  await bridge({ SINAWI_PORT: String(named.port), SINAWI_MCP_TOKEN: "good-token", SINAWI_CLIENT_NAME: "내 그록봇" }, [init]);
+  assert.equal(decodeURIComponent(String(named.seen[0].headers["x-sinawi-client"])), "내 그록봇");
+});
+
 test("`sinawi mcp` skips notifications, reports the app's refusals, and finds the token in the data folder", async (t) => {
   const app = await stubApp(t);
   const url = `http://127.0.0.1:${app.port}`;
@@ -79,7 +89,7 @@ test("`sinawi mcp` skips notifications, reports the app's refusals, and finds th
   assert.equal(app.seen.length, 1, "a notification (no id) is not forwarded");
 
   const data = await mkdtemp(join(tmpdir(), "sinawi-mcp-data-"));
-  t.after(() => rm(data, { recursive: true, force: true }));
+  t.after(() => rm(data, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   await writeFile(join(data, "app-mcp-token"), "good-token\n");
   const [fromDir] = await bridge({ SINAWI_URL: url, SINAWI_DATA_DIR: data }, [rpc(1, "tools/list")]);
   assert.equal(fromDir.result.echoed, "tools/list", "$SINAWI_DATA_DIR/app-mcp-token");
@@ -91,12 +101,12 @@ test("`sinawi mcp` skips notifications, reports the app's refusals, and finds th
 test("`sinawi mcp` says how to get a token when there is none, and when the app is not running", async (t) => {
   const app = await stubApp(t);
   const empty = await mkdtemp(join(tmpdir(), "sinawi-mcp-empty-"));
-  t.after(() => rm(empty, { recursive: true, force: true }));
+  t.after(() => rm(empty, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const [missing] = await bridge({ SINAWI_PORT: String(app.port), SINAWI_DATA_DIR: empty }, [rpc(3, "tools/list")]);
   assert.equal(missing.id, 3);
   assert.equal(missing.error.code, -32603);
   assert.match(missing.error.message, /token missing: set SINAWI_MCP_TOKEN/u);
-  assert.match(missing.error.message, /External AI connection/u);
+  assert.match(missing.error.message, /Connect an AI/u);
   assert.equal(app.seen.length, 0, "nothing is sent without a token");
 
   const closed = createServer();
@@ -159,7 +169,7 @@ test("pickAsset prefers the universal dmg and says so when a release has none", 
 /** The installer with every outside effect faked: a fake GitHub, disk image, codesign/spctl and /Applications in a temp folder. */
 async function fakeMac(t: test.TestContext, { codesign = 0, spctl = 0, running = false, answer = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "sinawi-install-test-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const apps = join(root, "Applications");
   await mkdir(apps);
   const calls: string[][] = [];
@@ -289,7 +299,7 @@ test("the sinawi package is publishable: bin, libs, README and LICENSE are packe
     const files = pack.files as Array<{ path: string; mode: number }>;
     assert.deepEqual(files.map((file) => file.path).sort(), ["LICENSE", "README.md", "bin/sinawi.mjs", "lib/install.mjs", "lib/mcp.mjs", "package.json"]);
     assert.ok(files.find((file) => file.path === "bin/sinawi.mjs")!.mode & 0o111, "packed as executable");
-  } finally { await rm(cache, { recursive: true, force: true }); }
+  } finally { await rm(cache, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("one bridge: the repository script, the app bundle and the server's hooks copy all use packages/sinawi/lib/mcp.mjs", async () => {

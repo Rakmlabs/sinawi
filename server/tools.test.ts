@@ -146,7 +146,7 @@ test("MCP updates use fixed executable argument arrays and atomically edit Codex
     await updateMcpTool({ agent: "codex", name: "bbanana", enabled: false }, { runner, codexConfigPath: config });
     assert.match(await readFile(config, "utf8"), /enabled = false/);
     await assert.rejects(updateMcpTool({ agent: "grok", name: "bad;name", enabled: true }, { runner }), /도구 이름/);
-  } finally { await rm(home, { recursive: true, force: true }); }
+  } finally { await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("MCP discovery keeps full names with colons/spaces and explains auth", async () => {

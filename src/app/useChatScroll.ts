@@ -24,6 +24,9 @@ export function useChatScroll({ resetKey, followKey, observeKey }: { resetKey: u
   const programmatic = useRef<{ timer: ReturnType<typeof setTimeout> } | null>(null);
   const lastScrollTop = useRef(0);
   const [showChatBottom, setShowChatBottom] = useState(false);
+  /** Content sits above the view: the top edge fades so a cut-off message reads as "more above". */
+  const [hasAbove, setHasAbove] = useState(false);
+  const measureAbove = useCallback(() => { const body = chatBody.current; setHasAbove(Boolean(body && body.scrollTop > 4)); }, []);
   const endProgrammatic = useCallback(() => {
     if (!programmatic.current) return;
     clearTimeout(programmatic.current.timer);
@@ -48,7 +51,8 @@ export function useChatScroll({ resetKey, followKey, observeKey }: { resetKey: u
     if (body) body.scrollTo({ top: body.scrollHeight, behavior });
     else bottom.current?.scrollIntoView({ behavior, block: "nearest" });
     if (body) lastScrollTop.current = body.scrollTop;
-  }, [endProgrammatic]);
+    measureAbove();
+  }, [endProgrammatic, measureAbove]);
   useEffect(() => {
     followsChatBottom.current = true;
     setShowChatBottom(false);
@@ -64,6 +68,7 @@ export function useChatScroll({ resetKey, followKey, observeKey }: { resetKey: u
     const observer = new ResizeObserver(() => {
       // During a smooth jump the browser is already heading down; snapping would cut it short.
       if (followsChatBottom.current && !programmatic.current) { body.scrollTop = body.scrollHeight; lastScrollTop.current = body.scrollTop; }
+      measureAbove();
     });
     for (const child of Array.from(body.children)) observer.observe(child);
     return () => observer.disconnect();
@@ -74,6 +79,7 @@ export function useChatScroll({ resetKey, followKey, observeKey }: { resetKey: u
     const distance = body.scrollHeight - body.scrollTop - body.clientHeight;
     const movedUp = body.scrollTop < lastScrollTop.current - 1;
     lastScrollTop.current = body.scrollTop;
+    setHasAbove(body.scrollTop > 4);
     if (programmatic.current) {
       // Our own smooth scroll: keep following and the button hidden until it lands.
       if (distance > 2) return;
@@ -100,5 +106,5 @@ export function useChatScroll({ resetKey, followKey, observeKey }: { resetKey: u
     },
     onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => { if (scrollsUpKey(event)) stopFollowing(); },
   };
-  return { bottom, chatBody, showChatBottom, scrollToChatBottom, chatScrollHandlers };
+  return { bottom, chatBody, showChatBottom, hasAbove, scrollToChatBottom, chatScrollHandlers };
 }

@@ -9,7 +9,7 @@ import { OWN_APP_ERROR, agentCommandError, agentTabFor, claimCommand, commandFor
 import { browserOwnsFocus, browserShortcut, chatShortcut, globalBrowserShortcut, windowShortcut, type BrowserAction } from "./browser-shortcuts";
 import { attachmentLabel, displayUrl, type ComposerAttachment, type ElementCapture } from "./preview-attachments";
 import { toggleTerminal } from "./terminal-events";
-import { IFRAME_SANDBOX, previewTargetOrigin, trustedPreviewSender } from "./browser-messages";
+import { connectPreview, IFRAME_SANDBOX, previewTargetOrigin } from "./browser-messages";
 import { t } from "./i18n";
 import { captureRect, dialogLines, downloadProgress, downloadsText, formatBytes, FULL_PAGE_MAX_HEIGHT, isCovered, layoutKey, nativeBrowser, nativeBrowserAvailable, nativeFocusedTab, parseEvents, slotBounds, type DialogInfo, type DownloadInfo, type HostEvent, type NativeRect, type NativeResult } from "./native-browser";
 
@@ -95,6 +95,8 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const emuBoot = useRef(new Set<string>());
   const [panelBox, setPanelBox] = useState({ w: 0, h: 0 });
   const frames = useRef(new Map<string, HTMLIFrameElement>());
+  /** Each proxied tab's private channel to its injected script (connectPreview). */
+  const previewPorts = useRef(new Map<string, { postMessage(message: unknown): void; close(): void }>());
   const urlInput = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLElement>(null);
   const tabsRef = useRef(tabs); tabsRef.current = tabs;
@@ -157,9 +159,17 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
       else if (message.type !== "go") void nativeBrowser.send(id, message);
       return;
     }
-    // Only the proxied page (same proxy origin) may receive commands; after it navigates elsewhere, drop them.
+    // Only over the tab's private channel: the injected script holds the other end, the page does not.
+    previewPorts.current.get(id)?.postMessage({ source: "orchestra-parent", ...message });
+  }, []);
+  /** A proxied frame (re)loaded: hand its injected script a fresh private channel. */
+  const connect = useCallback((id: string) => {
     const targetOrigin = previewTargetOrigin(tabsRef.current.find((tab) => tab.id === id));
-    if (targetOrigin) frames.current.get(id)?.contentWindow?.postMessage({ source: "orchestra-parent", ...message }, targetOrigin);
+    const frame = frames.current.get(id)?.contentWindow;
+    previewPorts.current.get(id)?.close();
+    previewPorts.current.delete(id);
+    if (!targetOrigin || !frame) return;
+    previewPorts.current.set(id, connectPreview(frame, targetOrigin, (data) => pageMessageRef.current(id, data)));
   }, []);
   const applyViewport = useCallback((choice: ViewportChoice) => {
     const previous = emulationOf(viewportRef.current);
@@ -713,15 +723,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   }, [patch, perform, uploadCaptures, nativeCaptures, addTab, instanceId]);
   const pageMessageRef = useRef(onPageMessage);
   pageMessageRef.current = onPageMessage;
-  useEffect(() => {
-    const handle = (event: MessageEvent) => {
-      // Trust only our own preview iframes, from their proxy origin (see browser-messages.ts).
-      const id = trustedPreviewSender(event, frames.current, tabsRef.current);
-      if (id) pageMessageRef.current(id, event.data);
-    };
-    window.addEventListener("message", handle);
-    return () => window.removeEventListener("message", handle);
-  }, []);
+  useEffect(() => () => { for (const port of previewPorts.current.values()) port.close(); previewPorts.current.clear(); }, []);
 
   // ---- native tabs: keep each WKWebView exactly over the slot, hidden whenever app UI covers it ----
   const openRef = useRef(open); openRef.current = open;
@@ -974,6 +976,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
         ) : null) : tab.frameUrl ? (
           <iframe key={`${tab.id}:${tab.nonce}:${tab.frameUrl}`} ref={(el) => { if (el) frames.current.set(tab.id, el); }} className="browser-frame" hidden={tab.id !== active.id}
             src={tab.frameUrl} title={tab.title} onLoad={() => {
+              if (tab.proxied) connect(tab.id);
               const payload = emulationPayload(viewportRef.current);
               const bootKey = `${tab.id}:${tab.frameUrl}`;
               if (tab.proxied && payload.mobile && !emuBoot.current.has(bootKey)) {

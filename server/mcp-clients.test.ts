@@ -7,6 +7,7 @@ import { injectRequest } from "./app-tools.js";
 import { appMcpTokenPath } from "./app-mcp.js";
 import { mcpClientConfigPath } from "./mcp-clients.js";
 import { createServer } from "./server.js";
+import { appKey } from "./app-key.js";
 
 // Every config path points into a temp folder: the real Claude Desktop and Cursor configs are never read.
 async function fixture(t: test.TestContext) {
@@ -24,10 +25,10 @@ async function fixture(t: test.TestContext) {
     if (saved.claude === undefined) delete process.env.SINAWI_CLAUDE_DESKTOP_CONFIG;
     if (saved.cursor === undefined) delete process.env.SINAWI_CURSOR_MCP_CONFIG;
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => injectRequest(created.app as never, method, path, body, headers) as Promise<{ status: number; body: any }>;
-  const fromApp = { origin: "http://127.0.0.1:5198" };
+  const fromApp = { origin: "http://127.0.0.1:5198", "x-sinawi-app": appKey() };
   return { directory, data, claude, cursor, call, fromApp };
 }
 
@@ -59,7 +60,7 @@ test("connect to Claude Desktop: preview, then merge the sinawi entry, keep ever
   assert.equal(preview.body.exists, true);
   assert.equal(preview.body.replaces, false);
   const entry = preview.body.entry;
-  assert.equal(entry.command, process.execPath);
+  assert.equal(entry.command, join(data, "hooks", "sinawi-node"), "the Node launcher, not a Node path n/nvm may remove");
   assert.equal(entry.args[0], join(data, "hooks", "sinawi-mcp.mjs"), "the app's copy of the bridge");
   assert.equal(entry.env.SINAWI_MCP_TOKEN_FILE, appMcpTokenPath(data), "the token file, not the token");
   assert.equal(entry.env.SINAWI_MCP_TOKEN, undefined, "no secret is copied into another app's config");

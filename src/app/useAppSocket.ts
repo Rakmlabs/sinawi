@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { nextReconnectDelay, parseServerMessage, type ServerMessage } from "./socket";
+import { appKeyProtocols, loadAppKey } from "../app-key";
 
 /**
  * Main `/ws` connection. Reconnects with exponential backoff + jitter (reset once a connection
@@ -19,9 +20,13 @@ export function useAppSocket(onMessage: (message: ServerMessage) => void, onRetr
     /** Since the last open connection dropped: fast retries first (nextReconnectDelay). */
     let hadOpened = false;
     let open = false;
-    function connect() {
+    function connect(refreshKey = false) {
       timer = undefined;
-      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+      // The app key goes along as a subprotocol; after a drop it is asked for again (a restarted server has a new one).
+      void loadAppKey(refreshKey).then(() => { if (!disposed) openSocket(); });
+    }
+    function openSocket() {
+      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`, appKeyProtocols());
       ws.onopen = () => { attempt = 0; hadOpened = true; open = true; setConnected(true); };
       ws.onmessage = (event) => {
         const message = parseServerMessage(event.data);
@@ -37,7 +42,7 @@ export function useAppSocket(onMessage: (message: ServerMessage) => void, onRetr
     }
     function retry() {
       handlers.current.onRetry();
-      connect();
+      connect(true);
     }
     // Back online or back in front: a pending retry should not wait out its backoff.
     const retryNow = () => {

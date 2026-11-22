@@ -22,7 +22,7 @@ test("notifications persist, dedupe by workspace key, mark read, resolve and cle
     assert.equal((await store.list("company")).length, 1);
     await store.resolve("company", "auth:grok");
     assert.equal((await store.list("company")).length, 0);
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("notifications serialize concurrent writes and retain newest 200 per workspace", async () => {
@@ -35,7 +35,7 @@ test("notifications serialize concurrent writes and retain newest 200 per worksp
     assert.equal(list[0].key, "204");
     await store.read("personal", "all");
     assert.ok((await store.list("personal")).every((n) => n.read));
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("auth alerts stay deduplicated per workspace and CLI until recovery", async () => {
@@ -70,5 +70,5 @@ test("auth alerts stay deduplicated per workspace and CLI until recovery", async
     const relapsed = await store.add({ workspaceId: "personal", key: "auth:claude", type: "auth", title: "Claude 로그인 필요", body: "failed again" });
     assert.notEqual(relapsed.id, personal.id);
     assert.equal(relapsed.read, false);
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });

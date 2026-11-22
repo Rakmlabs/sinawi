@@ -1,7 +1,7 @@
 // The settings window (⌘,): category sidebar + content, one search box over every setting.
 // Opened by WorkspaceApp; categories render through `renderPage`.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, BarChart3, Bell, Bot, ChevronDown, CircleHelp, FolderKanban, Keyboard, Layers, Palette, RefreshCcw, Route, Search, Settings2, ShieldCheck, Wrench, X } from "lucide-react";
+import { ArrowUpRight, BarChart3, Bell, Bot, ChevronDown, CircleHelp, FolderKanban, Keyboard, Layers, Palette, Plug, RefreshCcw, Route, Search, Settings2, ShieldCheck, Wrench, X } from "lucide-react";
 import { ContextMenu, type MenuItem } from "../SidebarMenu";
 import { useWorkspaces } from "../workspace-context";
 import { workspaceName } from "../workspaces";
@@ -14,7 +14,7 @@ import "./settings.css";
 export const SETTINGS_REOPEN_KEY = "sinawi:settings:reopen";
 
 const icons: Record<SettingsCategory, ReactNode> = {
-  general: <Settings2 size={16} />, appearance: <Palette size={16} />, notifications: <Bell size={16} />, shortcuts: <Keyboard size={16} />,
+  general: <Settings2 size={16} />, connect: <Plug size={16} />, appearance: <Palette size={16} />, notifications: <Bell size={16} />, shortcuts: <Keyboard size={16} />,
   environment: <ShieldCheck size={16} />, updates: <RefreshCcw size={16} />, workspaces: <Layers size={16} />, agents: <Bot size={16} />,
   routing: <Route size={16} />, projects: <FolderKanban size={16} />,
 };
@@ -84,6 +84,14 @@ export function SettingsWindow({ section, focus, onSection, onClose, renderPage,
     return () => window.clearTimeout(timer);
   }, [highlight, section, searching]);
   useEffect(() => { if (!highlight) contentRef.current?.scrollTo({ top: 0 }); }, [section]);
+  // The page changed from outside (opened at "작업 공간", a link in a card) while focus sat on another
+  // menu item: move focus along, so one item does not look selected and another focused.
+  useEffect(() => {
+    const nav = navRef.current;
+    const active = document.activeElement as HTMLElement | null;
+    if (!nav || !active || !nav.contains(active) || active.getAttribute("aria-current") === "page") return;
+    nav.querySelector<HTMLElement>("[aria-current=page]")?.focus();
+  }, [section]);
 
   const go = (id: SettingsCategory, focusNav = false) => {
     onSection(id);

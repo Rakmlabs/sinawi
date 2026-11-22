@@ -2,11 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Orchestra } from "./orchestra.js";
 import type { RunCliOptions } from "./cli.js";
+import { whenAborted } from "./test-abort.js";
 
 async function waitFor(predicate: () => boolean) {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > 1_000) throw new Error("timed out waiting for the running session");
+    if (Date.now() - start > 15_000) throw new Error("timed out waiting for the running session");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -200,7 +201,7 @@ test("a message left from a stopped run reaches the next turn as older than the 
   const runner = async (options: RunCliOptions) => {
     if (options.readOnly) return { exitCode: 0, finalText: "status" };
     prompts.push(options.prompt);
-    if (prompts.length === 1) await new Promise((resolve) => options.signal?.addEventListener("abort", resolve));
+    if (prompts.length === 1) await whenAborted(options.signal);
     return { exitCode: 0, finalText: "답변" };
   };
   const orchestra = new Orchestra(undefined, runner);

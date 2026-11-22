@@ -57,6 +57,9 @@ const body = String.raw`
   var parentWin = window.parent;
   if (NATIVE ? window.top !== window : (!parentWin || parentWin === window)) return;
   var nativeQueue = [], nativeWaiters = {}, nativeSeq = 0;
+  // Proxied tabs talk to the app only over a MessagePort the app hands over (connect, below): the
+  // page's own scripts share this window and could post or read anything sent through it.
+  var port = null, pending = [];
   function post(msg) {
     msg.source = "orchestra-preview";
     if (NATIVE) {
@@ -64,7 +67,8 @@ const body = String.raw`
       nativeQueue.push(msg); if (nativeQueue.length > 200) nativeQueue.shift();
       return;
     }
-    try { parentWin.postMessage(msg, "*"); } catch (e) {}
+    if (port) { try { port.postMessage(msg); } catch (e) {} return; }
+    pending.push(msg); if (pending.length > 200) pending.shift();
   }
 
   // ---- location reporting ----
@@ -920,11 +924,19 @@ const body = String.raw`
     else if (d.type === "reload") location.reload();
     else if (d.type === "ping") post({ type: "location", href: location.href, title: document.title });
   }
+  // Registered before any page script runs (this script is the first in <head>), in the capture
+  // phase: the app's connect message, with its port, never reaches the page's own listeners.
   addEventListener("message", function (e) {
     if (NATIVE) return; // a native tab's own page must not be able to command it
     var d = e.data; if (!d || d.source !== "orchestra-parent") return;
-    onParent(d);
-  });
+    e.stopImmediatePropagation();
+    if (e.source !== parentWin || d.type !== "connect" || !e.ports || !e.ports[0]) return;
+    if (port) { try { port.close(); } catch (x) {} }
+    port = e.ports[0];
+    port.onmessage = function (m) { var c = m.data; if (c && typeof c === "object" && c.source === "orchestra-parent") onParent(c); };
+    var queued = pending; pending = [];
+    for (var i = 0; i < queued.length; i++) { try { port.postMessage(queued[i]); } catch (x) {} }
+  }, true);
   if (NATIVE) {
     // window.open and target=_blank go through WKUIDelegate (real child view, window.opener intact).
     // ⌘-click on a link still means "open in a new tab" without an opener.

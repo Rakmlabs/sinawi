@@ -20,11 +20,12 @@ export class NotificationStore {
     return result;
   }
   list(workspaceId: WorkspaceId) { return this.operate((items) => items.filter((n) => n.workspaceId === workspaceId)); }
-  async add(input: NotificationInput): Promise<AppNotification> {
+  /** `renew`: the same request again (an outside AI asking twice) pops up again even with the same text. */
+  async add(input: NotificationInput, { renew = false }: { renew?: boolean } = {}): Promise<AppNotification> {
     let changed = false;
     const item = await this.operate((items) => {
       const previous = input.key ? items.find((n) => n.workspaceId === input.workspaceId && n.key === input.key) : undefined;
-      if (previous && previous.type === input.type && previous.title === input.title && previous.body === input.body && JSON.stringify(previous.action) === JSON.stringify(input.action)) return previous;
+      if (previous && !renew && previous.type === input.type && previous.title === input.title && previous.body === input.body && JSON.stringify(previous.action) === JSON.stringify(input.action)) return previous;
       const now = new Date().toISOString();
       const keepAuthReadState = previous?.type === "auth" && input.type === "auth";
       const next: AppNotification = {

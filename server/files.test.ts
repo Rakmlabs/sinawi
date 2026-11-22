@@ -17,7 +17,7 @@ test("file completion filters paths and excludes dependencies, git and symlink t
     await symlink(join(cwd, "src"), join(cwd, "link"));
     assert.deepEqual(await discoverFiles(cwd, "APP"), ["src/App.tsx"]);
     assert.deepEqual(await discoverFiles(cwd, ""), ["README.md", "src/App.tsx"]);
-  } finally { await rm(cwd, { recursive: true, force: true }); }
+  } finally { await rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test("file completion returns at most fifty matches and rejects missing roots", async () => {
@@ -26,7 +26,7 @@ test("file completion returns at most fifty matches and rejects missing roots", 
     await Promise.all(Array.from({length: 60}, (_, i) => writeFile(join(cwd, `file-${i}.ts`), "")));
     assert.equal((await discoverFiles(cwd, "file-")).length, 50);
     await assert.rejects(discoverFiles(join(cwd, "missing"), ""));
-  } finally { await rm(cwd, { recursive: true, force: true }); }
+  } finally { await rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 function request(app: Express, method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> {
@@ -59,5 +59,5 @@ test("files API returns matching relative paths and rejects malformed queries", 
     assert.deepEqual(response.body, { files: ["app.ts"] });
     assert.equal((await request(app, "GET", "/api/files?q=a&q=b")).status, 400);
     assert.equal((await request(app, "GET", `/api/files?cwd=${encodeURIComponent(join(directory, "missing"))}`)).status, 400);
-  } finally { websocket.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { websocket.close(); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });

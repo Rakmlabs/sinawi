@@ -152,6 +152,16 @@ test("cleanBriefTitle strips markdown and skips a short generic heading", async 
   assert.equal(cleanBriefTitle("a".repeat(300)).length, 140);
 });
 
+// Fourth review R4-3: a lead's brief that opened with the folder showed "맥락" as the worker's summary.
+test("cleanBriefTitle keeps the task after a leading folder phrase and never shows a later section heading", async () => {
+  const { cleanBriefTitle } = await import("./worker-log");
+  assert.equal(cleanBriefTitle("## 목표\n작업 폴더 `/private/tmp/proj3`에 있는 파일 목록을 조회해 한 줄로 보고한다.\n\n## 맥락\n- 읽기 전용"), "파일 목록을 조회해 한 줄로 보고한다.");
+  assert.equal(cleanBriefTitle("## 목표\n작업 폴더(/private/tmp/x)에서\n\n## 맥락\n로그인 화면이 깨진다"), "로그인 화면이 깨진다");
+  assert.equal(cleanBriefTitle("## 목표\n작업 폴더: /a/b\n## 완료 기준\n## 맥락"), "작업 폴더: /a/b");
+  assert.equal(cleanBriefTitle("## 목표\n\n## 맥락\n\n## 검증"), "목표");
+  assert.equal(cleanBriefTitle("작업 폴더 /x/y에서 npm test를 돌린다"), "npm test를 돌린다");
+});
+
 test("a screenshot read back as base64 is summarized as an image", () => {
   const data = "A".repeat(200);
   assert.equal(summarizeOutput(`[{"type":"image","source":{"type":"base64","data":"${data}"}}]`).line, "[이미지]");

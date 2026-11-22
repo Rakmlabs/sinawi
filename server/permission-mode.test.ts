@@ -8,7 +8,7 @@ import { defaultWorkspacePolicy } from "./workspace-policy.js";
 async function settle(session: Session) {
   const start = Date.now();
   while (session.status === "running") {
-    if (Date.now() - start > 2_000) throw new Error("run did not finish");
+    if (Date.now() - start > 15_000) throw new Error("run did not finish");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }

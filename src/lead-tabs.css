@@ -1,0 +1,122 @@
+/* A lead's chats as tabs above the conversation (src/app/LeadTabs.tsx). */
+.lead-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-app);
+  font-size: calc(13px * var(--font-scale));
+}
+.lead-tabs-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; max-width: 160px; min-width: 0; padding-right: 6px; color: var(--text); }
+.lead-tabs-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.lead-tabs-avatar { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--avatar-text); font-size: calc(12px * var(--font-scale)); font-weight: 700; }
+.lead-tabs-list {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.lead-tabs-list.fade-end { mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
+.lead-tabs-list.fade-start { mask-image: linear-gradient(to right, transparent, black 24px); }
+.lead-tabs-list.fade-start.fade-end { mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent); }
+.lead-tabs-list::-webkit-scrollbar { display: none; }
+.lead-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.lead-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.lead-tab.active { border-color: var(--border); background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow-sm, none); }
+.lead-tab:focus-visible, .lead-tabs-new:focus-visible, .lead-tabs-settings:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.lead-tab.draft { font-style: italic; cursor: default; }
+.lead-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-tab-state { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--text-disabled); }
+.lead-tab-state.running { width: auto; height: auto; background: none; color: var(--accent-fg); }
+.lead-tab-state.error { background: var(--danger); }
+.lead-tab-state.stopped { background: var(--warn); }
+.lead-tab-origin { flex: none; color: var(--info-fg); }
+.lead-tab-progress { flex: none; color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+.lead-tab-rename { width: 180px; height: 30px; padding: 0 8px; border: 1px solid var(--border-focus); border-radius: 8px; background: var(--bg-surface); color: var(--text); font: inherit; }
+.lead-tabs-new, .lead-tabs-settings {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.lead-tabs-settings { width: 30px; justify-content: center; padding: 0; }
+.lead-tabs-new:hover:not(:disabled), .lead-tabs-settings:hover { border-color: var(--border-strong); color: var(--text); }
+.lead-tabs-new:disabled { opacity: 0.5; cursor: default; }
+
+/* Who sent a message when it was not the user in the app (src/origin.ts). */
+.message-origin { display: inline-flex; align-items: center; gap: 5px; align-self: flex-end; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; background: var(--info-tint); color: var(--info-fg); font-size: calc(12px * var(--font-scale)); }
+.message-origin.lead { background: var(--accent-tint); color: var(--accent-fg); }
+.sidebar-origin { flex: none; color: var(--info-fg); }
+
+@media (max-width: 720px) {
+  .lead-tabs { padding: 6px 8px; gap: 4px; }
+  .lead-tabs-name { max-width: 34px; padding-right: 0; }
+  .lead-tabs-name strong { display: none; }
+  .lead-tabs-new span { display: none; }
+  .lead-tabs-new { width: 30px; justify-content: center; padding: 0; }
+  .lead-tab { max-width: 150px; }
+}
+.lead-tab-agent { flex: none; padding: 0 6px; border-radius: 999px; background: var(--warn-tint, var(--bg-inset)); color: var(--text-secondary); font-size: calc(12px * var(--font-scale)); }
+
+/* Closing a tab hides it here only; the chat stays in the list and the sidebar. */
+.lead-tab-wrap { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; }
+.lead-tab-wrap .lead-tab { padding-right: 24px; }
+.lead-tab-close {
+  position: absolute; right: 5px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-subtle); opacity: 0.45; cursor: pointer;
+}
+.lead-tab-wrap:hover .lead-tab-close, .lead-tab-wrap.active .lead-tab-close, .lead-tab-close:focus-visible { opacity: 1; }
+/* Every closable tab shows its ×, faint until hovered, so closing others is discoverable (review round 2, §6). */
+.lead-tab-close:hover { background: var(--bg-inset); color: var(--text); }
+.lead-tab-rename { outline: none; box-shadow: inset 0 0 0 1px var(--border-focus); }
+
+/* Every chat of the lead with its workers, searchable (the tab bar's list button). */
+.lead-tabs-all-wrap { position: relative; flex: none; }
+.lead-tabs-all {
+  position: relative; display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-surface); color: var(--text-secondary); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.lead-tabs-all:hover, .lead-tabs-all.open { border-color: var(--border-strong); color: var(--text); }
+.lead-tabs-all:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.lead-tabs-all-running { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.lead-tabs-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; display: flex; flex-direction: column; width: min(420px, calc(100vw - 32px)); max-height: min(560px, 70vh);
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg-raised); box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.18));
+}
+.lead-tabs-panel-head { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid var(--border-subtle); }
+.lead-tabs-search { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; height: 30px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-surface); color: var(--text-muted); }
+.lead-tabs-search:focus-within { border-color: var(--border-focus); }
+.lead-tabs-search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; color: var(--text); font: inherit; }
+.lead-tabs-panel-body { overflow-y: auto; padding: 6px; }
+.lead-tabs-panel-note { margin: 0; padding: 8px 12px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); font-size: calc(12px * var(--font-scale)); }
+@media (max-width: 720px) {
+  .lead-tabs-all span:not(.lead-tabs-all-running) { display: none; }
+}
+.lead-tabs-panel .lead-tabs-search input { height: auto; padding: 0; border: 0; border-radius: 0; box-shadow: none; outline: none; background: none; }

@@ -1,3 +1,4 @@
+import { envVar } from "./runtime.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Duplex } from "node:stream";
 import { LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
@@ -43,7 +44,12 @@ export interface AppTool {
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
   /** Line on the approval card (approval tools); `names` turns IDs into the names the user knows. */
   summary?(args: Record<string, unknown>, names: NameLookup): string;
+  /** A "write" tool that some calls of need the user's approval anyway (write_skill into the repo). */
+  approvalFor?(args: Record<string, unknown>): boolean;
 }
+
+/** Whether this call waits for the user's approval. */
+export const needsApproval = (tool: AppTool, args: Record<string, unknown>) => tool.risk === "approval" || Boolean(tool.approvalFor?.(args));
 
 /**
  * Names for the IDs an approval mentions: "채팅 'API 정리' (3f2a9c1e)". The server's lookup reads
@@ -149,9 +155,9 @@ function routeTool(spec: RouteToolSpec): AppTool {
   };
 }
 
-function leadTool(spec: { name: string; description: string; properties?: Record<string, JsonSchema>; required?: string[]; risk: ToolRisk; summary?(args: Record<string, unknown>, names: NameLookup): string }): AppTool {
+function leadTool(spec: { name: string; description: string; properties?: Record<string, JsonSchema>; required?: string[]; risk: ToolRisk; summary?(args: Record<string, unknown>, names: NameLookup): string; approvalFor?(args: Record<string, unknown>): boolean }): AppTool {
   return {
-    name: spec.name, description: spec.description, risk: spec.risk, surfaces: ["lead"], routes: [], summary: spec.summary,
+    name: spec.name, description: spec.description, risk: spec.risk, surfaces: ["lead"], routes: [], summary: spec.summary, approvalFor: spec.approvalFor,
     inputSchema: { type: "object", properties: spec.properties ?? {}, ...(spec.required?.length ? { required: spec.required } : {}) },
     async run(args, ctx) {
       if (!ctx.leadCall) throw new Error(`${spec.name}는 담당 실행에서만 쓸 수 있습니다.`);
@@ -170,12 +176,14 @@ function sessionRow(session: Row) {
     id: session.id, title: session.title, status: session.status, agent: session.agent, workers: session.workers, cwd: session.cwd,
     workspaceId: session.workspaceId, groupId: session.groupId, createdAt: session.createdAt, endedAt: session.endedAt,
     lead: session.steward ? defined({ id: session.steward.id, name: session.steward.name }) : undefined,
+    openedBy: session.origin ? `${session.origin.client} (${session.origin.kind})` : undefined,
     events: Array.isArray(session.events) ? session.events.length : undefined,
   });
 }
 
 function eventRow(event: Row) {
-  return defined({ id: event.id, type: event.type, role: event.role, agent: event.agent, workerId: event.workerId, time: event.time, text: clip(event.text, 4_000) });
+  const via = event.metadata?.via;
+  return defined({ id: event.id, type: event.type, role: event.role, agent: event.agent, workerId: event.workerId, time: event.time, text: clip(event.text, 4_000), sentBy: via ? `${via.client} (${via.kind})` : undefined });
 }
 
 /** Drops MCP servers' launch details (command, args, URL) from a /api/tools payload, wherever the rows sit. */
@@ -225,7 +233,9 @@ const LEAD_ONLY: AppTool[] = [
   }),
   leadTool({
     name: "write_skill", risk: "write",
-    description: "재사용할 스킬(작업 지침 문서)을 만든다. 같은 종류의 일을 여러 번 맡길 때 브리프 대신 스킬로 남겨 delegate_task의 skills에 붙인다.",
+    description: "재사용할 스킬(작업 지침 문서)을 만든다. 같은 종류의 일을 여러 번 맡길 때 브리프 대신 스킬로 남겨 delegate_task의 skills에 붙인다. scope:'project'는 저장소에 남아 다른 AI도 읽으므로 사용자 승인 후에 저장된다(pending_approval이 오면 list_approvals로 결과 확인).",
+    approvalFor: (args) => args.scope === "project",
+    summary: (args) => `프로젝트 스킬 ${String(args.name ?? "")} 만들기: ${String(args.description ?? "").slice(0, 120)}`,
     properties: {
       name: str("짧은 영문 소문자 이름 (예: 'api-review')."),
       description: str("언제 쓰는 스킬인지 한 줄."),
@@ -235,7 +245,9 @@ const LEAD_ONLY: AppTool[] = [
     required: ["name", "description", "content"],
   }),
   leadTool({
-    name: "update_skill", risk: "write", description: "write_skill로 만든 스킬의 설명이나 본문을 고친다.",
+    name: "update_skill", risk: "write", description: "write_skill로 만든 스킬의 설명이나 본문을 고친다. 프로젝트 스킬은 scope:'project'로, 사용자 승인 후에 고쳐진다. 담당이 만든 것만 고칠 수 있고, 표식이 없는 옛 담당 스킬은 승인을 거치며 표식이 붙는다(사용자가 쓴 스킬은 그대로 둔다).",
+    approvalFor: (args) => args.scope === "project",
+    summary: (args) => `프로젝트 스킬 ${String(args.name ?? "")} 고치기${args.description ? `: ${String(args.description).slice(0, 120)}` : ""}`,
     properties: { name: str("스킬 이름."), description: str("새 설명(선택)."), content: str("새 본문(선택)."), scope: { type: "string", enum: ["lead", "project"] } },
     required: ["name"],
   }),
@@ -272,23 +284,26 @@ const APP: AppTool[] = [
   routeTool({
     name: "list_sessions", risk: "read", method: "GET", route: "/api/sessions",
     description: "채팅(세션) 목록: ID, 제목, 상태(running/done/error/stopped), 에이전트, 폴더, 담당 여부. 내용은 get_session이나 get_session_summary로 본다.",
-    properties: { workspace_id: str("이 워크스페이스의 채팅만. 비우면 전부."), status: str("이 상태만 (running, done, error, stopped)."), limit: num("최근 몇 개 (기본 50).") },
+    properties: { workspace_id: str("이 워크스페이스의 채팅만. 비우면 전부."), status: str("이 상태만 (running, done, error, stopped)."), lead_id: str("이 담당의 채팅(스레드)만 (list_leads의 ID)."), limit: num("최근 몇 개 (기본 50).") },
     path: (args) => `/api/sessions${query({ workspace: args.workspace_id })}`,
     pick: (output, args) => {
-      const rows = (output as Row[]).filter((session) => !args.status || session.status === args.status)
+      const rows = (output as Row[]).filter((session) => (!args.status || session.status === args.status) && (!args.lead_id || session.steward?.id === args.lead_id))
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
       return rows.slice(0, Math.max(1, Number(args.limit) || 50)).map(sessionRow);
     },
   }),
   routeTool({
-    name: "get_session", risk: "read", method: "GET", route: "/api/sessions",
-    description: "채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다.",
-    properties: { session_id: str("채팅 ID."), limit: num("최근 이벤트 몇 개 (기본 30, 최대 200).") }, required: ["session_id"],
-    pick: (output, args) => {
-      const session = (output as Row[]).find((item) => item.id === args.session_id);
-      if (!session) throw new Error("세션을 찾을 수 없습니다.");
-      const limit = Math.min(200, Math.max(1, Number(args.limit) || 30));
-      return { ...sessionRow(session), events: (session.events as Row[] ?? []).slice(-limit).map(eventRow) };
+    name: "get_session", risk: "read", method: "GET", route: "/api/sessions/:id/events",
+    description: "채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. after_event_id를 주면 그 뒤에 생긴 것만, before_event_id를 주면 그보다 앞의 것을 준다(긴 채팅의 오래된 이벤트는 보관 파일에서 읽는다). cursorLost가 true면 준 ID를 찾지 못해 최근 것을 준 것이다.",
+    properties: {
+      session_id: str("채팅 ID."), limit: num("이벤트 몇 개 (기본 30, 최대 200)."),
+      after_event_id: str("이 이벤트 뒤의 것만 (이전 응답의 마지막 이벤트 ID)."),
+      before_event_id: str("이 이벤트보다 앞의 것 (더 오래된 기록을 거슬러 읽을 때, 이전 응답의 첫 이벤트 ID)."),
+    }, required: ["session_id"],
+    path: (args) => `/api/sessions/${seg(args, "session_id")}/events${query({ limit: args.limit, after: args.after_event_id, before: args.before_event_id })}`,
+    pick: (output) => {
+      const session = output as Row;
+      return { ...sessionRow(session), events: (session.events as Row[] ?? []).map(eventRow), ...(session.archivedEvents ? { archivedEvents: session.archivedEvents } : {}), ...(session.cursorLost ? { cursorLost: true } : {}), ...(session.skipped ? { skipped: session.skipped } : {}) };
     },
   }),
   routeTool({
@@ -299,7 +314,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "create_session", risk: "write", method: "POST", route: "/api/sessions",
-    description: "새 채팅을 연다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 스레드로 열면 팀·폴더·워크스페이스는 담당 것을 쓴다. 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다.",
+    description: "새 채팅을 연다. 사용자는 시나위 화면에서 이 채팅을 실시간으로 보고 이어서 말할 수 있다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 채팅(탭)으로 열면 폴더·워크스페이스·지침·기억(노트)은 담당 것을 함께 쓰고, agent·model을 주면 이 채팅만 그 CLI·모델로 돌린다(비우면 담당의 CLI). 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 결과는 wait_for_session으로 기다린다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다.",
     properties: {
       prompt: str("첫 메시지(할 일). 비우면 빈 채팅."),
       title: str("채팅 제목(선택). 비우면 첫 메시지에서 만든다."),
@@ -321,13 +336,13 @@ const APP: AppTool[] = [
       skills: args.skills, groupId: args.group_id, workspaceId: args.workspace_id ?? ctx.workspaceId, mode: args.mode,
       // Always explicit: a chat without a mode follows the workspace's full-access switch (Orchestra.permissionModeOf).
       permissionMode: permissionMode(args.permission_mode) ?? "auto", autoRun: args.auto_run,
-      steward: typeof args.lead_id === "string" && args.lead_id ? { id: args.lead_id } : undefined,
+      steward: typeof args.lead_id === "string" && args.lead_id ? defined({ id: args.lead_id, agent: opt(args.agent), model: opt(args.model) }) : undefined,
     }),
     pick: (output) => sessionRow(output as Row),
   }),
   routeTool({
     name: "send_message", risk: "write", method: "POST", route: "/api/sessions/:id/messages",
-    description: "채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 결과는 get_session_summary나 get_session으로 확인한다.",
+    description: "채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 실행 중인 채팅에는 보낼 수 없다(먼저 wait_for_session). 결과는 wait_for_session, get_session_summary, get_session으로 확인한다.",
     properties: {
       session_id: str("채팅 ID."), prompt: str("보낼 메시지."), skills: strings("이번 메시지에 붙일 스킬."),
       permission_mode: { type: "string", enum: ["plan", "auto"], description: "plan: 계획만. auto: 실행 (기본)." },
@@ -343,6 +358,22 @@ const APP: AppTool[] = [
     properties: { session_id: str("실행 중인 채팅 ID."), prompt: str("질문.") }, required: ["session_id", "prompt"],
     path: (args) => `/api/sessions/${seg(args, "session_id")}/live`,
     body: (args) => ({ prompt: args.prompt }),
+  }),
+  routeTool({
+    name: "wait_for_session", risk: "read", method: "GET", route: "/api/sessions/:id/wait", surfaces: ["external"],
+    description: "채팅의 이번 턴이 끝날 때까지(또는 timeout_sec까지) 기다렸다가 상태, 담당의 마지막 답, 그사이 생긴 메시지를 준다. done이 false면 아직 실행 중이니 after_event_id에 lastEventId를 넣어 다시 부른다. create_session·send_message 다음에 쓴다.",
+    properties: {
+      session_id: str("채팅 ID."), timeout_sec: num("최대 몇 초 기다릴지 (기본 50, 최대 600). MCP 클라이언트의 도구 시간 제한보다 짧게."),
+      after_event_id: str("이 이벤트 뒤에 생긴 메시지만 (이전 응답의 lastEventId)."),
+    },
+    required: ["session_id"],
+    path: (args) => `/api/sessions/${seg(args, "session_id")}/wait${query({ timeout: args.timeout_sec, after: args.after_event_id })}`,
+  }),
+  routeTool({
+    name: "show_session", risk: "write", method: "POST", route: "/api/sessions/:id/show", surfaces: ["external"],
+    description: "사용자에게 이 채팅을 봐 달라고 알린다(알림에 '채팅 열기'). 사용자가 빈 새 채팅 화면을 두고 자리를 비웠을 때만 앱이 그 채팅으로 바로 넘어가고, 다른 채팅·설정을 보거나 입력 중이면 화면을 바꾸지 않는다. 답의 notified는 알림을 보냈다는 뜻, windowAsked는 열린 앱 창에 요청이 갔다는 뜻이다. 사용자가 실제로 봤는지는 알 수 없으니 봤다고 말하지 않는다.",
+    properties: { session_id: str("채팅 ID.") }, required: ["session_id"],
+    path: (args) => `/api/sessions/${seg(args, "session_id")}/show`, body: () => ({}),
   }),
   routeTool({
     name: "rename_session", risk: "write", method: "PATCH", route: "/api/sessions/:id",
@@ -361,7 +392,7 @@ const APP: AppTool[] = [
     description: "채팅을 다른 워크스페이스(공간)로 옮긴다. 옮긴 채팅은 그 공간의 정책(전체 권한, 컴퓨터 조작 등)을 따르게 되므로 사용자 승인 후 옮긴다. 공간 ID는 list_workspaces.",
     properties: { session_id: str("채팅 ID."), workspace_id: str("옮길 워크스페이스 ID.") }, required: ["session_id", "workspace_id"],
     path: (args) => `/api/sessions/${seg(args, "session_id")}/workspace`, body: (args) => ({ workspaceId: args.workspace_id }), pick: (output) => sessionRow(output as Row),
-    summary: (args, names) => `채팅 ${names.session(args.session_id)} → 워크스페이스 ${names.workspace(args.workspace_id)}로 옮김`,
+    summary: (args, names) => `채팅 ${names.session(args.session_id)} → 작업 공간 ${names.workspace(args.workspace_id)}로 옮김`,
   }),
   routeTool({
     name: "stop_session", risk: "approval", method: "POST", route: "/api/sessions/:id/stop",
@@ -586,14 +617,14 @@ const APP: AppTool[] = [
       if (args.defaults === undefined && args.policy === undefined) throw new Error("defaults나 policy 중 하나는 있어야 합니다.");
       return defined({ workspaceId: args.workspace_id, defaults: args.defaults, settings: args.policy });
     },
-    summary: (args, names) => `워크스페이스 ${names.workspace(args.workspace_id)} ${[args.defaults !== undefined ? "기본값" : "", args.policy !== undefined ? "정책" : ""].filter(Boolean).join("·")} 변경`,
+    summary: (args, names) => `작업 공간 ${names.workspace(args.workspace_id)} ${[args.defaults !== undefined ? "기본값" : "", args.policy !== undefined ? "정책" : ""].filter(Boolean).join("·")} 변경`,
   }),
   routeTool({
     name: "delete_workspace", risk: "approval", method: "DELETE", route: "/api/workspaces/:id",
     description: "워크스페이스를 지운다. 그 안의 채팅, 그룹, 담당은 move_to(비우면 남은 첫 공간)로 옮겨진다. 실행 중인 채팅이 있으면 안 된다. 사용자 승인 후 지워진다.",
     properties: { workspace_id: str("지울 워크스페이스 ID."), move_to: str("내용을 옮길 워크스페이스 ID.") }, required: ["workspace_id"],
     path: (args) => `/api/workspaces/${seg(args, "workspace_id")}${query({ moveTo: args.move_to })}`,
-    summary: (args, names) => `워크스페이스 ${names.workspace(args.workspace_id)} 삭제${args.move_to ? ` (내용 → ${names.workspace(args.move_to)})` : ""}`,
+    summary: (args, names) => `작업 공간 ${names.workspace(args.workspace_id)} 삭제${args.move_to ? ` (내용 → ${names.workspace(args.move_to)})` : ""}`,
   }),
 
   // ----- 프로젝트 그룹 -----
@@ -792,6 +823,8 @@ export const ROUTE_EXCLUSIONS: Record<string, string> = {
   "POST /api/lead-mcp": "MCP 엔드포인트 자체(담당 실행의 sinawi_lead).",
   "POST /api/app-mcp": "MCP 엔드포인트 자체(외부 AI용 브리지 `sinawi mcp`).",
   "GET /api/app-mcp/connection": "외부 연결 토큰을 보여 주는 설정 화면용. AI에게 토큰을 주지 않는다.",
+  "POST /api/app-mcp/connection": "GET /api/app-mcp/connection과 같다. 앱 화면이 Origin을 보내도록 POST로 묻는다.",
+  "POST /api/app-mcp/clients/:client/plan": "GET /api/app-mcp/clients/:client와 같다. 앱 화면이 Origin을 보내도록 POST로 묻는다.",
   "POST /api/app-mcp/token": "외부 연결 토큰 재발급(설정 화면 버튼). AI가 자기 연결을 바꾸면 안 된다.",
   "GET /api/app-mcp/clients/:client": "Claude Desktop·Cursor 연결 미리보기(설정 화면 버튼). 다른 앱의 구성 파일을 다루는 일이라 도구가 아니다.",
   "POST /api/app-mcp/clients/:client": "Claude Desktop·Cursor 구성 파일에 sinawi 항목을 쓴다(설정 화면에서 사용자가 확인한 뒤에만, 앱 Origin 필요). AI가 다른 AI 클라이언트의 도구 구성을 바꾸면 안 된다.",
@@ -831,6 +864,34 @@ export const ROUTE_EXCLUSIONS: Record<string, string> = {
   "GET /{*path}": "앱 화면(정적 파일).",
 };
 
+/**
+ * Routes only the user may use, from the app window: everything an MCP tool has to ask the user to
+ * approve, and the user's own decisions and secrets. A local program (an agent's curl) is refused
+ * (server.ts userOnlyGuard); the app's own tool runs (injectRequest) and the window pass.
+ */
+export const USER_ONLY_ROUTES: string[] = [
+  ...APP_TOOLS.filter((tool) => tool.risk === "approval").flatMap((tool) => tool.routes),
+  "GET /api/app-mcp/connection", "POST /api/app-mcp/connection", "POST /api/app-mcp/token", "GET /api/app-mcp/clients/:client", "POST /api/app-mcp/clients/:client/plan", "POST /api/app-mcp/clients/:client",
+  "POST /api/app-approvals/:id/approve", "POST /api/app-approvals/:id/reject",
+  "POST /api/permissions/:id/answer", "POST /api/computer/revoke",
+  "POST /api/workspaces/:id/accounts/:agent/login",
+];
+
+const routePattern = (route: string) => {
+  const [method, path] = route.split(" ");
+  const body = path.split("/").map((part) => part.startsWith(":") ? "[^/]+" : part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("/");
+  // Case-insensitive like Express's router, so `/API/Settings` cannot slip past the guard to the same handler.
+  return { method, regex: new RegExp(`^${body}/?$`, "iu") };
+};
+const USER_ONLY_PATTERNS = USER_ONLY_ROUTES.map(routePattern);
+
+/** Whether `METHOD /path` is one of USER_ONLY_ROUTES. */
+export function isUserOnlyRoute(method: string, path: string): boolean {
+  // Express answers HEAD with the GET handler, so a HEAD runs it too.
+  const upper = method.toUpperCase() === "HEAD" ? "GET" : method.toUpperCase();
+  return USER_ONLY_PATTERNS.some((route) => route.method === upper && route.regex.test(path));
+}
+
 // ---------- MCP JSON-RPC ----------
 
 interface JsonRpcMessage { jsonrpc?: string; id?: string | number | null; method?: string; params?: { protocolVersion?: string; name?: string; arguments?: unknown } }
@@ -849,7 +910,9 @@ const EXTERNAL_INSTRUCTIONS = [
   "Sinawi runs the Claude Code, Codex and Grok CLIs as one team on this Mac. These tools drive the running app.",
   "IDs come from list_* tools (list_sessions, list_leads, list_workspaces); never guess one.",
   "A tool marked [approval] does not run at once: it returns status \"pending_approval\" and waits for the user to approve it in the app. Tell the user, check list_approvals(approval_id) later, and do not send the same request again.",
-  "send_message starts work in a chat and returns at once; read progress with get_session.",
+  "Sinawi is where the user watches every chat an outside orchestrator starts: each chat you open shows in the app live, labelled with your client's name, and the user can keep talking in it.",
+  "To hand work to an agent: list_leads (a lead = one project with its folder, instructions and memory) → create_session(lead_id, prompt, optional agent/model) opens a new chat (tab) of that lead and starts at once → wait_for_session(session_id) until done is true → send_message(session_id, prompt) to continue in the same chat. Without a lead, create_session needs cwd.",
+  "create_session and send_message return at once; wait_for_session (or get_session with after_event_id) reads the progress. One chat runs one turn at a time; open another chat to run work in parallel.",
   "Tool descriptions and errors are in Korean. Answer the user in their own language.",
 ].join("\n");
 
@@ -891,7 +954,7 @@ export async function handleToolMcp(message: JsonRpcMessage, surface: ToolSurfac
     case "initialize":
       return { jsonrpc: "2.0", id, result: {
         protocolVersion: MCP_VERSIONS.includes(message.params?.protocolVersion ?? "") ? message.params!.protocolVersion : MCP_VERSIONS[0],
-        capabilities: { tools: {} }, serverInfo: { name: serverName, title: "Sinawi", version: "1.0.0" },
+        capabilities: { tools: {} }, serverInfo: { name: serverName, title: "Sinawi", version: envVar("SERVER_VERSION") || "0.0.0-dev" },
         ...(surface === "external" ? { instructions: EXTERNAL_INSTRUCTIONS } : {}),
       } };
     case "ping":
@@ -920,11 +983,20 @@ export async function handleToolMcp(message: JsonRpcMessage, surface: ToolSurfac
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
 
+/**
+ * Marks a request the server made to itself (a tool run, an approved tool): set only by
+ * injectRequest, never present on a request that came over the network, so it cannot be forged.
+ */
+export const IN_PROCESS = Symbol("sinawi.inProcess");
+export const inProcess = (req: unknown) => Boolean(req && (req as Record<symbol, unknown>)[IN_PROCESS]);
+
 /** Runs one request through the Express app without a socket and returns its status and JSON body. */
-export function injectRequest(app: Handler, method: string, path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = 10 * 60_000): Promise<{ status: number; body: unknown }> {
+/** `signal`: the outer caller hung up; the route sees its response close, as with a real client (review L2). */
+export function injectRequest(app: Handler, method: string, path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = 10 * 60_000, trusted = true, signal?: AbortSignal): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const socket = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
     const req = new IncomingMessage(socket as never);
+    if (trusted) (req as unknown as Record<symbol, unknown>)[IN_PROCESS] = true;
     req.method = method; req.url = path; req.httpVersion = "1.1"; req.httpVersionMajor = 1; req.httpVersionMinor = 1;
     const json = body === undefined ? undefined : JSON.stringify(body);
     req.headers = { host: "127.0.0.1", ...headers, ...(json ? { "content-type": "application/json", "content-length": String(Buffer.byteLength(json)) } : {}) };
@@ -956,6 +1028,10 @@ export function injectRequest(app: Handler, method: string, path: string, body?:
       return res;
     }) as typeof res.end;
     try { app(req, res); } catch (error) { clearTimeout(timer); finished = true; reject(error); return; }
+    if (signal) {
+      const hangUp = () => { if (finished) return; finished = true; clearTimeout(timer); res.emit("close"); reject(new Error("호출한 쪽이 연결을 끊었습니다.")); };
+      if (signal.aborted) hangUp(); else signal.addEventListener("abort", hangUp, { once: true });
+    }
     if (json) req.push(json);
     req.complete = true;
     req.push(null);
@@ -964,8 +1040,8 @@ export function injectRequest(app: Handler, method: string, path: string, body?:
 
 /** `dispatch` for a ToolContext: the route's error message becomes the tool error the AI reads. */
 export function routeDispatcher(app: Handler) {
-  return async (method: string, path: string, body?: unknown) => {
-    const { status, body: output } = await injectRequest(app, method, path, body);
+  return async (method: string, path: string, body?: unknown, signal?: AbortSignal) => {
+    const { status, body: output } = await injectRequest(app, method, path, body, {}, undefined, true, signal);
     if (status >= 400) {
       const message = output && typeof output === "object" && "error" in output ? String((output as { error: unknown }).error) : `요청 실패 (${status})`;
       throw new Error(message);

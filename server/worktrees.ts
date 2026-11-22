@@ -113,6 +113,26 @@ async function hasUncommitted(path: string): Promise<boolean> {
   return Boolean((await tryGit(path, ["status", "--porcelain", "--untracked-files=normal"]))?.trim());
 }
 
+/** How a git operation in progress is called in a Korean sentence (review L4: no bare "merge"/"rebase"). */
+const GIT_OPERATION_NAMES: Record<string, string> = { merge: "병합(merge)", "cherry-pick": "커밋 가져오기(cherry-pick)", revert: "되돌리기(revert)", rebase: "리베이스(rebase)" };
+
+/**
+ * Returns the name of a git operation in progress in the checkout at `repoRoot`, or undefined when
+ * the working tree is idle. Checks MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD, REBASE_HEAD files and
+ * the rebase-merge / rebase-apply directories that git creates while those operations run.
+ */
+async function inProgressOperation(repoRoot: string): Promise<string | undefined> {
+  const gitDir = (await tryGit(repoRoot, ["rev-parse", "--absolute-git-dir"]))?.trim();
+  if (!gitDir) return undefined;
+  for (const [file, op] of [["MERGE_HEAD", "merge"], ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["REBASE_HEAD", "rebase"]] as const) {
+    if (await stat(join(gitDir, file)).then(() => true).catch(() => false)) return op;
+  }
+  for (const dir of ["rebase-merge", "rebase-apply"]) {
+    if (await isDirectory(join(gitDir, dir))) return "rebase";
+  }
+  return undefined;
+}
+
 /**
  * The worker's worktree for this session: reused when it still exists, recreated from its branch
  * when only the branch is left, otherwise made fresh from HEAD. Undefined when `cwd` is not in git.
@@ -425,19 +445,33 @@ export async function mergeWorktree(info: WorktreeInfo, message: string): Promis
     const into = (await tryGit(info.repoRoot, ["symbolic-ref", "--short", "-q", "HEAD"]))?.trim();
     if (!into) return { ok: false, text: `메인 폴더가 브랜치가 아닌 커밋을 보고 있어 병합하지 않았습니다. 브랜치 \`${info.branch}\`는 남겨 두었습니다.` };
     if (into === info.branch) return { ok: false, text: `메인 폴더가 작업 브랜치 \`${info.branch}\` 자체를 보고 있어 병합하지 않았습니다.` };
+    // Before touching the main checkout, make sure no git operation is already in progress there.
+    // Running git merge while MERGE_HEAD exists fails, and the subsequent --abort would wipe the
+    // user's own in-progress merge resolution.
+    const inProgress = await inProgressOperation(info.repoRoot);
+    if (inProgress) return { ok: false, into, text: `메인 폴더에서 ${GIT_OPERATION_NAMES[inProgress] ?? inProgress} 작업이 진행 중이라 병합하지 않았습니다. 작업을 완료하거나 중단한 뒤 다시 시도하세요. 브랜치 \`${info.branch}\`는 그대로입니다.` };
+    // The user's uncommitted edits: git merge keeps them (it refuses when they would be overwritten),
+    // but `git merge --abort` may not bring them back, so a failed merge is then left for the user.
+    const dirty = await hasUncommitted(info.repoRoot);
     try {
       await git(info.repoRoot, ["merge-tree", "--write-tree", "--no-messages", "HEAD", info.branch]);
     } catch (error) {
       // Exit 1 is a conflict; anything else (old git) falls through to the real merge, which refuses on its own.
       if ((error as { code?: number }).code === 1) return { ok: false, into, text: `\`${into}\`와 충돌해 병합하지 않았습니다. 브랜치 \`${info.branch}\`에 그대로 있습니다.` };
     }
+    // Resolve the git dir once so the catch block can check whether our merge attempt created MERGE_HEAD.
+    // We know MERGE_HEAD did not exist before (inProgressOperation confirmed), so if it appears after
+    // a failure it was created by our merge and must be aborted; if it did not appear there is nothing to abort.
+    const gitDir = (await tryGit(info.repoRoot, ["rev-parse", "--absolute-git-dir"]))?.trim();
     try {
       // The repository's own hooks (commitlint, lint-staged) already ran on the worker's commits; a
       // merge commit in the app's wording would only be rejected by them. The subject keeps git's
       // own "Merge branch" form, which commit linters accept.
       await git(info.repoRoot, [...author, "merge", "--no-ff", "--no-verify", "--no-edit", "-m", `Merge branch '${info.branch}'`, "-m", message, info.branch], 120_000);
     } catch (error) {
-      await tryGit(info.repoRoot, ["merge", "--abort"]);
+      const started = Boolean(gitDir && await stat(join(gitDir, "MERGE_HEAD")).then(() => true).catch(() => false));
+      if (started && dirty) return { ok: false, into, text: `병합하지 못했습니다(${gitError(error)}). 메인 폴더에 커밋하지 않은 변경이 있어 되돌리지 않았습니다: 변경을 확인한 뒤 \`git merge --abort\`로 직접 되돌리세요. 브랜치 \`${info.branch}\`에 남아 있습니다.` };
+      if (started) await tryGit(info.repoRoot, ["merge", "--abort"]);
       return { ok: false, into, text: `병합하지 못했습니다(${gitError(error)}). 메인 폴더는 그대로이고 브랜치 \`${info.branch}\`에 남아 있습니다.` };
     }
     const commit = (await tryGit(info.repoRoot, ["rev-parse", "--short", "HEAD"]))?.trim();

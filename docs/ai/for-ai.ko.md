@@ -37,26 +37,19 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 
 ### MCP 클라이언트 연결
 
-시나위가 켜져 있어야 합니다. 권장 순서:
+시나위가 켜져 있어야 합니다. **설정 → 외부 AI 연결**이 클라이언트마다 이 Mac의 경로를 채운 설정을 보여 줍니다(`server/app-mcp.ts`의 `clientSetups`, `GET`/`POST /api/app-mcp/connection`):
 
-1. **앱 안의 버튼**(Claude Desktop, Cursor): **설정 → 일반 → 외부 AI 연결 (MCP) → Claude Desktop에 연결 / Cursor에 연결**. 사용자가 JSON을 확인하면 앱이 `~/Library/Application Support/Claude/claude_desktop_config.json` 또는 `~/.cursor/mcp.json`에 `mcpServers.sinawi`를 합칩니다(다른 항목 유지, `.bak` 사본). 항목은 `"command": "<node>", "args": ["<데이터 폴더>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<데이터 폴더>/app-mcp-token"}`입니다(토큰은 복사하지 않음). 경로: `GET`/`POST /api/app-mcp/clients/:client`(`claude`, `cursor`). MCP 도구가 아니고, `POST`는 앱 자신의 Origin과 확인한 JSON이 있어야 합니다. 테스트는 `SINAWI_CLAUDE_DESKTOP_CONFIG`, `SINAWI_CURSOR_MCP_CONFIG`로 경로를 옮깁니다.
-2. **npx**(npm 패키지 `@rakmlabs/sinawi`): 같은 화면의 **구성 복사**가 다음을 줍니다.
+- **Claude Code**: `claude mcp add sinawi --scope user -e SINAWI_URL=<url> -e SINAWI_MCP_TOKEN_FILE=<데이터 폴더>/app-mcp-token -- <node> <데이터 폴더>/hooks/sinawi-mcp.mjs`
+- **Codex**: `codex mcp add sinawi --env … -- <node> <브리지>`, 또는 `~/.codex/config.toml`의 `[mcp_servers.sinawi]` 블록
+- **Grok Build**: `grok mcp add sinawi -e … -- <node> <브리지>`, 또는 `~/.grok/config.toml`의 `[mcp_servers.sinawi]`(`enabled = true`)
+- **Claude Desktop, Cursor**: 버튼. 사용자가 JSON을 확인하면 앱이 `~/Library/Application Support/Claude/claude_desktop_config.json` 또는 `~/.cursor/mcp.json`에 `mcpServers.sinawi`를 합칩니다(다른 항목 유지, `.bak` 사본). 경로: `GET`/`POST /api/app-mcp/clients/:client/plan`, `POST /api/app-mcp/clients/:client`(`claude`, `cursor`). MCP 도구가 아니고 앱 자신의 창(허용된 Origin)만 부를 수 있습니다. 테스트는 `SINAWI_CLAUDE_DESKTOP_CONFIG`, `SINAWI_CURSOR_MCP_CONFIG`로 경로를 옮깁니다.
+- **그 밖의 클라이언트**: `{"mcpServers": {"sinawi": {"command": "<node>", "args": ["<데이터 폴더>/hooks/sinawi-mcp.mjs"], "env": {"SINAWI_URL": …, "SINAWI_MCP_TOKEN_FILE": "<데이터 폴더>/app-mcp-token"}}}}`.
 
-```json
-{
-  "mcpServers": {
-    "sinawi": {
-      "command": "npx",
-      "args": ["-y", "@rakmlabs/sinawi", "mcp"],
-      "env": { "SINAWI_URL": "http://127.0.0.1:3001", "SINAWI_MCP_TOKEN": "<설정 화면의 토큰>" }
-    }
-  }
-}
-```
+토큰은 파일에서 읽습니다(구성에 복사하지 않음). `/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs`도 같은 브리지이고, `<데이터 폴더>/hooks/` 사본은 앱 업데이트·이동 후에도 유지됩니다. 저장소에서는 `npm run sinawi-mcp`(= `node scripts/sinawi-mcp.mjs`)로도 띄웁니다. 모든 형태가 하나의 구현 `packages/sinawi/lib/mcp.mjs`를 실행하며, 의존성이 없습니다(Node 18 이상).
 
-3. **앱에 든 브리지**: `"command": "node"`, `"args": ["/Applications/Sinawi.app/Contents/Resources/sinawi-mcp.mjs"]`, `env`는 같음. 설정 화면의 "npx 없이 쓰는 구성"은 대신 `<데이터 폴더>/hooks/sinawi-mcp.mjs` 사본을 가리킵니다(앱 업데이트·이동 후에도 유지).
+npm 패키지 `@rakmlabs/sinawi`는 **아직 게시 전**입니다(`npx`가 404). 게시되면 `<node> <브리지>` 대신 `npx -y @rakmlabs/sinawi mcp`를 쓸 수 있고, `npx @rakmlabs/sinawi`가 앱을 설치합니다(macOS, 최신 릴리즈를 받아 `codesign --verify --deep --strict`와 `spctl -a -t exec`로 확인하고, `/Applications/Sinawi.app`을 바꾸기 전에 묻습니다).
 
-저장소에서는 `npm run sinawi-mcp`(= `node scripts/sinawi-mcp.mjs`)로 같은 stdio 브리지를 띄웁니다. 모든 형태가 하나의 구현 `packages/sinawi/lib/mcp.mjs`를 실행하며, 의존성이 없습니다(Node 18 이상). 같은 npm 패키지가 앱도 설치합니다: `npx @rakmlabs/sinawi`(macOS, 최신 릴리즈를 받아 `codesign --verify --deep --strict`와 `spctl -a -t exec`로 확인하고, `/Applications/Sinawi.app`을 바꾸기 전에 묻습니다).
+**지휘 흐름:** `list_leads` → `create_session(lead_id, prompt, agent?, model?)`가 그 담당 아래 새 채팅(탭)을 엽니다(폴더·지침·노트 공유) → `wait_for_session(session_id)`를 `done`까지, 다음 호출부터 `after_event_id = lastEventId` → 이어서 `send_message` + `wait_for_session` → `show_session`으로 앱에 띄우기. 사용자는 각 채팅을 클라이언트 이름과 함께 실시간으로 보고 끼어들 수 있습니다.
 
 ### 브리지 환경변수 (`sinawi mcp`)
 
@@ -82,7 +75,7 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 <!-- tools:start -->
 <!-- `npm run docs:ai`가 server/app-tools.ts에서 만든 구간입니다. 손으로 고치지 마세요. -->
 
-도구 89개 (담당 표면 85개, 외부 표면 79개), 그중 승인 필요 30개.
+도구 91개 (담당 표면 85개, 외부 표면 81개), 그중 승인 필요 30개.
 
 ### 담당 전용
 
@@ -91,8 +84,8 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 | `delegate_task` | 담당만 | 아니오 | 워커(Claude/Codex/Grok CLI)에게 일을 맡기고 바로 task_id를 돌려받는다. 여러 번 부르면 동시에 실행된다. 같은 CLI를 두 번 맡겨도 각자 다른 워커로 병렬 실행된다. 결과는 collect_results로 받는다. 디자인·UI 작업은 kind:'design'. |
 | `check_task` | 담당만 | 아니오(읽기) | 맡긴 일의 상태(running/done/error/stopped)를 본다. task_id를 비우면 이번 턴의 모든 일. |
 | `collect_results` | 담당만 | 아니오(읽기) | 맡긴 일의 결과를 받는다. wait=true면 끝날 때까지 기다린다(한 번에 최대 600초). still_running이 오면 실패가 아니니 다시 부른다. 한 번 받은 결과는 include_collected:true일 때만 다시 준다. |
-| `write_skill` | 담당만 | 아니오 | 재사용할 스킬(작업 지침 문서)을 만든다. 같은 종류의 일을 여러 번 맡길 때 브리프 대신 스킬로 남겨 delegate_task의 skills에 붙인다. |
-| `update_skill` | 담당만 | 아니오 | write_skill로 만든 스킬의 설명이나 본문을 고친다. |
+| `write_skill` | 담당만 | 아니오 | 재사용할 스킬(작업 지침 문서)을 만든다. 같은 종류의 일을 여러 번 맡길 때 브리프 대신 스킬로 남겨 delegate_task의 skills에 붙인다. scope:'project'는 저장소에 남아 다른 AI도 읽으므로 사용자 승인 후에 저장된다(pending_approval이 오면 list_approvals로 결과 확인). |
+| `update_skill` | 담당만 | 아니오 | write_skill로 만든 스킬의 설명이나 본문을 고친다. 프로젝트 스킬은 scope:'project'로, 사용자 승인 후에 고쳐진다. 담당이 만든 것만 고칠 수 있고, 표식이 없는 옛 담당 스킬은 승인을 거치며 표식이 붙는다(사용자가 쓴 스킬은 그대로 둔다). |
 | `list_skills` | 담당만 | 아니오(읽기) | 이 담당이 워커 브리프에 붙일 수 있는 스킬(담당 스킬, 프로젝트 스킬)을 본다. |
 | `schedule_create` | 담당만 | 아니오 | 이 담당의 일정을 만든다. 정한 시각에 prompt가 이 담당의 채팅으로 온다. 대화에서 정해진 마감·점검·반복 작업이 있으면 쓴다. |
 | `schedule_list` | 담당만 | 아니오(읽기) | 이 담당의 일정 목록(ID, 시각, 반복, 켜짐)과 지금 시각·시간대. 고치거나 지울 일정의 ID를 찾을 때. |
@@ -113,11 +106,13 @@ MCP로 시나위를 다루거나 코드를 읽는 AI를 위한 짧은 구조적 
 | 도구 | 표면 | 승인 | 설명 |
 |---|---|---|---|
 | `list_sessions` | 담당·외부 | 아니오(읽기) | 채팅(세션) 목록: ID, 제목, 상태(running/done/error/stopped), 에이전트, 폴더, 담당 여부. 내용은 get_session이나 get_session_summary로 본다. |
-| `get_session` | 담당·외부 | 아니오(읽기) | 채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. |
+| `get_session` | 담당·외부 | 아니오(읽기) | 채팅 하나의 정보와 최근 메시지·이벤트(답변, 도구 실행, 오류). 무슨 말이 오갔는지 읽을 때 쓴다. after_event_id를 주면 그 뒤에 생긴 것만, before_event_id를 주면 그보다 앞의 것을 준다(긴 채팅의 오래된 이벤트는 보관 파일에서 읽는다). cursorLost가 true면 준 ID를 찾지 못해 최근 것을 준 것이다. |
 | `get_session_summary` | 담당·외부 | 아니오(읽기) | 채팅 한눈에 보기: 상태, 담당의 마지막 답, 체크리스트 진행, 승인 기다리는 병합, 담당 정보. |
-| `create_session` | 담당·외부 | 아니오 | 새 채팅을 연다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 스레드로 열면 팀·폴더·워크스페이스는 담당 것을 쓴다. 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다. |
-| `send_message` | 담당·외부 | 아니오 | 채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 결과는 get_session_summary나 get_session으로 확인한다. |
+| `create_session` | 담당·외부 | 아니오 | 새 채팅을 연다. 사용자는 시나위 화면에서 이 채팅을 실시간으로 보고 이어서 말할 수 있다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 채팅(탭)으로 열면 폴더·워크스페이스·지침·기억(노트)은 담당 것을 함께 쓰고, agent·model을 주면 이 채팅만 그 CLI·모델로 돌린다(비우면 담당의 CLI). 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 결과는 wait_for_session으로 기다린다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다. |
+| `send_message` | 담당·외부 | 아니오 | 채팅에 이어서 메시지를 보낸다(다음 턴 시작). 담당 채팅이면 담당이 받는다. 실행 중인 채팅에는 보낼 수 없다(먼저 wait_for_session). 결과는 wait_for_session, get_session_summary, get_session으로 확인한다. |
 | `ask_running_session` | 담당·외부 | 아니오 | 실행 중인 채팅에 진행을 멈추지 않고 곁가지 질문을 한다("지금 어디까지 했어?"). 답은 채팅에 따로 붙는다. 호출자와 같은 공간의 채팅에만 물을 수 있다. |
+| `wait_for_session` | 외부만 | 아니오(읽기) | 채팅의 이번 턴이 끝날 때까지(또는 timeout_sec까지) 기다렸다가 상태, 담당의 마지막 답, 그사이 생긴 메시지를 준다. done이 false면 아직 실행 중이니 after_event_id에 lastEventId를 넣어 다시 부른다. create_session·send_message 다음에 쓴다. |
+| `show_session` | 외부만 | 아니오 | 사용자에게 이 채팅을 봐 달라고 알린다(알림에 '채팅 열기'). 사용자가 빈 새 채팅 화면을 두고 자리를 비웠을 때만 앱이 그 채팅으로 바로 넘어가고, 다른 채팅·설정을 보거나 입력 중이면 화면을 바꾸지 않는다. 답의 notified는 알림을 보냈다는 뜻, windowAsked는 열린 앱 창에 요청이 갔다는 뜻이다. 사용자가 실제로 봤는지는 알 수 없으니 봤다고 말하지 않는다. |
 | `rename_session` | 담당·외부 | 아니오 | 채팅 제목을 바꾼다. 사이드바에 보이는 이름이 바뀐다. |
 | `move_session_to_group` | 담당·외부 | 아니오 | 채팅을 프로젝트 그룹에 넣거나(group_id) 그룹에서 뺀다(group_id 비움). |
 | `move_session_to_workspace` | 담당·외부 | **필요** | 채팅을 다른 워크스페이스(공간)로 옮긴다. 옮긴 채팅은 그 공간의 정책(전체 권한, 컴퓨터 조작 등)을 따르게 되므로 사용자 승인 후 옮긴다. 공간 ID는 list_workspaces. |

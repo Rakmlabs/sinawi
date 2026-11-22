@@ -64,7 +64,7 @@ test("unknown runs are refused; unanswered questions and ended runs are denied",
 
 test("the generated MCP server forwards Claude's tool call to Sinawi", async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), "sinawi-perm-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const script = await ensurePermissionServerScript(dir);
   const s = await serve();
   const token = issueComputerToken({ sessionId: "s4", workspaceId: "personal", agent: "claude" });

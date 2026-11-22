@@ -9,7 +9,7 @@ body,
 
 .app-shell {
   --window-header-height: 48px;
-  --sidebar-width: 260px;
+  --sidebar-width: 280px;
   --sidebar-motion: 180ms ease-out;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
@@ -1031,3 +1031,38 @@ body,
   .composer-list-hint { display: none; }
 }
 .composer textarea.list-line { tab-size: 2; }
+
+/* The composer's own width decides, not the window's: with the sidebar open a 900px window leaves the
+   composer ~590px, and the bottom row used to cut the folder name and the approval picker to one letter. */
+.composer { container: composer / inline-size; }
+@container composer (max-width: 680px) {
+  .composer-bottom { flex-wrap: wrap; row-gap: 6px; }
+  .composer-bottom .permission-picker { width: 104px; min-width: 104px; }
+  .composer-bottom .directory-button { max-width: 45%; min-width: 72px; }
+}
+
+/* Opened at the bottom, a chat's earlier messages sit above the view: fade the top edge so the first
+   visible message reads as "more above", not as a clipped bubble (review round 2, §6). */
+.chat-body.has-above {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 40px);
+}
+
+/* The docked sidebar's right edge: drag (or arrow keys) to change --sidebar-width (SidebarResizer.tsx). */
+.app-shell > .sidebar-resizer {
+  grid-area: sidebar;
+  justify-self: end;
+  z-index: 3;
+  width: 7px;
+  margin-right: -4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.app-shell > .sidebar-resizer:hover, .app-shell > .sidebar-resizer:focus-visible, body.sidebar-resizing .app-shell > .sidebar-resizer {
+  background: linear-gradient(to right, transparent 3px, var(--border-focus) 3px, var(--border-focus) 4px, transparent 4px);
+  outline: none;
+}
+body.sidebar-resizing, body.sidebar-resizing * { cursor: col-resize !important; user-select: none; }
+body.sidebar-resizing .app-shell { transition: none; }
+/* No folder yet (a new lead): the button is the next step, so it keeps its whole label (third review). */
+.composer-bottom .directory-button.needs-folder { flex: none; max-width: none; color: var(--accent-fg); }

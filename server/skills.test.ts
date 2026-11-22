@@ -19,7 +19,7 @@ test("skill discovery uses inherited CLI account roots", async (t) => {
     if (previous === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previous;
     clearSkillsCache();
-    await Promise.all([root, cwd].map((directory) => rm(directory, { recursive: true, force: true })));
+    await Promise.all([root, cwd].map((directory) => rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })));
   });
   const skill = join(root, "skills", "inherited-codex");
   await mkdir(skill, { recursive: true });

@@ -3,6 +3,7 @@
 // main.rs must be listed here and allowed in capabilities/*.json.
 const COMMANDS: &[&str] = &[
     "open_devtools",
+    "app_key",
     "server_version_status",
     "permission_status",
     "request_permission",
