@@ -182,7 +182,8 @@ ${COMPUTER_CORE}`;
 export const DEVELOPMENT_SHELL_PROGRAMS = [
   "git status", "git diff", "git log", "git show", "git add", "git commit", "git rev-parse", "git ls-files", "git blame", "git branch",
   "git checkout", "git switch", "git restore", "git rm", "git mv", "git stash", "git merge", "git worktree", "git tag", "git remote",
-  "gh pr", "gh issue", "gh repo view", "gh run", "gh api", "gh auth status", "gh search",
+  "gh pr list", "gh pr view", "gh pr diff", "gh pr checks", "gh pr status", "gh issue list", "gh issue view", "gh issue status",
+  "gh repo view", "gh run list", "gh run view", "gh run watch", "gh run download", "gh api", "gh auth status", "gh search",
   "ls", "cat", "rg", "tsc --noEmit", "du", "wc", "head", "tail", "ao-browser", "ffprobe", "ffmpeg", "mkdir", "file", "stat", "sips", "pwd", "echo", "sort", "jq",
   "ao-computer", "xcrun simctl list", "xcrun simctl boot", "xcrun simctl shutdown", "xcrun simctl io", "xcrun simctl install", "xcrun simctl uninstall", "xcrun simctl launch", "xcrun simctl terminate", "xcrun simctl get_app_container", "xcrun simctl status_bar", "xcrun simctl ui", "ao-serve list", "ao-serve logs", "ao-serve stop", "ao-sim", "curl", "lsof", "trash",
 ] as const;
@@ -217,9 +218,30 @@ const longFlag = (program: string, flag: string) => [`${program} ${flag}*`, `${p
  * Abbreviated long options are matched by their shortest unambiguous prefix (`sort --co` for
  * --compress-program, `git --upl`/`--rece` for --upload-pack/--receive-pack, fifth review R5-2).
  */
+/**
+ * PR #8 review P8-1: gh is pre-approved by read subcommand only (DEVELOPMENT_SHELL_PROGRAMS), and Grok,
+ * which has no approval card, is denied the rest that gh 2.98 lists (its help), their built-in
+ * aliases (`gh pr new`, `gh co`), any flag before the subcommand (`gh pr -R o/r merge`), and a
+ * `gh api` aimed at GraphQL or overriding its method. Aliases and extensions a user made have names
+ * no pattern can know: Grok's own classifier decides those (README).
+ */
+const GROK_GH_DENIED = [
+  "gh -*", "gh pr -*", "gh issue -*", "gh run -*", "gh repo -*", "gh search -*", "gh auth -*",
+  ...["create", "new", "checkout", "close", "comment", "edit", "lock", "merge", "ready", "reopen", "revert", "review", "unlock", "update-branch"].map((op) => `gh pr ${op}*`),
+  ...["create", "new", "close", "comment", "delete", "develop", "edit", "lock", "pin", "reopen", "transfer", "unlock", "unpin"].map((op) => `gh issue ${op}*`),
+  ...["cancel", "delete", "rerun"].map((op) => `gh run ${op}*`),
+  ...["create", "new", "list", "archive", "autolink", "clone", "delete", "deploy-key", "edit", "fork", "gitignore", "license", "read-dir", "read-file", "rename", "set-default", "sync", "unarchive"].map((op) => `gh repo ${op}*`),
+  ...["login", "logout", "refresh", "setup-git", "switch", "token"].map((op) => `gh auth ${op}*`),
+  ...["browse", "codespace", "cs", "discussion", "gist", "org", "project", "release", "skill", "cache", "workflow", "co", "agent-task", "alias", "attestation", "completion", "config", "copilot", "extension", "ext", "gpg-key", "label", "licenses", "preview", "ruleset", "secret", "ssh-key", "status", "variable"].map((command) => `gh ${command}*`),
+  // Built-in aliases gh 2.98 lists beside their commands (PR #8 second review P8-4).
+  "gh agent*", "gh at*", "gh rs*", "gh pr co*",
+  "gh api *graphql*", "gh api *verride*", "gh api *ethod*",
+];
+
 export const RISKY_SHELL_PATTERNS = [
   ...longFlag("rg", "--pre"), "git -c*", "git --config-env*", "git *--output*", "git *--ext-diff*", ...longFlag("git", "--exec"), ...longFlag("git", "--upl"), ...longFlag("git", "--rece"), "GIT_*",
   ...shortFlag("git push", "f"), ...shortFlag("git push", "d"), "git push *--force*", "git push *--delete*", "git push *--mirror*", "git push *--prune*", "git push * +*", "git push * :*",
+  ...GROK_GH_DENIED,
   ...shortFlag("gh api", "X"), ...shortFlag("gh api", "f"), ...shortFlag("gh api", "F"), "gh api *--method*", "gh api *--field*", "gh api *--raw-field*", "gh api *--input*",
   ...shortFlag("curl", "o"), ...shortFlag("curl", "O"), ...shortFlag("curl", "K"), ...shortFlag("curl", "T"), "curl *--output*", "curl *--remote-name*", "curl *--config*", "curl *--upload-file*", "curl *@*", "curl *file:*",
   "xcrun simctl spawn*", "trash *..*", "trash /*", "trash * /*", "trash ~*", "trash * ~*",

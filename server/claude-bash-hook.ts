@@ -117,7 +117,8 @@ export function staticCommandWords(command: string): string[] | undefined {
 
 /**
  * Forms of pre-approved programs that reach outside the project (third review H2-b), on the words of
- * one command: `gh api` with a method or fields (writes to GitHub), `git push` that forces, deletes
+ * one command: `gh api` with a method or fields and `gh pr`/`issue`/`run` subcommands that change
+ * what others see on GitHub (writes to GitHub), `git push` that forces, deletes
  * or mirrors, `xcrun simctl spawn` (runs a program on the host), `curl -K` (a config file can set any
  * option), `trash` of a path outside the folder. The prefix rules pre-approve the plain program; for
  * these forms the hook answers "ask", whatever the workspace switch says. Grok denies the same forms
@@ -130,13 +131,46 @@ export function riskyWords(words: string[]): boolean {
   while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[index]!) || ["env", "command", "exec", "nohup", "time"].includes(words[index]!))) index += 1;
   const program = (words[index] ?? "").replace(/^.*\//u, "");
   const rest = words.slice(index + 1);
-  if (program === "gh" && rest[0] === "api") {
-    for (let at = 1; at < rest.length; at++) {
-      const word = rest[at]!;
-      if (/^(?:-f|-F|--field|--raw-field|--input)(?:=|$)/u.test(word) || /^-[fF]./u.test(word)) return true;
-      const method = /^(?:-X|--method)(?:=(.*))?$/u.exec(word) ?? /^-X(.+)$/u.exec(word);
-      if (method) { const value = (method[1] ?? rest[at + 1] ?? "").toUpperCase(); if (value !== "GET") return true; }
-    }
+  // Sixth review R6-4, PR #8 review P8-1: gh passes only where it is sure to read. Naming GitHub's
+  // writes one by one missed aliases (`gh pr new`), newer subcommands (`revert`, `update-branch`) and
+  // `-R` before the subcommand. Read subcommands only, `-R`/`--repo` the only flag before them;
+  // `gh api` only as a GET of a REST endpoint with read-only flags. Aliases, extensions and every
+  // other gh command ask.
+  if (program === "gh") {
+    const reads: Record<string, string[]> = { pr: ["list", "view", "diff", "checks", "status"], issue: ["list", "view", "status"], run: ["list", "view", "watch", "download"], repo: ["view"], search: ["code", "commits", "issues", "prs", "repos"], auth: ["status"] };
+    const apiRead = (args: string[]): boolean => {
+      const valued = ["-X", "--method", "-H", "--header", "-q", "--jq", "-t", "--template", "--cache", "--hostname", "-p", "--preview"];
+      let endpoint = 0;
+      for (let at = 0; at < args.length; at++) {
+        const word = args[at]!;
+        if (!word.startsWith("-")) { endpoint++; if (endpoint > 1 || word.toLowerCase().replace(/^\//u, "") === "graphql") return false; continue; }
+        if (["--paginate", "--slurp", "-i", "--include", "--silent", "--verbose"].includes(word)) continue;
+        const long = /^(--[a-z-]+)=(.*)$/su.exec(word);
+        const short = /^(-[a-zA-Z])(.+)$/su.exec(word);
+        const name = long ? long[1]! : short && !word.startsWith("--") ? short[1]! : word;
+        if (!valued.includes(name)) return false;
+        const value = long ? long[2]! : short && !word.startsWith("--") ? short[2]! : args[++at];
+        if (value === undefined) return false;
+        if ((name === "-X" || name === "--method") && value.toUpperCase() !== "GET") return false;
+        // X-HTTP-Method-Override and the like would turn the GET into something else.
+        if ((name === "-H" || name === "--header") && /override|method/iu.test(value)) return false;
+      }
+      return endpoint === 1;
+    };
+    const ghRead = (args: string[]): boolean => {
+      if (args[0] === "api") return apiRead(args.slice(1));
+      const subcommands = reads[args[0] ?? ""];
+      if (!subcommands) return false;
+      let at = 1;
+      while ((args[at] ?? "").startsWith("-")) {
+        const word = args[at]!;
+        if (word === "-R" || word === "--repo") at += 2;
+        else if (word.startsWith("--repo=") || /^-R./u.test(word)) at += 1;
+        else return false;
+      }
+      return subcommands.includes(args[at] ?? "");
+    };
+    if (!ghRead(rest)) return true;
   }
   if (program === "git") {
     const push = rest.indexOf("push");
@@ -276,7 +310,8 @@ export function optionsAllowed(words: string[]): boolean {
     "git restore": { s: "SWqm", v: "s", l: "--source --staged --worktree --ours --theirs --quiet --merge --conflict --ignore-unmerged --overlay --no-overlay --progress --no-progress --recurse-submodules --no-recurse-submodules --ignore-skip-worktree-bits" },
     "git rm": { s: "rfnq", l: "--cached --dry-run --force --quiet --ignore-unmatch --sparse" },
     "git mv": { s: "fknv", l: "--force --dry-run --verbose" },
-    "git stash": { s: "uakqpS", v: "m", l: "--include-untracked --all --keep-index --no-keep-index --quiet --message --index --staged --patch --stat --name-only --name-status --no-include-untracked --only-untracked", ops: "list show push pop apply drop save" },
+    // Left out: -p/--patch (interactive: without a terminal it waits or fails, sixth review R6-5).
+    "git stash": { s: "uakqS", v: "m", l: "--include-untracked --all --keep-index --no-keep-index --quiet --message --index --staged --stat --name-only --name-status --no-include-untracked --only-untracked", ops: "list show push pop apply drop save" },
     // Left out: -s/--strategy, -X/--strategy-option (run `git-merge-NAME`), -e/--edit, -S/--gpg-sign.
     "git merge": { s: "nqv", v: "mF", l: "--no-ff --ff --ff-only --squash --no-squash --commit --no-commit --no-edit --abort --continue --quit --message --file --stat --no-stat --log --no-log --quiet --verbose --allow-unrelated-histories --no-verify --verify --signoff --no-signoff --progress --no-progress --autostash --no-autostash --no-gpg-sign --rerere-autoupdate --no-rerere-autoupdate --into-name" },
     // Left out: -s/-u/--sign/--local-user and -v/--verify (gpg), -e/--edit.
@@ -395,7 +430,13 @@ export function inGitDir(target: string, cwd: string, root: string, host: HookHo
  * - every config file git reads (`git config --list --show-origin`: includes, includeIf,
  *   GIT_CONFIG_GLOBAL/SYSTEM) is outside `root` or inside a `.git` folder, none comes from the
  *   command line or environment (GIT_CONFIG_PARAMETERS/COUNT), and `core.hooksPath` is not a folder
- *   inside `root` outside `.git` (husky's `.husky`: its scripts are ordinary project files).
+ *   inside `root` outside `.git` (husky's `.husky`: its scripts are ordinary project files) — unless
+ *   the git command (`args`, the words after `git`) runs none of the hooks found there (R10-1). From
+ *   githooks(5) and tried with git 2.43 and Apple git 2.54: `log`, `show`, `rev-parse`, `ls-files`,
+ *   `blame` and a `branch` that only lists run no hook; `status` and `diff` refresh the index and run
+ *   `post-index-change` when it exists; everything else (commit, merge, checkout, rebase, am, a ref
+ *   update's `reference-transaction`, `gc --auto`'s `pre-auto-gc` …) is not judged and asks. The
+ *   folder is looked at when the command is judged: a hook written later is judged with the next call.
  *
  * Anything git cannot answer (no repository, safe.directory refusal, no git) is not trusted.
  * Not covered: config that names a program inside the folder (`filter.x.clean = ./clean.sh`, an alias
@@ -403,7 +444,7 @@ export function inGitDir(target: string, cwd: string, root: string, host: HookHo
  *
  * Self-contained on purpose (its source goes into the hook script).
  */
-export function gitRepositoryTrusted(dir: string, root: string, host: HookHost): boolean {
+export function gitRepositoryTrusted(dir: string, root: string, host: HookHost, args: readonly string[] = []): boolean {
   if (!host.git) return false;
   let current = dir;
   try { current = host.realpath(host.resolve(dir)); } catch { return false; }
@@ -446,7 +487,14 @@ export function gitRepositoryTrusted(dir: string, root: string, host: HookHost):
     const entry = fields[at + 1]!;
     if (!origin.startsWith("file:") || !safe(origin.slice(5), current)) return false;
     const newline = entry.indexOf("\n");
-    if (newline > 0 && entry.slice(0, newline).toLowerCase() === "core.hookspath" && !safe(entry.slice(newline + 1), topLevel || current)) return false;
+    if (newline > 0 && entry.slice(0, newline).toLowerCase() === "core.hookspath" && !safe(entry.slice(newline + 1), topLevel || current)) {
+      const listing = ["--show-current", "--list", "-l", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--no-color"];
+      const hooks = ["log", "show", "rev-parse", "ls-files", "blame"].includes(args[0] ?? "") || (args[0] === "branch" && args.slice(1).every((arg) => listing.includes(arg))) ? []
+        : args[0] === "status" || args[0] === "diff" ? ["post-index-change"] : undefined;
+      const folder = host.resolve(topLevel || current, entry.slice(newline + 1));
+      // Any entry by that name (a file, a link, even a dangling one) counts as a hook.
+      if (!hooks || hooks.some((name) => host.exists(host.join(folder, name)))) return false;
+    }
   }
   return true;
 }
@@ -471,19 +519,30 @@ export function hookDecision(command: string, cwd: string, root: string, host: H
   if (!command) return undefined;
   const words = staticCommandWords(command);
   if (words ? riskyWords(words) : riskyCommand(command)) return "ask";
+  // Chains: bashCommandAllowed checks .git writes and paths of its own steps itself.
   if (root && bashCommandAllowed(command, cwd, root, host)) return "allow";
-  if (host.runtimePrograms) return undefined;
-  if (!words) return "ask";
-  const length = preapprovedPrefix(words, prefixes);
-  if (!length || !optionsAllowed(words)) return "ask";
-  const args = words.slice(length);
-  // gh names API paths (`/repos/x`), not files: its files are `@FILE` values and download folders.
-  const ghFiles = () => args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : /^-D./u.test(arg) ? [arg.slice(2)] : []);
-  if (!argumentsStayInside(words[0] === "gh" ? ghFiles() : args, cwd, root, host)) return "ask";
-  // R6-1: writes into a git directory, and git in a folder that only looks like a repository.
+  if (!words) return host.runtimePrograms ? undefined : "ask";
+  // gh: `-R`/`--repo` before the subcommand moves after it, so every spelling of a read gets the same
+  // answer (P8-1). gh names API paths (`/repos/x`), not files: its files are `@FILE` values and
+  // download folders.
+  const gh = words[0] === "gh";
+  const normalized = [...words];
+  if (gh) while (normalized[2] === "-R" || normalized[2] === "--repo" || normalized[2]?.startsWith("--repo=") || /^-R./u.test(normalized[2] ?? "")) normalized.push(...normalized.splice(2, normalized[2] === "-R" || normalized[2] === "--repo" ? 2 : 1));
+  const length = preapprovedPrefix(normalized, prefixes);
+  const args = normalized.slice(gh ? 2 : length || 1);
+  const files = gh ? args.flatMap((arg, at) => arg.includes("@") ? [arg.slice(arg.indexOf("@"))] : arg.startsWith("--dir=") ? [arg.slice(6)] : (arg === "-D" || arg === "--dir") && at + 1 < args.length ? [args[at + 1]!] : /^-D./u.test(arg) ? [arg.slice(2)] : []) : args;
+  // Checks every program gets, before any program's own rule (PR #8 review P8-3: the gh rule answered
+  // "allow" first and skipped them, so `gh run download -D .git/hooks` passed). R6-1: a write into a
+  // git directory asks, with the switch on too.
   const readers = ["git", "cat", "head", "tail", "ls", "rg", "wc", "jq", "file", "stat", "du", "lsof", "echo", "pwd", "ffprobe"];
-  if (!readers.includes(words[0]!) && args.some((arg) => [arg, arg.slice(arg.indexOf("=") + 1), arg.replace(/^@/u, "")].some((value) => inGitDir(value, cwd, root, host)))) return "ask";
-  if (words[0] === "git" && !gitRepositoryTrusted(cwd, root, host)) return "ask";
+  if (!readers.includes(words[0]!) && files.some((arg) => [arg, arg.slice(arg.indexOf("=") + 1), arg.replace(/^@/u, "")].some((value) => inGitDir(value, cwd, root, host)))) return "ask";
+  const inside = argumentsStayInside(files, cwd, root, host);
+  // gh that riskyWords let through reads (P8-1): pre-approved here, with the switch on or off.
+  if (gh) return length && optionsAllowed(normalized) && inside ? "allow" : "ask";
+  if (host.runtimePrograms) return undefined;
+  if (!length || !optionsAllowed(words) || !inside) return "ask";
+  // R6-1: git in a folder that only looks like a repository.
+  if (words[0] === "git" && !gitRepositoryTrusted(cwd, root, host, words.slice(1))) return "ask";
   return undefined;
 }
 
@@ -640,7 +699,7 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
         writes = false;
       }
     }
-    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, rootReal, host));
+    if (program === "git") return gitSubcommands.has(args[0] ?? "") && optionsAllowed(segment) && pathArgsOk(args.slice(1), dirs) && [...dirs].every((dir) => gitRepositoryTrusted(dir, rootReal, host, args));
     if (program === "find") return findAllowed(args, dirs);
     if (packageManagers.has(program)) {
       if (!host.runtimePrograms) return false;

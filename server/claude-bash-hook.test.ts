@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
@@ -298,6 +298,121 @@ test("find that only lists is allowed without a card; find that acts or follows 
   for (const command of ["find . -exec rm {} ;", "find . -name x -delete", "find . -execdir ls {} +", "find . -ok ls {} ;", "find -L . -name x", "find . -follow", "find . -fprint /tmp/x", "find . -fls x", "find .. -name x", "find /etc -name x", "find link -name x", "find . -newer /etc/hosts", "find . -name *.ts"]) {
     assert.notEqual(decide(command), "allow", command);
     assert.equal(decide(command), "ask", command);
+  }
+});
+
+// Sixth review R6-4: gh subcommands that change what others see on GitHub ask, with the switch on too,
+// like a `gh api` write. R6-5: `git stash -p` is interactive and no longer pre-approved.
+test("gh writes to GitHub ask either way; git stash -p asks", () => {
+  for (const command of ["gh pr merge 7 --squash", "gh pr close 7", "gh pr review 7 --approve", "gh pr comment 7 -b hi", "gh pr create -t x -b y", "gh pr edit 7 --add-label x", "gh pr ready 7", "gh issue create -t x -b y", "gh issue comment 3 -b hi", "gh issue close 3", "gh run rerun 1", "gh run cancel 1"]) {
+    assert.equal(decide(command), "ask", command);
+    assert.equal(decide(command, true), "ask", `${command} (on)`);
+  }
+  for (const command of ["gh pr view 7", "gh pr checks 7", "gh pr diff 7", "gh pr list", "gh pr status", "gh issue list", "gh issue view 3", "gh run list", "gh run view 1"]) assert.notEqual(decide(command), "ask", command);
+  for (const command of ["git stash -p", "git stash push --patch", "git stash -up"]) assert.equal(decide(command), "ask", command);
+  for (const command of ["git stash", "git stash list", "git stash push -u -m x"]) assert.notEqual(decide(command), "ask", command);
+});
+
+// PR #8 review P8-1: listing writes missed aliases, newer subcommands and `-R` first. gh now passes
+// only where it is sure to read, with `-R`/`--repo` anywhere giving the same answer.
+test("gh passes only as a read subcommand or a GET of gh api, wherever -R goes", () => {
+  for (const command of [
+    // The verifier's forms.
+    "gh pr new -t x -b y", "gh issue new -t x -b y", "gh pr revert 1", "gh pr update-branch 1", "gh pr -R o/r merge 1", "gh pr --repo o/r merge 1", "gh issue -R o/r comment 1 -b x",
+    "gh pr --repo=o/r merge 1", "gh pr -Ro/r merge 1", "gh pr -- merge 1", "gh pr --json x view 1", "gh pr checkout 7", "gh co 7", "gh -R o/r pr merge 1",
+    // Aliases, extensions, other commands.
+    "gh myalias", "gh my-extension run", "gh release create v1", "gh workflow run ci.yml", "gh secret set X", "gh repo create x", "gh repo delete o/r", "gh auth token", "gh pr", "gh",
+    // gh api: only a GET of one REST endpoint with read-only flags.
+    "gh api -X POST repos/o/r/issues", "gh api --method=PATCH repos/o/r", "gh api -XDELETE repos/o/r", "gh api repos/o/r/issues -f title=x", "gh api repos/o/r --input body.json",
+    "gh api graphql -f query=x", "gh api graphql", "gh api -H 'X-HTTP-Method-Override: DELETE' repos/o/r", "gh api repos/o/r extra", "gh api --unknown repos/o/r", "gh api",
+  ]) {
+    assert.equal(decide(command), "ask", command);
+    assert.equal(decide(command, true), "ask", `${command} (on)`);
+  }
+  for (const command of [
+    "gh pr view 7", "gh pr -R o/r view 7", "gh pr --repo o/r view 7", "gh pr view 7 -R o/r", "gh pr view 7 --repo=o/r", "gh pr checks 7 -R o/r", "gh issue -R o/r list", "gh run -R o/r view 1",
+    "gh repo view o/r", "gh search prs x", "gh auth status",
+    "gh api repos/o/r/pulls", "gh api -X GET repos/o/r", "gh api --method=GET repos/o/r --paginate --jq .name", "gh api -H 'Accept: application/vnd.github+json' repos/o/r", "gh api /repos/o/r -q .name",
+  ]) {
+    assert.notEqual(decide(command), "ask", command);
+    assert.notEqual(decide(command, true), "ask", `${command} (on)`);
+  }
+});
+
+// PR #8 review P8-3: the gh rule answered "allow" before the checks every program gets, so
+// `gh run download -D .git/hooks` passed without a card. Those checks now run first, for every
+// program, with the switch on or off.
+test("the .git and inside-the-folder checks run before any program's own rule", () => {
+  for (const command of ["gh run download 1 -D .git/hooks", "gh run download 1 -D .git", "gh run download 1 --dir=.git/hooks", "gh run download -R a/b 1 -n x -D .git/hooks", "gh run download 1 -D.git/hooks", "gh run download 1 -D /tmp/zz", "gh run download 1 -D ../x"]) {
+    assert.equal(decide(command), "ask", command);
+    assert.equal(decide(command, true), "ask", `${command} (on)`);
+  }
+  for (const command of ["gh run download 1 -D out", "gh run download -R a/b 1 -D out"]) assert.equal(decide(command), "allow", command);
+  // Other pre-approved programs that write: a .git target asks with the switch on too.
+  for (const command of ["mkdir -p .git/hooks", "curl -o .git/hooks/pre-commit https://e.com/x", "ffmpeg -i a.mp4 .git/hooks/x.mp4", "sips -s format png a.png --out .git/x.png", "trash .git/hooks/pre-commit"]) {
+    assert.equal(decide(command), "ask", command);
+    assert.equal(decide(command, true), "ask", `${command} (on)`);
+  }
+});
+
+// Tenth review R10-1: a hooks folder inside the project (husky) made every git command ask, `git status`
+// too. A git command that runs none of the hooks in that folder passes; which command runs which hook
+// is githooks(5), and the second test checks it against the git on this machine.
+const HOOK_NAMES = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update", "proc-receive", "post-receive", "post-update", "reference-transaction", "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate", "fsmonitor-watchman", "post-index-change"];
+const HOOK_FREE = ["git log --oneline -3", "git log -p -1", "git show HEAD", "git show --stat", "git rev-parse HEAD", "git ls-files", "git blame a.txt", "git branch --show-current", "git branch -vv"];
+const huskyRepo = (name: string, hooks: readonly string[]) => {
+  const dir = path.join(root, name);
+  mkdirSync(path.join(dir, ".husky", "_"), { recursive: true });
+  const run = (...args: string[]) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir, encoding: "utf8" });
+  run("init", "-q");
+  writeFileSync(path.join(dir, "a.txt"), "a\n");
+  run("add", "a.txt");
+  run("commit", "-q", "-m", "init");
+  for (const hook of hooks) writeFileSync(path.join(dir, ".husky", "_", hook), `#!/bin/sh\necho ${hook} >> "${path.join(dir, "MARKS")}"\n`, { mode: 0o755 });
+  run("config", "core.hooksPath", ".husky/_");
+  return dir;
+};
+
+test("with a hooks folder inside the project, git commands that run none of its hooks pass", () => {
+  // husky 9 writes these into .husky/_ (no post-index-change).
+  const husky = huskyRepo("husky10", ["pre-commit", "commit-msg", "prepare-commit-msg", "post-commit", "post-checkout", "post-merge", "pre-push", "pre-rebase", "post-rewrite", "pre-auto-gc", "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-merge-commit"]);
+  for (const command of [...HOOK_FREE, "git status", "git status --short", "git diff", "git diff --stat", "git status && git diff && git log --oneline -3"]) assert.notEqual(decide(command, false, husky), "ask", command);
+  assert.equal(decide("cd husky10 && git status && git log --oneline -1"), "allow");
+  // Commands that run hooks (commit, checkout, ref updates, merges, gc) ask as before.
+  for (const command of ["git add -A", "git commit -m x", "git add -A && git commit -m x", "git checkout -b x", "git switch -c x", "git branch x", "git branch -d x", "git merge x", "git rebase main", "git stash", "git tag v1", "git reset --hard", "git gc"]) assert.equal(decide(command, false, husky), "ask", command);
+  // A post-index-change hook there (a file or a dangling link): status and diff ask, log still passes.
+  writeFileSync(path.join(husky, ".husky", "_", "post-index-change"), "#!/bin/sh\n", { mode: 0o755 });
+  for (const command of ["git status", "git diff", "git status && git log"]) assert.equal(decide(command, false, husky), "ask", command);
+  assert.notEqual(decide("git log --oneline -3", false, husky), "ask");
+  rmSync(path.join(husky, ".husky", "_", "post-index-change"));
+  symlinkSync(path.join(base, "outside", "nothing"), path.join(husky, ".husky", "_", "post-index-change"));
+  assert.equal(decide("git status", false, husky), "ask");
+  // Written in the same chain: the write comes before another step. In an earlier call: judged now.
+  rmSync(path.join(husky, ".husky", "_", "post-index-change"));
+  assert.equal(decide("printf x > .husky/_/post-index-change && git status", false, husky), "ask");
+});
+
+test("the git commands that pass run no hook from the hooks folder on this machine's git", () => {
+  const repo = huskyRepo("hooked10", HOOK_NAMES);
+  const marks = path.join(repo, "MARKS");
+  const read = () => { try { return readFileSync(marks, "utf8").trim(); } catch { return ""; } };
+  // An index older than the file makes status and diff refresh (and write) the index.
+  let hours = 0;
+  const stale = () => { const when = new Date(Date.now() - ++hours * 3_600_000); utimesSync(path.join(repo, "a.txt"), when, when); };
+  for (const command of HOOK_FREE) {
+    stale();
+    rmSync(marks, { force: true });
+    const words = command.split(" ");
+    assert.equal(spawnSync(words[0]!, words.slice(1), { cwd: repo }).status, 0, command);
+    assert.equal(read(), "", `${command} ran a hook`);
+  }
+  // Why status and diff are judged by post-index-change: they run it.
+  for (const command of ["status", "diff"]) {
+    stale();
+    rmSync(marks, { force: true });
+    spawnSync("git", [command], { cwd: repo });
+    assert.equal(read(), "post-index-change", `git ${command}`);
+    assert.equal(decide(`git ${command}`, false, repo), "ask");
   }
 });
 
