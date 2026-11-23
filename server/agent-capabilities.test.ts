@@ -6,7 +6,9 @@ test("the lead sees every allowed CLI, what it can do, and who is not on the tea
   const catalog = capabilityCatalog(["claude", "codex", "grok"], ["grok", "codex"]);
   assert.match(catalog, /누구에게 맡길지는 당신이 판단합니다/);
   assert.match(catalog, /- claude \(팀에 없음: 위임하면 앱이 워커를 만든다\): .*\/design.*disable-model-invocation/);
-  assert.match(catalog, /사용자가 선택.*로컬 디자인 스킬/);
+  assert.match(catalog, /담당이 골라 브리프에 적은 로컬 디자인 스킬/);
+  assert.match(catalog, /Artifact 도구가 있으면 Claude 아티팩트로 시안/);
+  assert.doesNotMatch(catalog, /사용자가 선택/);
   assert.match(catalog, /HTML.*목업/);
   assert.match(catalog, /사용자.*터미널.*선택.*수동/);
   assert.match(catalog, /- grok \(지금 팀에 있음\): .*이미지·영상 생성/);

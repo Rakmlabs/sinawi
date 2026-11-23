@@ -121,8 +121,12 @@ test("slash completion offers built-in commands only, never installed skills", a
   assert.deepEqual(composer.commandItems("frontend-design"), []);
 });
 
-test("skill recommendations become reply buttons with exact names and reasons", () => {
-  assert.deepEqual(numberedOptions("이 작업에 어떤 스킬을 쓸까요?\n1. open-design — 랜딩·브랜드 시안 HTML\n2. frontend-design — UI 컴포넌트 구현\n3. 스킬 없이 진행"), [
-    "open-design — 랜딩·브랜드 시안 HTML", "frontend-design — UI 컴포넌트 구현", "스킬 없이 진행",
+test("user decision choices become reply buttons with exact labels and reasons", () => {
+  assert.deepEqual(numberedOptions("어느 방향으로 갈까요?\n1. 카드형 — 한눈에 보기\n2. 목록형 — 촘촘하게\n3. 둘 다 시안으로"), [
+    "카드형 — 한눈에 보기", "목록형 — 촘촘하게", "둘 다 시안으로",
   ]);
+});
+
+test("a lead's one-line skill notice is not a question and makes no reply buttons", () => {
+  assert.deepEqual(numberedOptions("스킬: open-design — 랜딩 시안에 맞음\n시안을 만들도록 위임했습니다."), []);
 });

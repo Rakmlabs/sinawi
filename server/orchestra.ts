@@ -87,7 +87,8 @@ const skillSlug = (name: string) => name.trim().toLowerCase().replace(/[^a-z0-9-
 
 /** delegate_task kind "design": the worker shows its result, so the lead (and the chat) can see it. */
 export const DESIGN_BRIEF = `## 디자인 작업
-- 브리프의 \`스킬:\` 줄에 사용자가 선택한 로컬 디자인 스킬이 있으면 그 지침을 사용하세요. 선택한 스킬이 없으면 프로젝트의 기존 패턴과 일반 HTML/목업 아티팩트로 완성하세요.
+- 브리프의 \`스킬:\` 줄에 담당이 고른 로컬 디자인 스킬이 있으면 그 지침을 사용하세요. 적힌 스킬이 없으면 프로젝트의 기존 패턴으로 완성하세요.
+- Artifact 도구가 있으면 Claude 아티팩트로 시안을 만들어 링크를 보고하세요(시안이 여럿이면 한 페이지에 나란히). 도구가 없으면 HTML/목업 시안을 만드세요.
 - Claude Design /design은 disable-model-invocation 때문에 모델/Skill 도구로 호출할 수 없습니다. 동의로 해결되지 않으므로 먼저 실행하거나 재시도하지 마세요. 사용자 터미널의 대화형 /design은 선택 사항이며 필수가 아닙니다.
 - /design이 없거나 막혀도 작업을 실패 처리하거나 재위임하지 마세요. 필요하면 선택 사항이라는 참고를 한 번만 남기고 로컬 목업으로 마무리하세요.
 - 화면을 만들거나 고친 뒤 실제로 띄워 브라우저(ao-browser)로 열고 확인하세요.
@@ -709,11 +710,11 @@ export class Orchestra {
     if (requiresGrokMedia && (session.agent !== "grok" || !this.mediaPolicyOn(session.workspaceId))) requiresGrokMedia = false;
     const disabledSkills = workspaceToolSettings(await loadToolSettings(this.usageDataDir), session.workspaceId).disabledSkills;
     const skills = await resolveSkillPrompt(skillIds, session.cwd, disabledSkills, this.accountsOf(session.workspaceId));
-    // Installed names let the lead recommend skills before the user chooses them.
+    // Installed names let the lead pick skills itself and name them in its briefs.
     const installedSkills = filterEnabledSkills(await loadSkills(session.cwd, false, this.accountsOf(session.workspaceId)).catch(() => []), disabledSkills);
     const preferredIds = new Set(this.stewardOf(session)?.skills ?? []);
     const preferredNames = installedSkills.filter((skill) => preferredIds.has(skill.id)).map((skill) => skill.name);
-    const skillPreferences = preferredNames.length ? `\n\n공간 기본 선호 스킬은 ${preferredNames.join(", ")}입니다. 추천에만 참고하고, 이번 요청에서 사용자가 선택하기 전에는 지침을 적용하거나 워커에게 첨부하지 마세요.` : "";
+    const skillPreferences = preferredNames.length ? `\n\n공간 기본 선호 스킬은 ${preferredNames.join(", ")}입니다. 이번 작업에 맞으면 사용자에게 묻지 말고 이 스킬을 먼저 골라 브리프의 \`스킬:\` 줄에 적으세요. 맞지 않거나 사용자가 스킬 없이 하라고 하면 쓰지 않습니다.` : "";
     const mediaPrompt = this.workspacePolicyResolver?.(session.workspaceId).mediaPrompt;
     if (!this.isCurrentRun(session, controller.signal)) return;
     let plan = "";

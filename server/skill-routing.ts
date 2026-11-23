@@ -1,7 +1,7 @@
 import type { AgentId } from "./types.js";
 import type { SkillRecord } from "./skills.js";
 
-/** The lead recommends installed skills first; workers receive the user's choices in their brief. */
+/** The lead picks installed skills itself and names them in the brief; workers open what the brief names. */
 
 const CATALOG_LIMIT = 200;
 const DESCRIPTION_CHARS = 120;
@@ -31,13 +31,10 @@ export function skillCatalog(skills: readonly Skill[]): string {
   }
   if (!lines.length) return "";
   return `\n\n## 설치된 스킬
-작업에 설치된 스킬이 도움이 되면 먼저 관련 스킬 2–3개를 정확한 설치 이름과 각각 한 줄 이유로 사용자에게 추천한다(관련 스킬이 하나뿐이면 하나와 스킬 없이 진행을 제시한다). 이름을 알리지 않고 자동으로 사용하지 않는다. 공간 기본 선호 스킬은 추천 판단에 참고할 뿐 자동 선택이 아니며, 이번 요청에서 쓸 이름을 알린다.
-추천은 마지막에 연속된 1. 2. 3. 번호 목록으로 쓰고, 바로 앞이나 뒤 질문은 반드시 물음표(?)로 끝낸다. 목록 뒤에 다른 설명이나 위임 블록을 붙이지 말고 사용자 선택을 기다린다. 예:
-이 작업에 어떤 스킬을 쓸까요?
-1. 설치된-정확한-이름 — 이 작업에 도움이 되는 한 줄 이유
-2. 다른-설치된-이름 — 다른 접근의 한 줄 이유
-3. 스킬 없이 진행
-사용자가 고른 뒤에만 각 <<DELEGATE>> 브리프 첫 줄에 \`스킬: 선택한이름1, 선택한이름2\`를 쓴다. 같은 요청의 관련 후속 위임 브리프에도 사용자가 선택한 스킬 이름을 유지한다. 버튼의 이름·이유 전체, 번호만 쓴 답, 직접 입력한 이름 모두 앞선 추천에 대응시킨다. 사용자가 처음부터 스킬 이름을 지정했다면 그 선택을 알리고 바로 진행한다. 스킬 없이 진행을 고르면 스킬 줄을 생략한다. 맞는 스킬이 없으면 추천이나 스킬 줄 없이 진행한다.
+스킬은 담당이 직접 고른다. 사용자에게 어떤 스킬을 쓸지 묻거나 번호 목록으로 추천하지 않고, 선택을 기다리며 멈추지 않는다.
+작업에 맞는 설치된 스킬이 있으면 아래 목록에서 가장 잘 맞는 것 1–2개를 골라 각 <<DELEGATE>> 브리프 첫 줄에 \`스킬: 고른이름1, 고른이름2\`로 쓰고 바로 진행한다. 고른 스킬은 진행 메시지에 \`스킬: 이름 — 한 줄 이유\`로 한 줄만 알린다(질문이 아니다). 같은 요청의 관련 후속 위임 브리프에도 같은 스킬 이름을 유지한다.
+맞는 스킬이 없으면 스킬 줄 없이 그대로 진행한다. 사용자가 스킬 이름을 지정했거나 스킬을 쓰지 말라고 했으면 그 말을 그대로 따른다. 공간 기본 선호 스킬이 있으면 이번 작업에 맞을 때 그것을 먼저 고른다.
+디자인·시안·목업·화면 개선 요청이면 목록의 디자인 스킬 중 맞는 것을 고르고, Claude 워커에게는 Artifact 도구가 있으면 Claude 아티팩트로 시안을 만들어 링크를 주게 한다(도구가 없으면 HTML 시안).
 [claude] 같은 표시는 스킬을 기본으로 가진 CLI다. 다른 CLI 워커에게는 앱이 지침을 붙여 넘긴다. Claude Design \`/design\`은 disable-model-invocation이라 목록에서 제외한다.
 ${lines.join("\n")}`;
 }
@@ -87,7 +84,7 @@ export function workerSkillInstructions(brief: string, skills: readonly Skill[],
     else attached.push({ name, skill });
   }
   const parts: string[] = [];
-  if (requestedClaudeDesign) parts.push("Claude Design `/design`은 disable-model-invocation 때문에 headless 모델이나 Skill 도구로 호출하지 않는다. 디자인은 브리프에서 함께 선택한 로컬 스킬로 완성하고, 선택한 로컬 스킬이 없으면 프로젝트의 기존 패턴과 HTML·목업 아티팩트를 사용한다. 사용자가 자기 터미널에서 대화형 `/design`을 여는 것은 선택 가능한 수동 단계다.");
+  if (requestedClaudeDesign) parts.push("Claude Design `/design`은 disable-model-invocation 때문에 headless 모델이나 Skill 도구로 호출하지 않는다. 디자인은 브리프에 함께 적힌 로컬 스킬로 완성하고, 적힌 로컬 스킬이 없으면 프로젝트의 기존 패턴과 Claude 아티팩트(Artifact 도구가 있을 때) 또는 HTML·목업을 사용한다. 사용자가 자기 터미널에서 대화형 `/design`을 여는 것은 선택 가능한 수동 단계다.");
   if (native.length) parts.push(`작업을 시작하기 전에 다음 스킬을 ${OPEN_HOW[agent]}: ${native.map((name) => `\`${name}\``).join(", ")}. 구현 단계에서도 그 지침을 따르고, 스킬이 요구하는 준비 단계를 건너뛰지 않는다.`);
   let remaining = ATTACH_CHARS;
   const bodies: string[] = [];
@@ -101,7 +98,7 @@ export function workerSkillInstructions(brief: string, skills: readonly Skill[],
   }
   if (bodies.length) parts.push(`이 CLI에는 없는 스킬이라 지침을 붙인다. 그대로 따른다.\n${bodies.join("\n\n")}`);
   if (missing.length) parts.push(`설치되지 않은 스킬(무시하고, 보고에 적는다): ${missing.join(", ")}`);
-  return { text: parts.length ? `\n\n## 이 작업에 쓸 스킬 (사용자가 선택, 앱이 붙임)\n${parts.join("\n\n")}` : "", attachedSkills };
+  return { text: parts.length ? `\n\n## 이 작업에 쓸 스킬 (브리프에 적힘, 앱이 붙임)\n${parts.join("\n\n")}` : "", attachedSkills };
 }
 
 /** Text-only compatibility entry point for callers that do not verify invocation traces. */

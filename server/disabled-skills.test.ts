@@ -111,7 +111,7 @@ test("MCP skill listing and delegation respect workspace disabled skills", async
   assert.deepEqual(delegated.missing_skills, [skill.name]);
 });
 
-test("steward default preferences inform recommendations without injecting unchosen instructions", async () => {
+test("steward default preferences are picked by the lead itself, never injected before it names them", async () => {
   const { cwd, skill } = await fixture();
   const prompts: RunCliOptions[] = [];
   const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
@@ -123,7 +123,10 @@ test("steward default preferences inform recommendations without injecting uncho
   const session = await orchestra.create({ prompt: "스킬 없이 진행", agent: "codex", cwd, steward: { id: steward.id } });
   await settled(session);
   assert.ok(prompts.every(({ prompt }) => !prompt.includes("SECRET_SKILL_INSTRUCTIONS")));
-  assert.match(prompts.find((options) => options.usageContext?.role === "orchestrator")!.prompt, /기본 선호 스킬.*private-fixture/);
+  const leadPrompt = prompts.find((options) => options.usageContext?.role === "orchestrator")!.prompt;
+  assert.match(leadPrompt, /기본 선호 스킬.*private-fixture/);
+  assert.match(leadPrompt, /사용자에게 묻지 말고 이 스킬을 먼저 골라/);
+  assert.doesNotMatch(leadPrompt, /사용자가 선택하기 전에는/);
   prompts.length = 0;
   // Restored threads may still contain the defaults injected by older versions.
   orchestra.restore([{ ...session, skills: [skill.id] }], [steward]);

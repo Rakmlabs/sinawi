@@ -5,9 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { DESIGN_BRIEF, Orchestra } from "./orchestra.js";
 
-test("design briefs only require local skills selected in the worker brief", () => {
-  assert.match(DESIGN_BRIEF, /브리프.*선택.*로컬 디자인 스킬/);
-  assert.match(DESIGN_BRIEF, /선택한 스킬이 없으면.*프로젝트.*패턴/);
+test("design briefs use the local skill the lead named and prefer Claude artifacts", () => {
+  assert.match(DESIGN_BRIEF, /브리프.*담당이 고른 로컬 디자인 스킬/);
+  assert.match(DESIGN_BRIEF, /적힌 스킬이 없으면.*프로젝트.*패턴/);
+  assert.match(DESIGN_BRIEF, /Artifact 도구가 있으면 Claude 아티팩트로 시안[^\n]*링크/);
+  assert.match(DESIGN_BRIEF, /도구가 없으면 HTML\/목업 시안/);
 });
 import type { RunCliOptions } from "./cli.js";
 
@@ -89,7 +91,7 @@ for (const toolBased of [false, true]) test(`blocked /design does not fail a fin
       workerCalls++;
       assert.ok(options.prompt.includes(DESIGN_BRIEF));
       assert.match(options.prompt, /disable-model-invocation/);
-      assert.match(options.prompt, /사용자가 선택한 로컬 디자인 스킬/);
+      assert.match(options.prompt, /담당이 고른 로컬 디자인 스킬/);
       assert.doesNotMatch(options.prompt, /RUN_HEADLESS_DESIGN_FIRST/);
       options.onLine({ type: "tool", text: "Skill design cannot be used with Skill tool due to disable-model-invocation" });
       options.onLine({ type: "tool", text: "Write: /tmp/mockup.html" });
