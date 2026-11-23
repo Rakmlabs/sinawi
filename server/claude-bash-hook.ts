@@ -682,6 +682,9 @@ export function bashCommandAllowed(command: string, cwd: string, root: string, h
       return true;
     }
     if (plainPrograms.has(program)) return true;
+    // Sinawi's own server list: it only asks the app which servers run (no files, no code), as the
+    // simple `ao-serve list` already passes. start/stop/logs stay out of chains.
+    if (program === "ao-serve") return args.length === 1 && args[0] === "list";
     if (pathPrograms.has(program)) {
       // R6-1: the programs here that write (`mkdir`, `touch`, `sort -o`) never write into a git directory.
       if ((program === "mkdir" || program === "touch" || program === "sort") && args.some((arg) => [...dirs].some((dir) => inGitDir(arg.slice(arg.indexOf("=") + 1), dir, rootReal, host)))) return false;

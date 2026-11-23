@@ -14,13 +14,35 @@ export type PermissionRequest = { id: string; sessionId: string; workspaceId: st
 /** The server's `permissions` WebSocket message, re-sent as a window event. */
 export const PERMISSIONS_EVENT = "orchestra:permissions";
 
-type Props = { workspaceId: string; activeSessionId?: string; sessionTitle: (id: string) => string | undefined; onOpenSession: (id: string) => void };
+type Props = {
+  workspaceId: string; activeSessionId?: string; sessionTitle: (id: string) => string | undefined; onOpenSession: (id: string) => void;
+  /** The card may offer "switch this chat to full access": the workspace allows it and the chat runs in auto mode. */
+  canSwitchToFull?: (sessionId: string) => boolean;
+};
+
+/** "Switch this chat to full access" shows where the workspace allows it and the chat runs in auto mode (not plan, not already full). */
+export function canSwitchChatToFull(fullAccessAllowed: boolean, chatMode: "plan" | "auto" | "full" | undefined): boolean {
+  return fullAccessAllowed && (chatMode ?? "auto") === "auto";
+}
+
+/**
+ * The mode a new chat starts in: full access where the workspace allows it (the user turned that on
+ * for this space), auto otherwise. An opened chat keeps its own mode; this never changes one.
+ */
+export function newChatPermissionMode(fullAccessAllowed: boolean): "auto" | "full" {
+  return fullAccessAllowed ? "full" : "auto";
+}
+
+/** The answer the card sends: allow, deny, or allow and switch the chat to full access. */
+export function permissionAnswerBody(choice: "allow" | "deny" | "full"): { allow: boolean; fullAccess?: true } {
+  return choice === "full" ? { allow: true, fullAccess: true } : { allow: choice === "allow" };
+}
 
 /**
  * Questions a running agent is waiting on ("may I read this folder / run this command?"). The run
  * is paused until the user answers here; the server refuses unanswered ones after a while.
  */
-export function PermissionPrompts({ workspaceId, activeSessionId, sessionTitle, onOpenSession }: Props) {
+export function PermissionPrompts({ workspaceId, activeSessionId, sessionTitle, onOpenSession, canSwitchToFull }: Props) {
   const [requests, setRequests] = useState<PermissionRequest[]>([]);
   const [answering, setAnswering] = useState<string>();
   const load = useCallback(async () => {
@@ -39,12 +61,13 @@ export function PermissionPrompts({ workspaceId, activeSessionId, sessionTitle, 
     return () => window.removeEventListener(PERMISSIONS_EVENT, pushed);
   }, [load, workspaceId]);
 
-  const answer = async (id: string, allow: boolean) => {
+  const answer = async (id: string, choice: "allow" | "deny" | "full") => {
     setAnswering(id);
     try {
-      const res = await fetch(`/api/permissions/${encodeURIComponent(id)}/answer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ allow }) });
+      const res = await fetch(`/api/permissions/${encodeURIComponent(id)}/answer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(permissionAnswerBody(choice)) });
       if (!res.ok) window.dispatchEvent(new CustomEvent(APP_ERROR_EVENT, { detail: ((await res.json().catch(() => ({}))) as { error?: string }).error || res.statusText }));
-      setRequests((old) => old.filter((item) => item.id !== id));
+      // Switching answers the chat's other open questions too; the server's push refreshes the rest.
+      if (res.ok || choice !== "full") setRequests((old) => old.filter((item) => item.id !== id));
     } finally { setAnswering(undefined); }
   };
 
@@ -72,8 +95,9 @@ export function PermissionPrompts({ workspaceId, activeSessionId, sessionTitle, 
           <code className="perm-detail">{item.detail}</code>
           {isRuntimeCommand(item.detail) && <p className="perm-meta perm-hint">{t("perm.runtimeHint")} <button type="button" className="link-button" onClick={() => openSettings("workspaces", "ws-runtime-programs")}>{t("perm.runtimeOpen")}</button></p>}
           <div className="perm-actions">
-            <button type="button" className="perm-deny" disabled={answering === item.id} onClick={() => void answer(item.id, false)}>{t("perm.deny")}</button>
-            <button type="button" className="perm-allow" disabled={answering === item.id} onClick={() => void answer(item.id, true)} autoFocus={item.sessionId === activeSessionId}>{t("perm.allow")}</button>
+            <button type="button" className="perm-deny" disabled={answering === item.id} onClick={() => void answer(item.id, "deny")}>{t("perm.deny")}</button>
+            {canSwitchToFull?.(item.sessionId) && <button type="button" className="perm-full" disabled={answering === item.id} title={t("perm.fullHint")} onClick={() => void answer(item.id, "full")}>{t("perm.full")}</button>}
+            <button type="button" className="perm-allow" disabled={answering === item.id} onClick={() => void answer(item.id, "allow")} autoFocus={item.sessionId === activeSessionId}>{t("perm.allow")}</button>
           </div>
         </div>
       ))}

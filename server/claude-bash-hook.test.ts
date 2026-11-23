@@ -42,6 +42,21 @@ test("compound commands of safe programs inside the worker folder are pre-approv
   ]) assert.equal(allowed(command), true, command);
 });
 
+// A lead looking around: Sinawi's server list and reads joined by `&&`, `;` and `|` pass without a
+// card, with the workspace switch on or off. Other ao-serve subcommands and reads outside still ask.
+test("read-only chains with ao-serve list are pre-approved; other ao-serve steps and outside folders are not", () => {
+  const chain = `cd ${root} && ao-serve list; ls a.txt src; grep -n -A8 "X" a.txt | head -14; grep -n "a\\|b" a.txt | head`;
+  for (const runtimePrograms of [false, true]) {
+    const options = { runtimePrograms };
+    assert.equal(allowed(chain, root, options), true, `switch ${runtimePrograms}: ${chain}`);
+    assert.equal(hookDecision(chain, root, root, { ...host, runtimePrograms }, DEVELOPMENT_SHELL_PROGRAMS), "allow");
+    for (const command of [
+      "ao-serve start web -- node x.js; ls", "ao-serve stop web && ls", "ao-serve logs web | head", "ls && ao-serve list --all",
+      "ao-serve list > out.txt; cat out.txt", `cd ${path.join(base, "outside")} && ao-serve list; ls`, "cd /etc && ao-serve list; cat passwd",
+    ]) assert.equal(allowed(command, root, options), false, `switch ${runtimePrograms}: ${command}`);
+  }
+});
+
 // Eighth review R8-1: one chain wrote sub/HEAD and sub/commondir, then ran `cd sub && git diff`; the
 // hook judged the chain before it ran (no HEAD yet) and git ran diff.external. A chain now passes only
 // when no step writes before another step runs (the last step may write; with `|` or `&` none may).

@@ -1153,6 +1153,8 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   registerPermissionRoutes(app, {
     broadcast: (payload) => { const message = JSON.stringify(payload); for (const client of openClients()) client.send(message); },
     onRequest: (request) => notify({ workspaceId: request.workspaceId, type: "permission", key: `permission:${request.id}`, title: `에이전트가 권한을 묻습니다: ${request.toolName}`, body: request.detail, action: { label: "세션 열기", sessionId: request.sessionId } }),
+    switchToFullAccess: (sessionId) => { orchestra.switchToFullAccess(sessionId); },
+    fullAccessActive: (sessionId) => orchestra.fullAccessActive(sessionId),
   });
   app.post("/api/sessions", async (req, res) => {
     try {
