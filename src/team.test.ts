@@ -23,3 +23,8 @@ test("network failures are recognised and not real request errors", () => {
   assert.ok(isNetworkFailure("Failed to fetch"));
   assert.ok(!isNetworkFailure("Codex CLI를 시작할 수 없습니다."));
 });
+
+test("changing a worker's CLI never leaves an id that names another CLI", () => {
+  const next = changeWorkerConfig([{ id: "grok", label: "Grok Build", agent: "grok" as const }], 0, { agent: "claude", model: "opus" });
+  assert.deepEqual(next.map(({ id, agent }) => ({ id, agent })), [{ id: "claude", agent: "claude" }]);
+});

@@ -112,7 +112,10 @@ test("a worker the app cut off is the lead's call: a lead that verifies the work
 for (const command of ["명령: ao-browser screenshot --out docs/evidence.png", "파일 읽기: docs/evidence.png"]) {
   test(`a lead stops repeated verification: ${command}`, async () => {
     let stopped = false;
+    const prompts: string[] = [];
     const runner = async (options: RunCliOptions) => {
+      prompts.push(options.prompt);
+      stopped = false;
       for (let i = 0; i < 5; i++) {
         options.onLine({ type: "tool", text: command });
         options.onLine({ type: "tool", text: "결과: docs/evidence.png" });
@@ -124,8 +127,11 @@ for (const command of ["명령: ao-browser screenshot --out docs/evidence.png", 
     const session = await orchestra.create({ prompt: "화면 검증", agent: "claude", workers: ["claude"], cwd: process.cwd() });
     await settle(session);
     assert.equal(stopped, true);
+    // Cut once, the lead is told what looped and goes on; looping again ends the turn.
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[1], /같은 경로·같은 명령을 다시 시도하지 말고/u);
     assert.equal(session.status, "error", "cut verification must not claim completion");
-    assert.match(session.events.at(-1)?.text ?? "", /검증.*반복|반복.*검증/);
+    assert.match(session.events.at(-1)?.text ?? "", /총괄 실행 반복을 멈췄습니다/);
   });
 }
 
@@ -186,4 +192,29 @@ test("delegate_task reports a rejected verification as a warning and a failed co
   assert.equal(workers, 2);
   assert.ok(session.events.some((event) => event.type === "warning" && /증거.*반복/.test(event.text)), "background failure must be visible even before collection");
   assert.equal(session.status, "done", "the lead can report the blocked task without an uncaught rejection");
+});
+
+test("a lead run cut for looping goes on once in the same conversation and can finish the request", async () => {
+  const prompts: { prompt: string; resume?: string }[] = [];
+  const runner = async (options: RunCliOptions) => {
+    prompts.push({ prompt: options.prompt, resume: options.resumeSessionId });
+    if (prompts.length === 1) {
+      options.onLine({ type: "status", text: "CLI 세션 연결됨", sessionId: "lead-conversation" });
+      for (let i = 0; i < 3 && !options.signal?.aborted; i++) {
+        options.onLine({ type: "tool", text: "파일 읽기: /repo/apps/web/.env" });
+        options.onLine({ type: "tool", text: `결과: Error: /repo/apps/web/.env does not exist. (${i})`, failed: true });
+      }
+      return { exitCode: options.signal?.aborted ? 143 : 0, finalText: "", sessionId: "lead-conversation" };
+    }
+    return { exitCode: 0, finalText: "분석 결과: 환경 파일 없이 코드에서 API 주소를 찾았습니다.", sessionId: "lead-conversation" };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "웹 분석", agent: "grok", workers: ["claude"], cwd: process.cwd() });
+  await settle(session);
+  assert.equal(session.status, "done");
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1].resume, "lead-conversation");
+  assert.match(prompts[1].prompt, /같은 실패의 반복을 감지/u);
+  assert.ok(session.events.some((event) => event.type === "warning" && /총괄 실행 반복을 멈췄습니다/u.test(event.text)));
+  assert.ok(!session.events.some((event) => event.type === "error"));
 });

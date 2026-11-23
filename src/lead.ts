@@ -1,6 +1,6 @@
 // The project lead in the UI (server/steward.ts): its name, the line under it in the sidebar, and
 // the messages the app puts in its chat for it (another lead's question or answer, the daily report).
-import type { Session, Steward } from "../server/types";
+import type { AgentId, Session, Steward } from "../server/types";
 import { conversationText } from "./conversation";
 
 /** The name the user gave the lead, or its project folder's name (as the server's stewardName). */
@@ -136,4 +136,16 @@ export function leadGroups(sessions: Session[], stewards: Steward[] = []): LeadG
 export function threadTabs(sessions: Session[], stewardId: string): Session[] {
   return sessions.filter((session) => session.steward && (session.steward.id ?? session.id) === stewardId && !session.parentId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/**
+ * What a new chat of `lead` sends as its own team: nothing while the team bar still shows the lead's
+ * team (the server uses the lead's), the agent and model the user picked there when they changed it
+ * (this chat only). A lead whose agent the workspace has turned off sends nothing either: the server
+ * then runs the composer's team and says why (Orchestra.fitTeam).
+ */
+export function leadOverride(lead: Pick<Steward, "agent" | "model"> | undefined, agent: AgentId, model: string, allowed: readonly AgentId[]): { agent?: AgentId; model?: string } {
+  if (!lead || !allowed.includes(lead.agent)) return {};
+  if (lead.agent === agent && (lead.model ?? "") === model) return {};
+  return { agent, ...(model ? { model } : {}) };
 }

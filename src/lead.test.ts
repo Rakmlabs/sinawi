@@ -76,3 +76,14 @@ test("the lead row says which chat spoke last and its first sentence, not a raw 
   assert.equal(leadSummary([a]), "검증했습니다.", "one chat: the row below already names it");
   assert.equal(leadSummary([b]), "");
 });
+
+test("a lead's new chat sends its own team only when the user changed the team bar", async () => {
+  const { leadOverride } = await import("./lead");
+  const lead = { agent: "claude" as const, model: "opus" };
+  assert.deepEqual(leadOverride(lead, "claude", "opus", ["claude", "grok"]), {});
+  assert.deepEqual(leadOverride(lead, "grok", "", ["claude", "grok"]), { agent: "grok" });
+  assert.deepEqual(leadOverride(lead, "claude", "sonnet", ["claude"]), { agent: "claude", model: "sonnet" });
+  // A lead whose agent is off: the server runs the composer's team and says why.
+  assert.deepEqual(leadOverride({ agent: "grok" }, "claude", "opus", ["claude"]), {});
+  assert.deepEqual(leadOverride(undefined, "claude", "opus", ["claude"]), {});
+});

@@ -386,14 +386,27 @@ export function failureSignature(text: string, known = false): string | undefine
   const cut = hit ? head.indexOf(":", hit.index + hit[0].length) : -1;
   // Keep the message when the part before ":" is only a label like "오류" / "Error".
   if (cut > 0 && cut >= 10) head = head.slice(0, cut);
+  // "X does not exist" for three different files is looking around, not one failure repeating: a
+  // missing path keeps which path it was. Other failures still collapse their paths.
+  const missing = missingTarget.test(head);
   return head
-    .replace(/(["'`])(?:(?!\1).){0,400}\1/gu, "<q>")
-    .replace(/(?:\/[\w.@-]+){2,}/gu, "<path>")
+    .replace(/(["'`])((?:(?!\1).){0,400})\1/gu, (_match, _quote, inner: string) => missing && /[/.]/u.test(inner) ? pathTag(inner) : "<q>")
+    .replace(/(?:\/[\w.@-]+){2,}/gu, (path) => missing ? pathTag(path) : "<path>")
     .replace(/https?:\/\/\S+/gu, "<url>")
     .replace(/\b0x[0-9a-f]+\b|\d+(?:\.\d+)?/giu, "#")
     .replace(/\s+/gu, " ")
     .toLowerCase()
     .slice(0, 160);
+}
+
+/** Failures about a file or path that is not there. */
+const missingTarget = /does not exist|doesn't exist|no such file|not found|cannot find|could not find|찾을 수 없|존재하지 않/iu;
+
+/** A short letters-only tag for one path (digits would be folded into "#" below). */
+function pathTag(path: string): string {
+  let hash = 0;
+  for (const char of path) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+  return `<path:${hash.toString(26).replace(/[0-9]/gu, (digit) => "qrstuvwxyz"[Number(digit)])}>`;
 }
 
 /** `/bin/zsh -lc "cat a; sed b"` → `cat a; sed b`: the wrapper says nothing about what ran. */
@@ -478,6 +491,8 @@ export class StallDetector {
     // CLIs sometimes echo the same tool result twice in a row; count it once.
     if (line.text === this.lastText) return;
     this.lastText = line.text;
+    // A native file read (Claude's and Grok's Read tool) is a read command, like `cat`.
+    line = { ...line, text: line.text.replace(/^파일 읽기:\s*/u, "명령: read ") };
     if (!["tool", "command", "error", "warning"].includes(line.type)) return;
     const structured = structuredCommand(line.text.trim());
     const commandMatch = structured ? undefined : /^명령:\s*(.+)$/su.exec(line.text.trim());
@@ -498,7 +513,9 @@ export class StallDetector {
       this.familyRun = READ_ONLY_FAMILIES.has(family) ? { family: "", count: 0 }
         : family === this.familyRun.family ? { family, count: this.familyRun.count + 1 } : { family, count: 1 };
     } else if (signature) {
-      this.failuresSinceSuccess++;
+      // Reading a file that is not there (several candidates at once, like .env, .env.local) is how an
+      // agent looks around: it never counts toward "no success", only the same path again does (below).
+      if (!(failure?.includes("<path:") && READ_ONLY_FAMILIES.has(this.lastFamily))) this.failuresSinceSuccess++;
     } else if (line.type === "tool" || line.type === "command") {
       // A tool result without a failure marker counts as progress.
       this.failuresSinceSuccess = 0;

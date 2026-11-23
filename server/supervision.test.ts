@@ -389,3 +389,33 @@ test("rules open with the language rule, and a worker is told that ending its tu
   assert.doesNotMatch(WORKER_RULES, /총괄은 질문에는 직접 답하고/u, "the lead's line stays out of a worker's rules");
   assert.match(ORCHESTRATOR_RULES, /몇 분 이상 걸리는 명령은 총괄이 직접 돌리며 기다리지 않고 워커에게 맡긴다/u);
 });
+
+test("several missing files read at once are looking around, not one error repeating (v1.7.2 report)", () => {
+  // Grok read .env, .env.development and .env.local in one go; none existed. The three paths used to fold into
+  // one "<path> does not exist" signature and cut the whole run as "the same error 3 times".
+  const detector = new StallDetector();
+  const base = "/Users/me/project/apps/web";
+  for (const name of [".env", ".env.development", ".env.local"]) assert.equal(detector.observe({ type: "tool", text: `파일 읽기: ${base}/${name}` }), undefined);
+  for (const name of [".env.development", ".env.local", ".env"]) {
+    assert.equal(detector.observe({ type: "tool", text: `결과: Error: ${base}/${name} does not exist. Similar entries in parent directory: .env.dev, .env.example, .env.desktop Note: your current working directory is /Users/me/project`, failed: true }), undefined, name);
+  }
+  // Two more candidates are still exploration, not "five failures without a success".
+  for (const name of [".env.production", ".env.test"]) {
+    detector.observe({ type: "tool", text: `파일 읽기: ${base}/${name}` });
+    assert.equal(detector.observe({ type: "tool", text: `결과: Error: ${base}/${name} does not exist.`, failed: true }), undefined, name);
+  }
+  assert.notEqual(failureSignature(`Error: ${base}/.env does not exist.`), failureSignature(`Error: ${base}/.env.local does not exist.`));
+  assert.notEqual(failureSignature("cat: '/a/b/x.txt': No such file or directory"), failureSignature("cat: '/a/b/y.txt': No such file or directory"));
+  // Other failures still fold their paths: the same permission error on two files is one failure.
+  assert.equal(failureSignature("Error: EACCES: permission denied, open /a/b/one"), failureSignature("Error: EACCES: permission denied, open /a/b/two"));
+});
+
+test("the same missing path read again and again is still a loop", () => {
+  const detector = new StallDetector();
+  let fired;
+  for (let i = 0; i < 3; i++) {
+    detector.observe({ type: "tool", text: `파일 읽기: /repo/apps/web/.env` });
+    fired = detector.observe({ type: "tool", text: `결과: Error: /repo/apps/web/.env does not exist. (try ${i})`, failed: true });
+  }
+  assert.equal(fired?.kind, "repeated-error");
+});
