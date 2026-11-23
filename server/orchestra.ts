@@ -15,7 +15,7 @@ import { LEAD_TOOLS_GUIDE, LEAD_WAIT_LIMIT_SEC } from "./lead-tools.js";
 import { capabilityCatalog } from "./agent-capabilities.js";
 import { workerInvocationWarnings } from "./worker-invocation.js";
 import { briefSkillNames, isHeadlessClaudeDesign, skillCatalog, workerSkillInstructions } from "./skill-routing.js";
-import type { AgentId, AgentSelection, ResumeOrigin, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
+import type { AgentId, AgentSelection, WorkspaceDefaults, ResumeOrigin, Bot, CommanderGoal, GoalItem, ConversationInput, ConversationSettings, PermissionMode, Session, SessionDraft, SessionEvent, StartSessionInput, UpdateTeamInput, StewardDelivery, Steward, MergePolicy, ScheduleCard } from "./types.js";
 import type { ProviderQuota } from "./quota.js";
 import { equivalentFallbackModel, exhaustionFromQuota, isQuotaExhaustion, selectQuotaFallback } from "./quota-fallback.js";
 
@@ -45,6 +45,13 @@ const STOPPED = Symbol("stopped");
 class WorkerFeatureError extends Error {}
 /** A failure the chat already shows in its own words (a sign-in error): the turn ends without repeating it. */
 class AlreadyShownError extends Error {}
+/** A chat's team as fitTeam sees it. */
+type TeamChoice = { agent: AgentId; model?: string; reasoningEffort?: string; workers: AgentId[]; workerConfigs?: AgentSelection[]; planner?: AgentSelection };
+
+/** The app stopped a lead run that kept failing the same way (StallDetector). */
+class LeadStallError extends Error {
+  constructor(message: string, readonly stall: StallSignal) { super(message); }
+}
 const guardKey = (sessionId: string, workerId: string) => `${sessionId}:${workerId}`;
 
 /** What a lead's tools need from the turn that is running (Orchestra.leadTurns). */
@@ -334,6 +341,8 @@ export class Orchestra {
   computerHalt?: (sessionId: string, since: number) => "denied" | "stopped" | undefined;
   /** Set by the server: confirms a missing CLI is installed and logged in before a lead adds it. */
   workerReadiness?: WorkerReadinessResolver;
+  /** Set by the server: the workspace's default team (agent, model, workers), used when a saved team names an agent it no longer allows. */
+  workspaceDefaults?: (workspaceId: Session["workspaceId"]) => WorkspaceDefaults | undefined;
   /** Time of the last session event per running session (see quietLimitMs). */
   private lastEventAt = new Map<string, number>();
   /**
@@ -486,6 +495,16 @@ export class Orchestra {
     this.assertPolicy(session.workspaceId, [session.agent, ...session.workers, ...(session.planner ? [session.planner.agent] : [])]);
   }
 
+  /** Moves a chat whose team names a now-disallowed agent onto an allowed team (fitTeam), with a note. */
+  private fitSessionTeam(session: Session): void {
+    const fitted = this.fitTeam(session.workspaceId, { agent: session.agent, model: session.model, reasoningEffort: session.reasoningEffort, workers: session.workers, workerConfigs: session.workerConfigs, planner: session.planner });
+    if (!fitted.notice) return;
+    const from = session.agent;
+    this.applyTeam(session, fitted.team, from !== fitted.team.agent ? { auto: false, from, to: fitted.team.agent, reason: "작업 공간 설정" } : undefined);
+    if (!fitted.team.planner) delete session.planner;
+    this.event(session, session.agent, "status", fitted.notice);
+  }
+
   /**
    * `legacyMergePolicy`: what migrated leads get (StewardSettings); "auto" when unset.
    * `defaultWorkspaceId`: where a lead saved before leads were per workspace goes when it has no chat.
@@ -605,7 +624,7 @@ export class Orchestra {
       // A caller may pick this one thread's own CLI and model (an outside orchestrator: "do it with Codex").
       ...requested, ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}),
       ...(requested.steward?.agent || requested.steward?.model
-        ? { agent: requested.steward.agent ?? entity.agent, model: requested.steward.model, reasoningEffort: undefined }
+        ? { agent: requested.steward.agent ?? entity.agent, model: requested.steward.model, reasoningEffort: requested.reasoningEffort }
         : { agent: entity.agent, model: entity.model, reasoningEffort: entity.reasoningEffort }),
       ...(entity.workers.length ? { workers: entity.workers.map((worker) => worker.agent), workerConfigs: structuredClone(entity.workers) } : {}),
       systemPrompt: entity.systemPrompt, skills: requested.skills ?? [],
@@ -617,6 +636,12 @@ export class Orchestra {
       const fallback = this.defaultTeam(input.workspaceId ?? "personal", input.agent || undefined);
       input = { ...input, agent: input.agent || fallback.agent, ...(input.workers?.length ? {} : { workers: fallback.workers, workerConfigs: undefined }) };
     }
+    // A saved team (the lead's) or a caller's pick may name an agent this workspace does not allow:
+    // the chat runs with what the user has picked now (or the workspace default) instead of failing.
+    const fitted = this.fitTeam(input.workspaceId ?? "personal",
+      { agent: input.agent, model: input.model, reasoningEffort: input.reasoningEffort, workers: input.workers ?? [], workerConfigs: input.workerConfigs, planner: input.planner },
+      requested.agent ? { agent: requested.agent, model: requested.model, reasoningEffort: requested.reasoningEffort } : undefined);
+    if (fitted.notice) input = { ...input, ...fitted.team };
     if (!entity && input.steward?.name?.trim()) this.assertStewardNameFree(input.steward.name.trim().slice(0, 80), undefined, input.workspaceId ?? "personal");
     const workspaceId = input.workspaceId ?? "personal";
     // No first message: an empty chat that waits for one (followup starts its first turn).
@@ -674,6 +699,7 @@ export class Orchestra {
     }
     this.configs.set(session.id, { skills: selectedSkills, systemPrompt: input.systemPrompt ?? "" });
     if (empty) {
+      if (fitted.notice) this.event(session, agent, "status", fitted.notice);
       this.event(session, agent, "status", `빈 채팅을 열었습니다. 메시지를 보내면 ${withJosa(agentNames[agent], "으로/로")} 시작합니다.`);
       if (session.steward) this.event(session, agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
       return session;
@@ -681,6 +707,7 @@ export class Orchestra {
     const controller = new AbortController();
     this.controllers.set(session.id, controller);
     this.event(session, agent, "status", `${agentNames[agent]} 세션을 시작했습니다.`);
+    if (fitted.notice) this.event(session, agent, "status", fitted.notice);
     if (session.steward) this.event(session, agent, "status", stewardStartText(this.stewardOf(session)?.mergePolicy));
     this.event(session, "user", "message", input.prompt, input.origin ? { metadata: { via: { ...input.origin } } } : {});
     if (mediaRequest && !mediaOn) this.mediaPolicyNotice(session);
@@ -755,7 +782,19 @@ export class Orchestra {
     // Tag-based leads need the same per-turn loop detection as stewards with MCP tools.
     if (!planMode) this.leadTurns.set(session.id, turn);
     const prompt = `${systemPrompt ? `${systemPrompt}\n\n` : ""}${orchestration}${goalContext}${stewardContext}${toolsGuide}${skills}${planningContext}${handoffContext}${resumeBrief}${planNotice}\n\n사용자 요청:\n${userPrompt}`;
-    const first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, leadResume, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
+    let first: Awaited<ReturnType<Orchestra["runAgent"]>>;
+    try {
+      first = await this.runAgent(session, session.agent, prompt, session.model, session.reasoningEffort, leadResume, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
+    } catch (error) {
+      if (!(error instanceof LeadStallError) || controller.signal.aborted || planMode) throw error;
+      // The app cut a loop short. The turn goes on once, in the same conversation, told what looped:
+      // the lead usually has another way (a missing .env is no reason to end the whole request).
+      turn.detector = new StallDetector(this.stallOptions);
+      this.event(session, session.agent, "status", "같은 실패가 반복돼 방금 실행을 멈추고, 다른 방법으로 이어 가라고 총괄에게 알렸습니다.", { role: "orchestrator" });
+      const resume = this.leadResumeId(session);
+      const nudge = `앱이 같은 실패의 반복을 감지해 방금 실행을 멈췄습니다: ${error.stall.reason}\n같은 경로·같은 명령을 다시 시도하지 말고, 다른 방법으로 사용자 요청을 이어서 끝내세요. 더 할 방법이 없으면 확인된 것과 막힌 점을 보고하세요.`;
+      first = await this.runAgent(session, session.agent, resume ? nudge : `${prompt}\n\n${nudge}`, session.model, session.reasoningEffort, resume, controller.signal, true, false, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
+    }
     if (controller.signal.aborted) return this.finishStopped(session, controller);
     this.rememberLeadSession(session, first);
     if (first.exitCode !== 0) throw first.loginNeeded ? new AlreadyShownError(first.lastError) : new Error(first.resumeRetryFailed ? resumeRetryFailed(first.lastError) : `${agentNames[session.agent]} CLI가 종료 코드 ${first.exitCode}로 끝났습니다.`);
@@ -857,7 +896,15 @@ export class Orchestra {
       const evidenceNote = evidence.length ? `\n\n앱이 존재를 확인한 증거 파일(내용의 정확성·완료 여부는 별도 판단):\n${evidence.map((file) => `- \`${file}\``).join("\n")}\n이 경로를 사용하세요. 메인 폴더에서 상대 경로가 없다는 이유로 다시 촬영하지 마세요.` : "";
       const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${ORCHESTRATOR_RULES}${skillPreferences}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${evidenceNote}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
       const reviewStart = this.eventCount;
-      let review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
+      let review: Awaited<ReturnType<Orchestra["runAgent"]>>;
+      try {
+        review = await this.runAgent(session, session.agent, reviewText, session.model, session.reasoningEffort, undefined, controller.signal, false, true, "orchestrator", undefined, undefined, undefined, requiresGrokMedia);
+      } catch (error) {
+        if (!(error instanceof LeadStallError) || controller.signal.aborted) throw error;
+        // A review cut for looping still hands the user the workers' reports instead of failing the turn.
+        this.event(session, session.agent, "message", workerResults.join("\n\n"), { role: "orchestrator", metadata: { phase: "worker-report", round } });
+        return this.finish(session);
+      }
       if (controller.signal.aborted) return this.finishStopped(session, controller);
       if (review.exitCode !== 0) throw new Error(`${agentNames[session.agent]} 후속 실행이 종료 코드 ${review.exitCode}로 끝났습니다.`);
       this.noteChecklist(session, review.finalText);
@@ -1338,9 +1385,10 @@ export class Orchestra {
         }
         if (leadDetector && !leadStall) {
           // Native Read calls use a label rather than the shell command label.
-          leadStall = leadDetector.observe({ ...line, text: line.text.replace(/^파일 읽기:\s*/u, "명령: read ") });
+          leadStall = leadDetector.observe(line);
           if (leadStall) {
-            this.event(session, agent, "warning", `총괄 검증 반복을 멈췄습니다: ${leadStall.reason}`, { role, metadata: { phase: "verify-cut" } });
+            // A review run checks the workers' work; any other lead run is the lead doing the task itself.
+            this.event(session, agent, "warning", `${readOnly ? "총괄 검증" : "총괄 실행"} 반복을 멈췄습니다: ${leadStall.reason}`, { role, metadata: { phase: "verify-cut" } });
             leadKill.abort();
           }
         }
@@ -1373,7 +1421,7 @@ export class Orchestra {
       inflight.delete(pending);
       if (!inflight.size && this.inflightRuns.get(session.id) === inflight) this.inflightRuns.delete(session.id);
     }
-    if (leadStall) throw new Error(`총괄 검증 반복을 멈췄습니다: ${leadStall.reason} 확인된 증거와 남은 문제를 사용자에게 보고하고, 다른 진단·방법으로 이어가거나 병합 여부를 물어보세요.`);
+    if (leadStall) throw new LeadStallError(`${readOnly ? "총괄 검증" : "총괄 실행"} 반복을 멈췄습니다: ${leadStall.reason} 확인된 증거와 남은 문제를 사용자에게 보고하고, 다른 진단·방법으로 이어가거나 병합 여부를 물어보세요.`, leadStall);
     // A run the stall guard stopped ended because the app killed it, not because a quota ran out.
     const stoppedByApp = Boolean(guard?.kill.signal.aborted);
     return { ...result, agent, model, reasoningEffort, loginNeeded, outputText: `${output.join("\n")}\n${result.finalText}`, toolText: toolOutput.join("\n"), cliText: `${cliOutput.join("\n")}\n${result.finalText}`, quotaErrorEvidence, stoppedByApp, quotaFailure: false, resumeMissing, lastError, resumeRetried: false, resumeRetryFailed: false };
@@ -1580,7 +1628,8 @@ export class Orchestra {
     delete session.pendingInstructions;
     const mediaRequest = await this.isMediaRequest(prompt, [...(session.skills ?? []), ...skills], session.workspaceId);
     const mediaOn = mediaRequest && this.mediaPolicyOn(session.workspaceId);
-    this.assertSessionPolicy(session);
+    // The chat's team names an agent the workspace has turned off since: carry on with an allowed one.
+    this.fitSessionTeam(session);
     this.assertPermissionMode(session.workspaceId, settings.permissionMode);
     // The answer turn already ended (the user wrote while it settled): answer with that turn, not this one.
     if (session.steward?.answering?.result) this.settleStewardAnswer(session, session.steward.answering.result.outcome);
@@ -2300,7 +2349,9 @@ export class Orchestra {
       }
       if (teamChanged && session.status !== "running" && next.workers.length) {
         try {
-          this.applyTeam(session, { agent: next.agent, model: next.model, reasoningEffort: next.reasoningEffort, workers: next.workers.map((worker) => worker.agent), workerConfigs: structuredClone(next.workers) });
+          const fitted = this.fitTeam(session.workspaceId, { agent: next.agent, model: next.model, reasoningEffort: next.reasoningEffort, workers: next.workers.map((worker) => worker.agent), workerConfigs: structuredClone(next.workers) });
+          this.applyTeam(session, fitted.team);
+          if (fitted.notice) this.event(session, session.agent, "status", fitted.notice);
         } catch (error) {
           this.event(session, session.agent, "warning", `담당의 기본 팀을 이 채팅에 적용하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -2689,6 +2740,43 @@ export class Orchestra {
   }
 
   /** Lead (Claude when allowed) and one worker per allowed agent: what a lead with no team starts with. */
+  /**
+   * The team a chat runs when the one it was given (a lead's saved team, an older chat's team, a
+   * caller's pick) names an agent this workspace does not allow. Never a refusal: the lead becomes
+   * `preferred` (what the user has picked now) when allowed, else the workspace's default agent and
+   * model; disallowed workers are dropped, or replaced by the workspace's default workers, else by the
+   * lead's agent and model. `notice` says what changed; without it the team is unchanged.
+   */
+  private fitTeam(workspaceId: string, team: TeamChoice, preferred?: AgentSelection): { team: TeamChoice; notice?: string } {
+    const allowed = this.allowedAgents({ workspaceId });
+    if (!allowed.length) throw new Error("이 작업공간에서 허용된 에이전트가 없습니다.");
+    const blocked = [...new Set([team.agent, ...team.workers, ...(team.planner ? [team.planner.agent] : [])])].filter((agent) => !allowed.includes(agent));
+    if (!blocked.length) return { team };
+    const defaults = this.workspaceDefaults?.(workspaceId) ?? {};
+    const leadMoved = !allowed.includes(team.agent);
+    const lead: AgentSelection = !leadMoved ? { agent: team.agent, model: team.model, reasoningEffort: team.reasoningEffort }
+      : preferred && allowed.includes(preferred.agent) ? { agent: preferred.agent, model: preferred.model, reasoningEffort: preferred.reasoningEffort }
+      : defaults.agent && allowed.includes(defaults.agent) ? { agent: defaults.agent, model: defaults.model, reasoningEffort: defaults.reasoningEffort }
+      : { agent: allowed.includes("claude") ? "claude" : allowed[0] };
+    const current = normalizeWorkerConfigs(team.workers, team.workerConfigs);
+    let crew = current.filter((worker) => allowed.includes(worker.agent));
+    if (!crew.length) {
+      const fallback = normalizeWorkerConfigs(defaults.workers ?? [], defaults.workerConfigs).filter((worker) => allowed.includes(worker.agent));
+      crew = fallback.length ? fallback : [{ agent: lead.agent, ...(lead.model ? { model: lead.model } : {}), ...(lead.reasoningEffort ? { reasoningEffort: lead.reasoningEffort } : {}) }];
+    }
+    crew = normalizeWorkerConfigs(crew.map((worker) => worker.agent), crew);
+    const planner = team.planner && allowed.includes(team.planner.agent) ? team.planner : undefined;
+    const changes = [
+      ...(leadMoved ? [`총괄은 ${withJosa(agentNames[lead.agent], "으로/로")}${lead.model ? `(${[lead.model, lead.reasoningEffort].filter(Boolean).join(" · ")})` : ""}`] : []),
+      ...(crew.map((worker) => worker.agent).join() !== current.map((worker) => worker.agent).join() ? [`작업자는 ${withJosa(crew.map((worker) => agentNames[worker.agent]).join(", "), "으로/로")}`] : []),
+      ...(team.planner && !planner ? ["분석기는 기본값으로"] : []),
+    ];
+    return {
+      team: { agent: lead.agent, model: lead.model, reasoningEffort: lead.reasoningEffort, workers: crew.map((worker) => worker.agent), workerConfigs: crew, planner },
+      notice: `이 작업 공간에서 ${blocked.map((agent) => agentNames[agent]).join(", ")} 사용이 꺼져 있어 ${changes.join(", ")} 진행합니다.`,
+    };
+  }
+
   private defaultTeam(workspaceId: string, lead?: AgentId): { agent: AgentId; workers: AgentId[]; workerConfigs?: undefined } {
     const allowed = this.allowedAgents({ workspaceId });
     if (!allowed.length) throw new Error("이 작업공간에서 허용된 에이전트가 없습니다.");

@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { isArray, isPlainObject, readJsonFile, writeJsonFile } from "./json-file.js";
 import type { AgentId, Bot, Group, ResumeOrigin, Steward, StewardSettings, Session, ToolSettings, ToolWorkspaceSettings, WorkspaceDefaults, WorkspaceInfo, WorkspacePolicy, WorkspaceState } from "./types.js";
 import { defaultWorkspacePolicy, normalizeWorkspacePolicy } from "./workspace-policy.js";
-import { normalizeWorkerConfigs } from "./workers.js";
+import { normalizeWorkerConfigs, renameAgentNamedWorkers, renameSessionWorkers } from "./workers.js";
 import { defaultDataDir } from "./runtime.js";
 
 const dataDir = defaultDataDir;
@@ -42,7 +42,15 @@ async function saveBots(bots: Bot[], directory: string): Promise<void> {
 
 /** Project leads as their own entities (server/steward.ts); chats point at them by `steward.id`. */
 export async function loadStewards(directory = dataDir): Promise<Steward[]> {
-  return loadArray<Steward>(stewardsFile(directory));
+  const stewards = await loadArray<Steward>(stewardsFile(directory));
+  // Worker ids that name another CLI (before 1.7.2) are renamed once and written back.
+  let migrated = false;
+  for (const steward of stewards) {
+    const { configs, renamed } = renameAgentNamedWorkers(steward.workers);
+    if (renamed.size) { steward.workers = configs; migrated = true; }
+  }
+  if (migrated) await saveStewards(stewards, directory);
+  return stewards;
 }
 
 /** Writes the whole list, in order with any other write of it. */
@@ -110,6 +118,7 @@ async function readSessions(directory: string): Promise<Session[]> {
   sessions.push(...imported);
   const changed = new Set(imported.map((session) => session.id));
   for (const session of sessions) {
+    if (renameSessionWorkers(session)) changed.add(session.id);
     if (!session.workspaceId || session.workerConfigs?.some((worker) => !worker.id || !worker.label) || !session.workerConfigs?.length) changed.add(session.id);
     session.workspaceId ??= "personal";
     session.workerConfigs = normalizeWorkerConfigs(session.workers, session.workerConfigs);
@@ -216,6 +225,8 @@ async function readWorkspaceState(directory: string): Promise<{ state: Workspace
   for (const { id } of workspaces) {
     const value = (storedDefaults as Record<string, unknown>)[id];
     defaults[id] = value && typeof value === "object" && !Array.isArray(value) ? value as WorkspaceDefaults : {};
+    const { configs, renamed } = renameAgentNamedWorkers(defaults[id].workerConfigs);
+    if (renamed.size) { defaults[id].workerConfigs = configs; migrated = true; }
   }
   const storedSettings = stored?.settings && typeof stored.settings === "object" && !Array.isArray(stored.settings) ? stored.settings as Record<string, unknown> : undefined;
   let settings: Record<string, WorkspacePolicy>;

@@ -314,7 +314,7 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "create_session", risk: "write", method: "POST", route: "/api/sessions",
-    description: "새 채팅을 연다. 사용자는 시나위 화면에서 이 채팅을 실시간으로 보고 이어서 말할 수 있다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 채팅(탭)으로 열면 폴더·워크스페이스·지침·기억(노트)은 담당 것을 함께 쓰고, agent·model을 주면 이 채팅만 그 CLI·모델로 돌린다(비우면 담당의 CLI). 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 결과는 wait_for_session으로 기다린다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다.",
+    description: "새 채팅을 연다. 사용자는 시나위 화면에서 이 채팅을 실시간으로 보고 이어서 말할 수 있다. prompt를 주면 첫 메시지로 바로 일을 시작하고, 비우면 아무것도 실행하지 않은 빈 채팅만 만든다(나중에 send_message로 보낸다). 담당(lead_id)의 새 채팅(탭)으로 열면 폴더·워크스페이스·지침·기억(노트)은 담당 것을 함께 쓰고, agent·model을 주면 이 채팅만 그 CLI·모델로 돌린다(비우면 담당의 CLI). 담당 없이 열면 cwd가 필요하고, agent·workers를 비우면 워크스페이스 기본 팀(없으면 허용된 에이전트)을 쓴다. 워크스페이스에서 꺼진 에이전트(담당에 저장된 것 포함)는 거절하지 않고 기본 에이전트·모델로 바꿔 열며, 바꾼 사실을 채팅에 남긴다. 결과는 wait_for_session으로 기다린다. 어떤 팀이 맞을지 모르면 recommend_team을 먼저 부른다.",
     properties: {
       prompt: str("첫 메시지(할 일). 비우면 빈 채팅."),
       title: str("채팅 제목(선택). 비우면 첫 메시지에서 만든다."),

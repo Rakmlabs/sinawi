@@ -714,27 +714,29 @@ test("a chat without a first message opens empty and starts with its first follo
   assert.equal(session.events.filter((event) => event.agent === "user" && event.type === "message").length, 1);
 });
 
-test("company sessions reject Codex in every configured role before starting a CLI", async () => {
+test("company sessions never run Codex in any role: a disallowed pick falls back to an allowed team with a note", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-company-"));
-  let calls = 0;
-  const orchestra = new Orchestra(undefined, async () => {
-    calls += 1;
-    return { exitCode: 0, finalText: "unexpected" };
+  const agents: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => {
+    agents.push(options.agent);
+    return { exitCode: 0, finalText: "done" };
   }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
 
-  await assert.rejects(
-    orchestra.create({ prompt: "blocked orchestrator", agent: "codex", workers: ["claude"], cwd, workspaceId: "company" }),
-    codexBlocked,
-  );
-  await assert.rejects(
-    orchestra.create({ prompt: "blocked worker", agent: "claude", workers: ["codex"], cwd, workspaceId: "company" }),
-    codexBlocked,
-  );
-  await assert.rejects(
-    orchestra.create({ prompt: "blocked planner", agent: "claude", workers: ["grok"], planner: { agent: "codex" }, cwd, workspaceId: "company" }),
-    codexBlocked,
-  );
-  assert.equal(calls, 0);
+  const lead = await orchestra.create({ prompt: "codex orchestrator", agent: "codex", workers: ["claude"], cwd, workspaceId: "company" });
+  await waitUntilSettled(lead);
+  assert.equal(lead.status, "done");
+  assert.equal(lead.agent, "claude");
+  assert.ok(lead.events.some((event) => /Codex 사용이 꺼져 있어 총괄은 Claude로 진행합니다/u.test(event.text)));
+  const worker = await orchestra.create({ prompt: "codex worker", agent: "claude", workers: ["codex"], cwd, workspaceId: "company" });
+  await waitUntilSettled(worker);
+  assert.deepEqual(worker.workers, ["claude"]);
+  assert.equal(worker.workerConfigs?.[0].id, "claude");
+  const planner = await orchestra.create({ prompt: "codex planner", agent: "claude", workers: ["grok"], planner: { agent: "codex" }, cwd, workspaceId: "company" });
+  await waitUntilSettled(planner);
+  assert.equal(planner.planner, undefined);
+  assert.deepEqual(planner.workers, ["grok"]);
+  assert.ok(agents.length >= 3);
+  assert.ok(!agents.includes("codex"));
 });
 
 test("workspace settings can narrow agents and no workspace id forces a restriction", async () => {
@@ -742,38 +744,44 @@ test("workspace settings can narrow agents and no workspace id forces a restrict
   const allowed = (workspaceId: string) => workspaceId === "personal"
     ? ["claude", "grok"] as const
     : ["codex", "claude", "grok"] as const;
-  const orchestra = new Orchestra(undefined, async () => ({ exitCode: 0, finalText: "done" }), undefined, undefined, undefined, allowed);
+  const agents: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => { agents.push(options.agent); return { exitCode: 0, finalText: "done" }; }, undefined, undefined, undefined, allowed);
 
-  await assert.rejects(
-    orchestra.create({ prompt: "personal subset", agent: "codex", workers: ["claude"], cwd, workspaceId: "personal" }),
-    codexBlocked,
-  );
+  const personal = await orchestra.create({ prompt: "personal subset", agent: "codex", workers: ["claude"], cwd, workspaceId: "personal" });
+  await waitUntilSettled(personal);
+  assert.equal(personal.agent, "claude");
+  assert.ok(!agents.includes("codex"));
   const company = await orchestra.create({ prompt: "company allows codex", agent: "codex", workers: ["claude"], cwd, workspaceId: "company" });
   await waitUntilSettled(company);
   assert.equal(company.status, "done");
+  assert.equal(company.agent, "codex");
 });
 
-test("moving an archived Codex session is allowed but company follow-up and team changes are rejected", async () => {
+test("a chat moved where its agent is off carries on with an allowed team; picking that agent by hand is still refused", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-moved-"));
-  let calls = 0;
-  const orchestra = new Orchestra(undefined, async () => {
-    calls += 1;
+  const agents: string[] = [];
+  const orchestra = new Orchestra(undefined, async (options) => {
+    agents.push(options.agent);
     return { exitCode: 0, finalText: "done" };
   }, undefined, undefined, undefined, restrictedAgents, undefined, undefined, undefined, undefined, restrictedPolicy);
   const session = await orchestra.create({ prompt: "personal", agent: "codex", workers: ["claude"], cwd });
   await waitUntilSettled(session);
   orchestra.setWorkspace(session.id, "company");
 
-  await assert.rejects(orchestra.followup(session.id, "blocked"), codexBlocked);
   assert.throws(
     () => orchestra.updateTeam(session.id, { agent: "claude", workers: ["codex"] }),
     codexBlocked,
   );
+  await orchestra.followup(session.id, "carry on");
+  await waitUntilSettled(session);
   assert.equal(session.status, "done");
-  assert.equal(calls, 1);
+  assert.equal(session.agent, "claude");
+  assert.deepEqual(agents, ["codex", "claude"]);
+  assert.ok(session.events.some((event) => event.type === "handoff" && event.metadata?.to === "claude"));
+  assert.ok(session.events.some((event) => /Codex 사용이 꺼져 있어/u.test(event.text)));
 });
 
-test("editing a valid team clears a persisted planner that the workspace now prohibits", async () => {
+test("a follow-up drops a persisted planner that the workspace now prohibits", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "orchestra-stale-planner-"));
   let calls = 0;
   const orchestra = new Orchestra(undefined, async () => {
@@ -785,14 +793,11 @@ test("editing a valid team clears a persisted planner that the workspace now pro
   });
   await waitUntilSettled(session);
   orchestra.setWorkspace(session.id, "company");
-  await assert.rejects(orchestra.followup(session.id, "blocked"), codexBlocked);
-
-  orchestra.updateTeam(session.id, { agent: "claude", workers: ["grok"] });
-  assert.equal(session.planner, undefined);
   await orchestra.followup(session.id, "recovered");
   await waitUntilSettled(session);
+  assert.equal(session.planner, undefined);
   assert.equal(session.status, "done");
-  assert.equal(calls, 3);
+  assert.equal(session.agent, "claude");
 });
 
 test("company bot conversations reject Codex before starting a CLI", async () => {

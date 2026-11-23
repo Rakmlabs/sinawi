@@ -218,9 +218,11 @@ test("workspace settings are validated, merged, cloned into new workspaces and e
 
     const allowedAgents = await request(app, "PATCH", "/api/workspaces", { workspaceId: "media", defaults: { allowedAgents: ["claude"] } });
     assert.equal(allowedAgents.status, 200);
-    const codex = await request(app, "POST", "/api/sessions", { workspaceId: "media", cwd: directory, prompt: "hello", agent: "codex", workers: ["claude"] });
-    assert.equal(codex.status, 400);
-    assert.equal(codex.body.code, "workspace-policy");
+    // A disallowed agent is swapped for the allowed one with a note, not refused (an empty chat: no CLI runs).
+    const codex = await request(app, "POST", "/api/sessions", { workspaceId: "media", cwd: directory, prompt: "", agent: "codex", workers: ["claude"] });
+    assert.equal(codex.status, 201, JSON.stringify(codex.body));
+    assert.equal(codex.body.agent, "claude");
+    assert.ok(codex.body.events.some((event: any) => /Codex 사용이 꺼져 있어 총괄은 Claude로 진행합니다/u.test(event.text)));
 
     const removed = await request(app, "DELETE", "/api/workspaces/media?moveTo=default");
     assert.equal(removed.status, 200);

@@ -473,8 +473,11 @@ test("workspace allowed agents persist and company routing excludes Codex in eve
     assert.ok([routed.body.planner, routed.body.orchestrator, ...routed.body.workers].every((selection) => selection.agent !== "codex"));
     assert.equal(invoked[0].usageContext.workspaceId, "company");
     assert.equal(invoked[0].usageContext.role, "router");
-    const blocked = await request(app, "POST", "/api/sessions", { workspaceId: "company", cwd: directory, prompt: "hello", agent: "codex", workers: ["claude"] });
-    assert.equal(blocked.status, 400);
+    // Asking for a disallowed agent is not refused: the chat gets an allowed one and says why (an empty chat: no CLI runs).
+    const fitted = await request(app, "POST", "/api/sessions", { workspaceId: "company", cwd: directory, prompt: "", agent: "codex", workers: ["codex"] });
+    assert.equal(fitted.status, 201, JSON.stringify(fitted.body));
+    assert.ok(fitted.body.agent !== "codex" && !fitted.body.workers.includes("codex"));
+    assert.ok(fitted.body.events.some((event: any) => /Codex 사용이 꺼져 있어/u.test(event.text)));
     const usage = await request(app, "GET", "/api/usage");
     assert.equal(usage.status, 200);
     assert.deepEqual(usage.body, { runs: [] });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useContext, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { GitMerge, NotebookText, Plus, Settings2, UserCheck, Users, WandSparkles, X } from "lucide-react";
 import type { AgentId, AgentSelection, MergePolicy, PendingMerge, Session, SkillInfo as Skill, Steward } from "../../server/types";
@@ -11,6 +11,7 @@ import { StewardSchedules } from "./StewardSchedules";
 import { names } from "./labels";
 import { t, type MessageKey } from "../i18n";
 import { LEAD_SETTINGS_EVENT } from "./LeadTabs";
+import { WorkspaceAgentPolicy } from "../RoutingControls";
 
 type StewardInfo = {
   notes: string; transcript?: string; turns: number; rolloverAt: number;
@@ -43,6 +44,7 @@ const same = (a: EntityDraft, b: EntityDraft) => JSON.stringify({ ...a, workers:
  * lead's memory, server/steward.ts, so they stay out of the conversation). Refreshed when a turn ends.
  */
 export function StewardPanel({ session, onChange }: { session: Session; onChange?: (session: Session) => void }) {
+  const agentPolicy = useContext(WorkspaceAgentPolicy);
   const [info, setInfo] = useState<StewardInfo>();
   const [name, setName] = useState("");
   const [report, setReport] = useState("");
@@ -142,7 +144,9 @@ export function StewardPanel({ session, onChange }: { session: Session; onChange
   };
   const edit = (patch: Partial<EntityDraft>) => { setDraft((old) => old && { ...old, ...patch }); setStatus(""); };
   const setWorker = (index: number, patch: Partial<AgentSelection>) => edit({ workers: draft!.workers.map((worker, at) => at === index ? { ...worker, ...patch } : worker) });
-  const agentOptions = AGENTS.map((agent) => ({ value: agent, label: names[agent], icon: <AgentMark agent={agent} size="small" /> }));
+  // An agent the workspace has turned off is shown but cannot be picked (a lead's chat would not run it).
+  const agentOptions = AGENTS.map((agent) => ({ value: agent, label: names[agent], icon: <AgentMark agent={agent} size="small" />,
+    ...(agentPolicy && !agentPolicy.allowedAgents.includes(agent) ? { disabled: true, title: t("rt.notInSpace") } : {}) }));
   return <>
     {/* The lead's name, state and settings button live in the tab bar above the chat (LeadTabs). */}
     {status && !settingsOpen && <p className="steward-feedback" role="status">{status}</p>}

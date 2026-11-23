@@ -39,7 +39,7 @@ import { FileViewer } from "../FileViewer";
 import type { MediaRef } from "../viewer-model";
 import { ToolsPanel, toolsShortcut } from "../ToolsPanel";
 import type { WorkspaceId, WorkspaceDefaults, AgentId, AgentSelection, Group, PermissionMode, Session, SessionDraft, SkillInfo as Skill, Bot as Preset, Steward } from "../../server/types";
-import { leadName, stewardDescription, stewardIdOf } from "../lead";
+import { leadName, leadOverride, stewardDescription, stewardIdOf } from "../lead";
 import { LeadTabs, threadTabs } from "./LeadTabs";
 import { showSessionAction } from "./show-session";
 import { originLabel } from "../origin";
@@ -578,7 +578,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
             systemPrompt, mode, autoSwitch, workspaceId, permissionMode: sendMode,
             autoRun: autoRunEnabled(),
             // A chat of an existing lead: the server gives it the lead's instructions, skills, team and merge policy.
-            ...(stewardDraft ? { steward: stewardDraft.id ? { id: stewardDraft.id } : {} } : {}),
+            // The team bar shows the lead's team (pickSteward); a team changed there runs this chat only.
+            ...(stewardDraft ? { steward: stewardDraft.id ? { id: stewardDraft.id, ...leadOverride(chosenSteward, agent, model, allowedAgents) } : {} } : {}),
           }, executeRecommendation ? pendingRecommendation : undefined, setRouting);
           setSessions((old) => [s, ...old.filter((x) => x.id !== s.id)]);
           setSelected(s.id);
@@ -638,12 +639,30 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     return () => { live = false; };
   }, [api, workspaceId, defaultWorkspaceId, stewardKey, stewardDraft !== false]);
   const chosenSteward = stewardDraft && stewardDraft.id ? stewards.find((item) => item.id === stewardDraft.id) : undefined;
+  /** The composer's team before a lead was picked: the lead's team shows while its new chat is written. */
+  const teamBeforeLead = useRef<{ agent: AgentId; model: string; reasoningEffort: string; workers: AgentId[]; workerConfigs: AgentSelection[]; mode: "auto" | "manual" } | undefined>(undefined);
   /** A new chat of an existing lead, opened in the lead's first folder. */
   const pickSteward = (id: string) => {
     setStewardDraft({ id });
-    const folder = stewards.find((item) => item.id === id)?.cwds[0];
-    if (folder) setCwd(folder);
+    const lead = stewards.find((item) => item.id === id);
+    if (lead?.cwds[0]) setCwd(lead.cwds[0]);
+    // The team bar shows what will run: the lead's team. A lead whose agent this workspace has turned
+    // off keeps the composer's team, which is what the server runs then (Orchestra.fitTeam).
+    if (!lead || !allowedAgents.includes(lead.agent)) { restoreComposerTeam(); return; }
+    teamBeforeLead.current ??= { agent, model, reasoningEffort, workers, workerConfigs, mode };
+    const crew = normalizeWorkerConfigs(lead.workers.map((worker) => worker.agent), lead.workers).filter((worker) => allowedAgents.includes(worker.agent));
+    setAgent(lead.agent); setModel(lead.model ?? ""); setReasoningEffort(lead.reasoningEffort ?? ""); setMode("manual");
+    if (crew.length) { setWorkers(crew.map((worker) => worker.agent)); setWorkerConfigs(crew); }
   };
+  function restoreComposerTeam() {
+    const before = teamBeforeLead.current;
+    if (!before) return;
+    teamBeforeLead.current = undefined;
+    setAgent(before.agent); setModel(before.model); setReasoningEffort(before.reasoningEffort);
+    setWorkers(before.workers); setWorkerConfigs(before.workerConfigs); setMode(before.mode);
+  }
+  // Leaving the lead's new chat (sent, cancelled, another chat): the composer's own team comes back.
+  useEffect(() => { if (!chosenSteward) restoreComposerTeam(); }, [chosenSteward]);
   const newSession = () => {
     setStewardDraft(false);
     setSelected(undefined);

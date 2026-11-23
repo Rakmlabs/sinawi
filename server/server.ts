@@ -326,8 +326,12 @@ export function withWorkspaceTeam(input: StartSessionInput, defaults: WorkspaceD
   const workerConfigs = input.workers?.length || input.workerConfigs?.length ? input.workerConfigs
     : defaults.workerConfigs?.length && usable(defaults.workers).length === (defaults.workers?.length ?? 0) ? structuredClone(defaults.workerConfigs) : undefined;
   // A lead's thread keeps its gap for the lead's agent (Orchestra.create).
-  const agentId = input.agent || (input.steward?.id ? input.agent : usable(defaults.agent ? [defaults.agent] : [])[0] ?? (allowed.includes("claude") ? "claude" : allowed[0]));
-  return { ...input, agent: agentId, workers, ...(workerConfigs ? { workerConfigs } : {}) };
+  const defaultAgent = usable(defaults.agent ? [defaults.agent] : [])[0];
+  const agentId = input.agent || (input.steward?.id ? input.agent : defaultAgent ?? (allowed.includes("claude") ? "claude" : allowed[0]));
+  // The workspace's default agent comes with its default model and effort, as the composer shows them.
+  const defaultModel = !input.agent && agentId && agentId === defaultAgent && !input.model 
+    ? { ...(defaults.model ? { model: defaults.model } : {}), ...(!input.reasoningEffort && defaults.reasoningEffort ? { reasoningEffort: defaults.reasoningEffort } : {}) } : {};
+  return { ...input, agent: agentId, ...defaultModel, workers, ...(workerConfigs ? { workerConfigs } : {}) };
 }
 
 export function workspaceDefaults(value: unknown): WorkspaceDefaults {
@@ -600,6 +604,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
     const availability = await Promise.all(ids.map(commandAvailable));
     return ids.filter((_id, index) => availability[index]);
   };
+  orchestra.workspaceDefaults = (id) => workspaceState.defaults[id];
   orchestra.workerReadiness = async (session, agent) => {
     const setup = SETUP_TOOLS.find((tool) => tool.id === agent)!;
     const installed = (await getAvailableAgents()).includes(agent);
