@@ -1681,6 +1681,29 @@ export class Orchestra {
     return session;
   }
 
+  /**
+   * The user's "switch this chat to full access" on an approval card: later turns run with full
+   * access, and the rest of this run's permission questions are allowed (fullAccessActive).
+   * Only where the workspace allows full access.
+   */
+  switchToFullAccess(id: string): Session {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    this.assertPermissionMode(session.workspaceId, "full");
+    if (session.permissionMode !== "full") {
+      session.permissionMode = "full";
+      this.event(session, session.agent, "status", "승인 카드에서 이 채팅을 전체 권한으로 바꿨습니다. 이번 실행의 남은 권한 질문은 묻지 않고 허용하고, 다음 메시지부터 전체 권한으로 실행합니다.");
+      this.broadcast(session);
+    }
+    return session;
+  }
+
+  /** The chat runs with full access now (its mode is full and the workspace still allows it). */
+  fullAccessActive(id: string): boolean {
+    const session = this.sessions.get(id);
+    return Boolean(session && session.permissionMode === "full" && this.permissionModeOf(session) === "full");
+  }
+
   rename(id: string, title: string): Session {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");

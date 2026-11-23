@@ -9,10 +9,12 @@ import { buildInvocation } from "./cli.js";
 import { issueComputerToken } from "./computer-tokens.js";
 import { ensurePermissionServerScript, PERMISSION_TOOL, pendingPermissions, permissionDetail, registerPermissionRoutes, registerRunActivity, unregisterRunActivity } from "./permission-prompts.js";
 
-async function serve(timeoutMs?: number) {
+type FullAccessDeps = { switchToFullAccess?: (sessionId: string) => void; fullAccessActive?: (sessionId: string) => boolean };
+
+async function serve(timeoutMs?: number, extra: FullAccessDeps = {}) {
   const pushed: unknown[] = [];
   const app = express().use(express.json());
-  registerPermissionRoutes(app, { broadcast: (payload) => pushed.push(payload), timeoutMs });
+  registerPermissionRoutes(app, { broadcast: (payload) => pushed.push(payload), timeoutMs, ...extra });
   const server = app.listen(0);
   const port = (server.address() as { port: number }).port;
   const ask = (token: string, body: unknown) => fetch(`http://127.0.0.1:${port}/api/permissions/request`, { method: "POST", headers: { "content-type": "application/json", "x-sinawi-token": token }, body: JSON.stringify(body) }).then(async (res) => ({ status: res.status, body: await res.json() }));
@@ -93,4 +95,51 @@ test("only writable, non-full Claude runs route permission prompts to the app", 
   assert.ok(!buildInvocation({ ...base, readOnly: true }).args.includes("--permission-prompt-tool"));
   assert.ok(!buildInvocation({ ...base, fullAccess: true }).args.includes("--permission-prompt-tool"));
   assert.equal(permissionDetail({ command: "npm run build" }), "npm run build");
+});
+
+test("switch to full access: allows this question and the chat's other ones, and the rest of the run is not asked", async () => {
+  const full = new Set<string>();
+  const switched: string[] = [];
+  const s = await serve(undefined, {
+    switchToFullAccess: (sessionId) => { if (sessionId === "denied-space") throw new Error("이 작업 공간 설정에서 전체 권한 모드가 꺼져 있습니다."); switched.push(sessionId); full.add(sessionId); },
+    fullAccessActive: (sessionId) => full.has(sessionId),
+  });
+  const token = issueComputerToken({ sessionId: "chat-full", workspaceId: "company", agent: "claude" });
+  const worker = issueComputerToken({ sessionId: "chat-full", workspaceId: "company", agent: "claude" });
+  const other = issueComputerToken({ sessionId: "chat-other", workspaceId: "company", agent: "claude" });
+  try {
+    const first = s.ask(token, { tool_name: "Bash", input: { command: "cd /x && ls" } });
+    const second = s.ask(worker, { tool_name: "Bash", input: { command: "grep a f | head" } });
+    const elsewhere = s.ask(other, { tool_name: "Bash", input: { command: "ls" } });
+    for (let i = 0; i < 200 && pendingPermissions().length < 3; i++) await new Promise((r) => setTimeout(r, 10));
+    const mine = pendingPermissions().find((item) => item.detail === "cd /x && ls")!;
+    const res = await fetch(`http://127.0.0.1:${s.port}/api/permissions/${mine.id}/answer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ allow: true, fullAccess: true }) });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true, permissionMode: "full" });
+    assert.deepEqual(switched, ["chat-full"]);
+    assert.equal((await first).body.behavior, "allow");
+    assert.equal((await second).body.behavior, "allow", "the same chat's other open question is answered too");
+    assert.deepEqual(pendingPermissions().map((item) => item.sessionId), ["chat-other"], "another chat still waits");
+    // Later questions of the chat are allowed without a card.
+    assert.deepEqual((await s.ask(token, { tool_name: "Bash", input: { command: "ls b" } })).body, { behavior: "allow", updatedInput: { command: "ls b" } });
+    assert.equal(pendingPermissions().length, 1);
+    const [left] = pendingPermissions();
+    await s.answer(left.id, false);
+    assert.equal((await elsewhere).body.behavior, "deny");
+  } finally { s.close(); }
+});
+
+test("switch to full access is refused where the workspace does not allow it, and the question keeps waiting", async () => {
+  const s = await serve(undefined, { switchToFullAccess: () => { throw new Error("이 작업 공간 설정에서 전체 권한 모드가 꺼져 있습니다."); }, fullAccessActive: () => false });
+  const token = issueComputerToken({ sessionId: "chat-auto", workspaceId: "personal", agent: "claude" });
+  try {
+    const waiting = s.ask(token, { tool_name: "Bash", input: { command: "ls" } });
+    const [request] = await s.waitPending();
+    const res = await fetch(`http://127.0.0.1:${s.port}/api/permissions/${request.id}/answer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ allow: true, fullAccess: true }) });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /전체 권한 모드가 꺼져/);
+    assert.equal(pendingPermissions().length, 1, "nothing was allowed");
+    await s.answer(request.id, false);
+    assert.equal((await waiting).body.behavior, "deny");
+  } finally { s.close(); }
 });

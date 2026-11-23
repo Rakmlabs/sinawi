@@ -84,3 +84,30 @@ test("/compact drops the CLI sessions so the next turn starts fresh from a summa
   assert.equal(next.resumeSessionId, undefined, "no resume after compaction");
   assert.match(next.prompt, /이전 오케스트라의 대화 요약:[\s\S]*첫 요청/);
 });
+
+test("an approval card switches an auto chat to full access only where the workspace allows it", async () => {
+  const calls: RunCliOptions[] = [];
+  const runner = async (options: RunCliOptions) => { calls.push(options); return { exitCode: 0, finalText: "답" }; };
+  const closed = orchestraWith(defaultWorkspacePolicy(), runner);
+  const sandboxed = await closed.create({ prompt: "x", agent: "codex", workers: ["claude"], cwd: process.cwd(), permissionMode: "auto" });
+  await settle(sandboxed);
+  assert.throws(() => closed.switchToFullAccess(sandboxed.id), /전체 권한 모드가 꺼져/);
+  assert.equal(sandboxed.permissionMode, "auto");
+  assert.equal(closed.fullAccessActive(sandboxed.id), false);
+
+  const policy = { ...defaultWorkspacePolicy(), fullAccess: true };
+  const open = orchestraWith(policy, runner);
+  const chat = await open.create({ prompt: "x", agent: "codex", workers: ["claude"], cwd: process.cwd(), permissionMode: "auto" });
+  await settle(chat);
+  assert.equal(open.fullAccessActive(chat.id), false, "an auto chat is not full access");
+  open.switchToFullAccess(chat.id);
+  assert.equal(chat.permissionMode, "full");
+  assert.equal(open.fullAccessActive(chat.id), true);
+  assert.ok(chat.events.some((event) => /전체 권한으로 바꿨습니다/.test(event.text)));
+  await open.followup(chat.id, "계속");
+  await settle(chat);
+  assert.equal(calls.at(-1)?.fullAccess, true, "the next message runs with full access");
+  // Turning the workspace switch off again ends it, whatever the chat's stored mode.
+  policy.fullAccess = false;
+  assert.equal(open.fullAccessActive(chat.id), false);
+});

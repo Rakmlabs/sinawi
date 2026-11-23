@@ -76,7 +76,7 @@ import { QuotaReturnBanner } from "./QuotaReturnBanner";
 import { SessionsView } from "./SessionsView";
 import { TeamBarSlot } from "./TeamBarSlot";
 import { t } from "../i18n";
-import { PermissionPrompts, PERMISSIONS_EVENT } from "../PermissionPrompts";
+import { canSwitchChatToFull, newChatPermissionMode, PermissionPrompts, PERMISSIONS_EVENT } from "../PermissionPrompts";
 import { AppApprovals, APP_APPROVALS_EVENT } from "../AppApprovals";
 import { ComputerUseLayer } from "../ComputerUse";
 import { handleComputerMessage } from "../computer-use";
@@ -144,7 +144,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const [mode, setMode] = useState<"auto" | "manual">(() => defaults.mode ?? "auto");
   const [autoSwitch, setAutoSwitch] = useState(() => defaults.autoSwitch ?? true);
   const fullAccessAllowed = Boolean(workspacesApi.settings[workspaceId]?.fullAccess);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => defaults.permissionMode ?? (workspacesApi.settings[workspaceId]?.fullAccess ? "full" : "auto"));
+  // A new chat starts in full access where the workspace allows it, auto otherwise (newChatPermissionMode).
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => newChatPermissionMode(fullAccessAllowed));
   // "전체 권한" exists only while the workspace allows it.
   const shownPermissionMode: PermissionMode = permissionMode === "full" && !fullAccessAllowed ? "auto" : permissionMode;
   /** The mode to go back to when a plan is executed. */
@@ -292,7 +293,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const [activityOpen, setActivityOpen] = useState(false);
   const active = useMemo(() => sessions.find((s) => s.id === selected), [sessions, selected]);
   // An opened session shows the mode it last ran in.
-  useEffect(() => { if (active?.permissionMode) setPermissionMode(active.permissionMode); }, [active?.id, active?.permissionMode]);
+  // No chat open (a new chat): the workspace's new-chat mode, also right after the full-access switch changes.
+  useEffect(() => {
+    if (active?.permissionMode) setPermissionMode(active.permissionMode);
+    else if (!active) setPermissionMode(newChatPermissionMode(fullAccessAllowed));
+  }, [active?.id, active?.permissionMode, fullAccessAllowed]);
   const shownCwd = active?.cwd ?? cwd;
   const completion = useComposerCompletion(api, shownCwd);
   const { setSlash, setFileCompletion, historyIndex, historyDraft, composerInput } = completion;
@@ -977,7 +982,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                   </div>
                   {showChatBottom && !selectedWorker && <button type="button" className="chat-bottom-button" onClick={() => scrollToChatBottom()}><ArrowDown size={15} />{t("ws.toBottom")}</button>}
                   <PermissionPrompts workspaceId={workspaceId} activeSessionId={active?.id} sessionTitle={(id) => sessions.find((item) => item.id === id)?.title}
-                    onOpenSession={(id) => setSelected(id)} />
+                    onOpenSession={(id) => setSelected(id)} canSwitchToFull={(id) => canSwitchChatToFull(fullAccessAllowed, sessions.find((item) => item.id === id)?.permissionMode)} />
                   <AppApprovals activeSessionId={active?.id} sessionTitle={(id) => sessions.find((item) => item.id === id)?.title} onOpenSession={(id) => setSelected(id)} />
                   {!selectedWorker && <Composer completion={completion} attachments={attachmentState} prompt={prompt} setPrompt={setPrompt}
                     skills={skills} messageSkills={messageSkills} setMessageSkills={setMessageSkills} availableSkills={boot.skills}

@@ -64,7 +64,15 @@ export function permissionDetail(input: unknown): string {
   return json.length > 500 ? `${json.slice(0, 500)}…` : json;
 }
 
-type Deps = { broadcast: (payload: unknown) => void; onRequest?: (request: PermissionRequest) => void; timeoutMs?: number };
+type Deps = {
+  broadcast: (payload: unknown) => void;
+  onRequest?: (request: PermissionRequest) => void;
+  timeoutMs?: number;
+  /** Switches the chat to full access (throws where the workspace does not allow it). */
+  switchToFullAccess?: (sessionId: string) => void;
+  /** The chat already runs with full access: its run's questions are allowed without a card. */
+  fullAccessActive?: (sessionId: string) => boolean;
+};
 
 export function registerPermissionRoutes(app: Express, deps: Deps) {
   const publish = () => deps.broadcast({ type: "permissions", requests: pendingPermissions() });
@@ -77,6 +85,8 @@ export function registerPermissionRoutes(app: Express, deps: Deps) {
     const toolName = typeof req.body?.tool_name === "string" ? req.body.tool_name.slice(0, 200) : "";
     const input = req.body?.input ?? {};
     if (!toolName) { res.status(400).json({ behavior: "deny", message: "Sinawi: tool_name missing" }); return; }
+    // The user switched this chat to full access while the run was going: the rest is allowed.
+    if (deps.fullAccessActive?.(run.sessionId)) { res.json({ behavior: "allow", updatedInput: input }); return; }
     const id = randomUUID();
     let done = false;
     const keepAlive = setInterval(() => activity.get(token)?.(), KEEPALIVE_MS);
@@ -109,6 +119,14 @@ export function registerPermissionRoutes(app: Express, deps: Deps) {
   app.post("/api/permissions/:id/answer", (req, res) => {
     const item = pending.get(req.params.id);
     if (!item) { res.status(404).json({ error: "이미 처리됐거나 끝난 요청입니다." }); return; }
+    if (req.body?.fullAccess === true) {
+      // "Switch this chat to full access": allow this one, the chat's other open questions, and what follows.
+      try { if (!deps.switchToFullAccess) throw new Error("전체 권한으로 바꿀 수 없습니다."); deps.switchToFullAccess(item.sessionId); }
+      catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); return; }
+      for (const other of [...pending.values()]) if (other.sessionId === item.sessionId) other.answer(true);
+      res.json({ ok: true, permissionMode: "full" });
+      return;
+    }
     item.answer(req.body?.allow === true);
     res.json({ ok: true });
   });
