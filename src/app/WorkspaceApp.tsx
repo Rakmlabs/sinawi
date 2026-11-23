@@ -648,20 +648,21 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     if (lead?.cwds[0]) setCwd(lead.cwds[0]);
     // The team bar shows what will run: the lead's team. A lead whose agent this workspace has turned
     // off keeps the composer's team, which is what the server runs then (Orchestra.fitTeam).
-    if (!lead || !allowedAgents.includes(lead.agent)) return;
+    if (!lead || !allowedAgents.includes(lead.agent)) { restoreComposerTeam(); return; }
     teamBeforeLead.current ??= { agent, model, reasoningEffort, workers, workerConfigs, mode };
     const crew = normalizeWorkerConfigs(lead.workers.map((worker) => worker.agent), lead.workers).filter((worker) => allowedAgents.includes(worker.agent));
     setAgent(lead.agent); setModel(lead.model ?? ""); setReasoningEffort(lead.reasoningEffort ?? ""); setMode("manual");
     if (crew.length) { setWorkers(crew.map((worker) => worker.agent)); setWorkerConfigs(crew); }
   };
-  // Leaving the lead's new chat (sent, cancelled, another chat): the composer's own team comes back.
-  useEffect(() => {
+  function restoreComposerTeam() {
     const before = teamBeforeLead.current;
-    if (chosenSteward || !before) return;
+    if (!before) return;
     teamBeforeLead.current = undefined;
     setAgent(before.agent); setModel(before.model); setReasoningEffort(before.reasoningEffort);
     setWorkers(before.workers); setWorkerConfigs(before.workerConfigs); setMode(before.mode);
-  }, [chosenSteward]);
+  }
+  // Leaving the lead's new chat (sent, cancelled, another chat): the composer's own team comes back.
+  useEffect(() => { if (!chosenSteward) restoreComposerTeam(); }, [chosenSteward]);
   const newSession = () => {
     setStewardDraft(false);
     setSelected(undefined);
