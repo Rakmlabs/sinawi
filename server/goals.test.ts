@@ -291,13 +291,13 @@ test("stopping a chat that split its work stops its goal chats and starts no mor
   assert.ok(!chat.events.some((event) => event.text.includes("결과를 정리합니다")), "no summary turn after a stop");
 });
 
-test("goal chats wait at skill choices, preserve open work, and resume on a user pick", async () => {
+test("goal chats wait at user decision choices, preserve open work, and resume on a user pick", async () => {
   for (const withChecklist of [false, true]) {
     let turns = 0;
     const runner = async (options: RunCliOptions) => {
       turns++;
       const finalText = turns === 1
-        ? `${withChecklist ? checklist("- [ ] UI 구현") : ""}\n어떤 스킬을 쓸까요?\n1. frontend-design — UI 구현\n2. 스킬 없이 진행`
+        ? `${withChecklist ? checklist("- [ ] UI 구현") : ""}\n어느 레이아웃으로 할까요?\n1. 카드형 — 한눈에 보기\n2. 목록형 — 촘촘하게`
         : checklist("- [x] UI 구현");
       options.onLine({ type: "message", text: finalText });
       return { exitCode: 0, finalText };
@@ -310,7 +310,7 @@ test("goal chats wait at skill choices, preserve open work, and resume on a user
     assert.equal(session.goal!.stopped, undefined);
     assert.equal(session.goal!.autoTurns, 0);
     if (withChecklist) assert.equal(session.goal!.items[0].status, "open");
-    await orchestra.followup(session.id, "frontend-design 선택");
+    await orchestra.followup(session.id, "카드형");
     await waitFor(() => Boolean(session.goal?.stopped));
     assert.equal(turns, 2);
     assert.equal(session.goal!.outcome, "complete");
@@ -322,9 +322,9 @@ test("goal choice pauses use the complete current answer across streamed chunks"
   const runner = async (options: RunCliOptions) => {
     turns++;
     if (turns === 1) {
-      options.onLine({ type: "message", text: "어떤 스킬을 쓸까요?\n1. first" });
-      options.onLine({ type: "message", text: "\n2. 스킬 없이 진행" });
-      return { exitCode: 0, finalText: `${checklist("- [ ] 구현")}\n어떤 스킬을 쓸까요?\n1. first\n2. 스킬 없이 진행` };
+      options.onLine({ type: "message", text: "어느 쪽으로 할까요?\n1. first" });
+      options.onLine({ type: "message", text: "\n2. second" });
+      return { exitCode: 0, finalText: `${checklist("- [ ] 구현")}\n어느 쪽으로 할까요?\n1. first\n2. second` };
     }
     return { exitCode: 0, finalText: checklist("- [x] 구현") };
   };
@@ -343,7 +343,7 @@ test("a previous choice does not pause later goal turns with no emitted message"
   const runner = async (options: RunCliOptions) => {
     turns++;
     const finalText = turns === 1
-      ? `${checklist("- [ ] 구현")}\n어떤 스킬을 쓸까요?\n1. first\n2. 스킬 없이 진행`
+      ? `${checklist("- [ ] 구현")}\n어느 쪽으로 할까요?\n1. first\n2. second`
       : checklist(turns === 2 ? "- [ ] 구현" : "- [x] 구현");
     if (turns === 1) options.onLine({ type: "message", text: finalText });
     return { exitCode: 0, finalText };
@@ -369,7 +369,7 @@ test("a completed checklist settles even when the answer offers optional next wo
   assert.equal(session.goal?.outcome, "complete");
 });
 
-test("a skill choice after an interrupted worker pauses forced replanning", async () => {
+test("a user decision after an interrupted worker pauses forced replanning", async () => {
   let leadTurns = 0;
   const orchestra = new Orchestra(undefined, async (options: RunCliOptions) => {
     if (options.usageContext?.role === "worker") {
@@ -379,7 +379,7 @@ test("a skill choice after an interrupted worker pauses forced replanning", asyn
     leadTurns++;
     const finalText = leadTurns === 1
       ? `${checklist("- [ ] 구현")}\n<<DELEGATE to="codex">>구현<</DELEGATE>>`
-      : `${checklist("- [ ] 구현")}\n다른 스킬로 시도할까요?\n1. fixture-review\n2. 스킬 없이 진행`;
+      : `${checklist("- [ ] 구현")}\n다른 방식으로 시도할까요?\n1. 범위를 줄여 다시\n2. 여기서 멈춤`;
     options.onLine({ type: "message", text: finalText });
     return { exitCode: 0, finalText };
   });

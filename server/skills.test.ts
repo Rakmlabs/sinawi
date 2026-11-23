@@ -106,12 +106,14 @@ test("project discovery deduplicates the same skill file by realpath and merges 
   assert.deepEqual(skills[0].agents.sort(), ["claude", "codex", "grok"]);
 });
 
-test("skill metadata parses literal, folded, and plain YAML descriptions", async () => {
+test("skill metadata parses literal, folded, plain, and quoted YAML descriptions", async () => {
   const root = await mkdtemp(join(tmpdir(), "orchestra-skill-metadata-"));
   const fixtures = {
     literal: "description: |\n  Good reason\n  with detail",
     folded: "description: >\n  Folded reason\n  with detail",
     plain: "description: Plain reason",
+    double: 'description: "UI/UX design: say \\"hi\\" for web"',
+    single: "description: 'It''s quoted'",
   };
   for (const [name, description] of Object.entries(fixtures)) {
     const directory = join(root, name);
@@ -124,6 +126,8 @@ test("skill metadata parses literal, folded, and plain YAML descriptions", async
   assert.equal(skills.find(({ name }) => name === "literal")?.description, "Good reason\nwith detail");
   assert.equal(skills.find(({ name }) => name === "folded")?.description, "Folded reason with detail");
   assert.equal(skills.find(({ name }) => name === "plain")?.description, "Plain reason");
+  assert.equal(skills.find(({ name }) => name === "double")?.description, 'UI/UX design: say "hi" for web');
+  assert.equal(skills.find(({ name }) => name === "single")?.description, "It's quoted");
 });
 
 test("skill prompt injection stays within a bounded argv budget", () => {

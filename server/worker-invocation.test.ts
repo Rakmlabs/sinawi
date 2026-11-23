@@ -49,7 +49,7 @@ test("blocked design reports one optional local fallback note without requiring 
     const warnings = workerInvocationWarnings({ agent: "claude", brief: "스킬: /design\nCreate a mockup", skills: "", tools: 'Skill: {"skill":"design"}', output });
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /선택 사항/);
-    assert.match(warnings[0], /선택한 로컬 스킬.*없으면.*프로젝트.*패턴/);
+    assert.match(warnings[0], /적힌 로컬 스킬.*없으면.*프로젝트.*패턴/);
     assert.doesNotMatch(warnings[0], /consent를 실행|확인해야 합니다/);
   }
 });

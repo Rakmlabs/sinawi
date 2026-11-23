@@ -23,6 +23,6 @@ export function workerInvocationWarnings({ agent, brief, skills, tools, output, 
     // "forbidden" in file content or a tap coordinate must not read as /design being blocked.
     return /(?:\/design\b|Claude Design|Skill[ :]+design)/iu.test(context) && /(?:disable-model-invocation|cannot be used with Skill tool|consent.{0,60}(?:required|missing|needed|not (?:granted|given))|(?:requires?|needs?).{0,40}consent|run\s+\/design consent|(?:do not|don.t|does not|doesn.t) have access|access denied|permission denied|forbidden|\b403\b|not (?:available|authorized|enabled)|authentication required|동의.{0,30}(?:필요|없)|접근.{0,20}(?:거부|불가))/iu.test(line);
   }) : undefined;
-  if (failure) warnings.push(`Claude /design 사용이 막혔습니다: ${failure.trim().slice(0, 400)}. /design은 사용자 터미널에서 수동으로 쓰는 선택 사항입니다. 재시도·재위임·실패 처리하지 말고, 선택한 로컬 스킬이 있으면 사용하고 없으면 프로젝트의 기존 패턴으로 HTML/목업 산출물을 완성하세요.`);
+  if (failure) warnings.push(`Claude /design 사용이 막혔습니다: ${failure.trim().slice(0, 400)}. /design은 사용자 터미널에서 수동으로 쓰는 선택 사항입니다. 재시도·재위임·실패 처리하지 말고, 브리프에 적힌 로컬 스킬이 있으면 사용하고 없으면 프로젝트의 기존 패턴으로 HTML/목업 산출물을 완성하세요.`);
   return warnings;
 }

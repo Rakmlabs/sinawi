@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cliChildEnv, cliNotes, compactHandoff, DEVELOPMENT_SHELL_PROGRAMS, ensureBrief, failureSignature, isPureNoise, missingBriefSections, ORCHESTRATOR_RULES, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, WORKER_RULES, commandFamily, unwrapShell } from "./supervision.js";
+import { cliChildEnv, cliNotes, compactHandoff, DEVELOPMENT_SHELL_PROGRAMS, ensureBrief, failureSignature, isPureNoise, missingBriefSections, ORCHESTRATOR_RULES, permissionModeRules, retargetCliNotes, reviewPrompt, StallDetector, stripToolNoise, WORKER_RULES, commandFamily, unwrapShell } from "./supervision.js";
 import { BrowserBridge } from "./browser-bridge.js";
 import { Orchestra } from "./orchestra.js";
 import type { RunCliOptions } from "./cli.js";
@@ -30,7 +30,15 @@ test("shared prompts keep the six-field brief and add read, verify, and replan r
   assert.match(WORKER_RULES, /## 이 앱에서 일하기/);
   assert.match(ORCHESTRATOR_RULES, /이미 띄워 둔 다른 서버의 포트/);
   assert.match(ORCHESTRATOR_RULES, /\/design.*disable-model-invocation/);
-  assert.match(ORCHESTRATOR_RULES, /추천해 선택받은 로컬 디자인 스킬/);
+  assert.match(ORCHESTRATOR_RULES, /총괄이 골라 브리프에 적은 로컬 디자인 스킬/);
+  assert.match(ORCHESTRATOR_RULES, /Artifact 도구가 있으면 Claude 아티팩트로 시안/);
+  assert.match(ORCHESTRATOR_RULES, /사용자에게 스킬 선택을 묻지 않는다/);
+  assert.doesNotMatch(ORCHESTRATOR_RULES, /선택받|선택을 기다린/);
+  assert.match(WORKER_RULES, /Artifact 도구가 있으면 Claude 아티팩트/);
+  for (const mode of ["auto", "full"] as const) {
+    assert.match(permissionModeRules(mode), /스킬도 묻지 않고 직접 골라 진행/);
+    assert.doesNotMatch(permissionModeRules(mode), /사용자 선택을 기다리는/);
+  }
   assert.match(ORCHESTRATOR_RULES, /재위임.*실패.*하지 않는다/);
   assert.match(WORKER_RULES, /orchestra-attachments/);
   assert.match(WORKER_RULES, /\/design.*Skill 도구.*호출하지 않는다/);

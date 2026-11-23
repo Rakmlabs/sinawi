@@ -43,12 +43,19 @@ function projectRoots(cwd: string): SkillRoot[] {
   ];
 }
 
+/** A one-line YAML scalar without its surrounding quotes ("…" or '…'). */
+function unquote(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) return value.slice(1, -1).replace(/\\(["\\])/gu, "$1");
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replace(/''/gu, "'");
+  return value;
+}
+
 function yamlDescription(content: string): string | undefined {
   const lines = content.split(/\r?\n/u);
   const index = lines.findIndex((line) => /^description:\s*/u.test(line));
   if (index < 0) return;
   const value = lines[index].replace(/^description:\s*/u, "").trim();
-  if (!/^[|>][+-]?$/u.test(value)) return value || undefined;
+  if (!/^[|>][+-]?$/u.test(value)) return unquote(value) || undefined;
   const body: string[] = [];
   for (const line of lines.slice(index + 1)) {
     if (line.trim() === "---" || (line.trim() && !/^\s/u.test(line))) break;

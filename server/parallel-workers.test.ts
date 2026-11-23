@@ -91,12 +91,19 @@ test("the lead sees installed skills and a brief's skills reach the worker", () 
   assert.match(catalog, /## 설치된 스킬/);
   assert.match(catalog, /- impeccable \[claude,codex\]: Design and polish frontend UI\. Long text/);
   assert.equal(catalog.match(/- impeccable/g)?.length, 1, "each name once");
-  assert.match(catalog, /2–3개/);
-  assert.match(catalog, /사용자가 고른 뒤에만/);
-  assert.match(catalog, /스킬 없이 진행/);
-  assert.match(catalog, /물음표/);
-  assert.match(catalog, /기본 선호.*추천.*참고/);
-  assert.match(catalog, /후속.*브리프.*선택한.*스킬/);
+  // The lead picks skills itself: no numbered recommendation, no waiting for the user's pick.
+  assert.match(catalog, /담당이 직접 고른다/);
+  assert.match(catalog, /묻거나 번호 목록으로 추천하지 않/);
+  assert.match(catalog, /선택을 기다리며 멈추지 않는다/);
+  assert.doesNotMatch(catalog, /어떤 스킬을 쓸까요\?/);
+  assert.doesNotMatch(catalog, /사용자가 고른 뒤에만/);
+  assert.match(catalog, /브리프 첫 줄에 `스킬: 고른이름1/);
+  assert.match(catalog, /진행 메시지에[^\n]*한 줄만 알린다\(질문이 아니다\)/);
+  assert.match(catalog, /맞는 스킬이 없으면 스킬 줄 없이 그대로 진행/);
+  assert.match(catalog, /사용자가 스킬 이름을 지정했거나[^\n]*그대로 따른다/);
+  assert.match(catalog, /기본 선호 스킬[^\n]*먼저 고른다/);
+  assert.match(catalog, /후속 위임 브리프에도 같은 스킬/);
+  assert.match(catalog, /디자인[^\n]*Claude 아티팩트[^\n]*링크/);
   assert.equal(skillCatalog([]), "");
 
   assert.deepEqual(briefSkillNames("스킬: `impeccable`, /frontend-design\n## 목표\nx"), ["impeccable", "frontend-design"]);
@@ -153,7 +160,7 @@ test("Claude Design is not advertised or opened headlessly while local design sk
   assert.match(claude, /\/design.*호출하지 않는다/);
   assert.match(claude, /사용자.*터미널.*선택.*수동/);
   const designOnly = workerSkillSection("스킬: /design\n## 목표\n목업", designSkills, "claude");
-  assert.match(designOnly, /선택한 로컬 스킬이 없으면.*프로젝트.*패턴/);
+  assert.match(designOnly, /적힌 로컬 스킬이 없으면.*프로젝트.*패턴/);
 });
 
 test("worker attachment metadata includes only bodies within the prompt budget", () => {
