@@ -1,6 +1,6 @@
 [package]
 name = "sinawi"
-version = "1.7.2"
+version = "1.7.3"
 description = "Desktop shell for Sinawi"
 edition = "2021"
 
