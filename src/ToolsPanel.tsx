@@ -195,11 +195,18 @@ export function ToolsPanel({ workspaceId, cwd, initialState, initialTab = "mcp",
     </header>
     <div className="panel tools-surface">
       <div className="tools-toolbar">
-        <div className="tools-tabs" role="tablist" aria-label={t("tools.kinds")}>
-          <button role="tab" aria-selected={tab === "mcp"} onClick={() => setTab("mcp")}><SlidersHorizontal size={16} />MCP</button>
-          <button role="tab" aria-selected={tab === "skills"} onClick={() => setTab("skills")}><Wrench size={16} />{t("tools.skills")}</button>
+        <div className="tools-tabs" role="tablist" aria-label={t("tools.kinds")} onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          const next = tab === "mcp" ? "skills" : "mcp";
+          setTab(next);
+          event.currentTarget.querySelector<HTMLButtonElement>(`[data-tab="${next}"]`)?.focus();
+        }}>
+          <button role="tab" aria-selected={tab === "mcp"} data-tab="mcp" tabIndex={tab === "mcp" ? 0 : -1} onClick={() => setTab("mcp")}><SlidersHorizontal size={16} />MCP</button>
+          <button role="tab" aria-selected={tab === "skills"} data-tab="skills" tabIndex={tab === "skills" ? 0 : -1} onClick={() => setTab("skills")}><Wrench size={16} />{t("tools.skills")}</button>
         </div>
-        <label className="tools-search"><Search size={17} aria-hidden="true" /><input type="search" aria-label={t("tools.search")} placeholder={t("tools.searchPlaceholder")} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <label className="tools-search"><Search size={17} aria-hidden="true" /><input type="search" aria-label={t("tools.search")} placeholder={t("tools.searchPlaceholder")} value={query} onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Escape" && query) { event.preventDefault(); event.stopPropagation(); setQuery(""); } }} /></label>
       </div>
       {error && <div className="tools-error" role="alert"><span>{error}</span><button className="button light" onClick={() => void load()}>{t("common.retry")}</button></div>}
       {loading && <div className="tools-empty" role="status">{t("tools.loading")}</div>}

@@ -155,19 +155,19 @@ export function FileViewer({ items, index, onIndex, onClose }: {
         </div>
         <div className="viewer-actions">
           {current.kind === "image" && <>
-            <button type="button" aria-label={t("viewer.zoomOut")} onClick={() => setZoom((value) => clampZoom(value - 0.5))}><Minus size={16} /></button>
-            <button type="button" aria-label={t("viewer.zoomIn")} onClick={() => setZoom((value) => clampZoom(value + 0.5))}><Plus size={16} /></button>
+            <button type="button" aria-label={t("viewer.zoomOut")} title={t("viewer.zoomOut")} onClick={() => setZoom((value) => clampZoom(value - 0.5))}><Minus size={16} /></button>
+            <button type="button" aria-label={t("viewer.zoomIn")} title={t("viewer.zoomIn")} onClick={() => setZoom((value) => clampZoom(value + 0.5))}><Plus size={16} /></button>
           </>}
           {showPager && <>
-            <button type="button" aria-label={t("viewer.prevPage")} disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={16} /></button>
+            <button type="button" aria-label={t("viewer.prevPage")} title={t("viewer.prevPage")} disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={16} /></button>
             <span className="viewer-page">{page}/{pages}</span>
-            <button type="button" aria-label={t("viewer.nextPage")} disabled={page >= pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}><ChevronRight size={16} /></button>
-            <button type="button" aria-label={t("viewer.zoomOut")} onClick={() => setZoom((value) => clampZoom(value - 0.25, 0.5, 3))}><Minus size={16} /></button>
-            <button type="button" aria-label={t("viewer.zoomIn")} onClick={() => setZoom((value) => clampZoom(value + 0.25, 0.5, 3))}><Plus size={16} /></button>
+            <button type="button" aria-label={t("viewer.nextPage")} title={t("viewer.nextPage")} disabled={page >= pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}><ChevronRight size={16} /></button>
+            <button type="button" aria-label={t("viewer.zoomOut")} title={t("viewer.zoomOut")} onClick={() => setZoom((value) => clampZoom(value - 0.25, 0.5, 3))}><Minus size={16} /></button>
+            <button type="button" aria-label={t("viewer.zoomIn")} title={t("viewer.zoomIn")} onClick={() => setZoom((value) => clampZoom(value + 0.25, 0.5, 3))}><Plus size={16} /></button>
           </>}
           {items.length > 1 && <>
-            <button type="button" aria-label={t("viewer.prevFile")} onClick={() => move(-1)}><ChevronLeft size={16} /></button>
-            <button type="button" aria-label={t("viewer.nextFile")} onClick={() => move(1)}><ChevronRight size={16} /></button>
+            <button type="button" aria-label={t("viewer.prevFile")} title={t("viewer.prevFile")} onClick={() => move(-1)}><ChevronLeft size={16} /></button>
+            <button type="button" aria-label={t("viewer.nextFile")} title={t("viewer.nextFile")} onClick={() => move(1)}><ChevronRight size={16} /></button>
           </>}
           {local && <>
             <button type="button" onClick={() => void act("reveal")}><FolderOpen size={15} />{t("viewer.reveal")}</button>
@@ -177,7 +177,7 @@ export function FileViewer({ items, index, onIndex, onClose }: {
           </>}
           {local ? <button type="button" className="viewer-download" onClick={() => void act("download")}><Download size={15} />{t("viewer.download")}</button>
             : <WebLink className="viewer-download" href={src}><Download size={15} />{t("viewer.download")}</WebLink>}
-          <button type="button" className="viewer-close" aria-label={t("viewer.close")} onClick={onClose}><X size={18} /></button>
+          <button type="button" className="viewer-close" aria-label={t("viewer.close")} title={t("viewer.close")} onClick={onClose}><X size={18} /></button>
         </div>
       </header>
       {notice && <p className="viewer-notice" role="status">{notice}</p>}

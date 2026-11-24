@@ -667,7 +667,9 @@ body,
 
 /* Live activity aside: flush column with its own background. */
 .activity-panel {
-  flex: 0 0 clamp(300px, 26vw, 360px);
+  position: relative;
+  /* --activity-width: set by dragging the panel's left edge (ActivityPanel.tsx); never more than half the chat's room. */
+  flex: 0 0 min(var(--activity-width, clamp(300px, 26vw, 360px)), 50%);
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -1063,6 +1065,12 @@ body,
   outline: none;
 }
 body.sidebar-resizing, body.sidebar-resizing * { cursor: col-resize !important; user-select: none; }
+/* The activity panel's left edge: the same handle, mirrored. */
+.activity-resizer { position: absolute; z-index: 3; top: 0; bottom: 0; left: 0; width: 7px; cursor: col-resize; touch-action: none; }
+.activity-resizer:hover, .activity-resizer:focus-visible, body.sidebar-resizing .activity-resizer {
+  background: linear-gradient(to right, var(--border-focus) 0, var(--border-focus) 2px, transparent 2px);
+  outline: none;
+}
 body.sidebar-resizing .app-shell { transition: none; }
 /* No folder yet (a new lead): the button is the next step, so it keeps its whole label (third review). */
 .composer-bottom .directory-button.needs-folder { flex: none; max-width: none; color: var(--accent-fg); }

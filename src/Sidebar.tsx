@@ -142,13 +142,23 @@ export const Sidebar = memo(function Sidebar(props: SidebarProps) {
   const visibleSessions = topSessions.filter((session) => !session.steward);
   const visibleGroups = results.groups;
   const searching = Boolean(query.trim());
+  // Something of the sidebar's that Escape closes is open (a row menu, a rename, a confirmation, a drag).
+  const escapeCloses = useRef(false);
+  escapeCloses.current = Boolean(editor || deleting || deletingWorker || movingSteward);
+  const menuOpen = useRef(false);
+  menuOpen.current = Boolean(menu);
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
-      if (terminalOwnsKeyboardEvent(event)) return;
-      if (event.key === "Escape") { setMenu(undefined); setEditor(undefined); setDeleting(undefined); setDeletingWorker(undefined); setMovingSteward(undefined); if (dragRef.current?.active) cancelDrag(); }
+      if (terminalOwnsKeyboardEvent(event) || event.key !== "Escape") return;
+      // An open row menu takes its own Escape (SidebarMenu: a submenu closes first, then the menu).
+      if (menuOpen.current) return;
+      // Closing it uses the key up: the same Escape must not also stop the running chat (capture, so the
+      // composer and the window's stop shortcut never see it).
+      if (escapeCloses.current || dragRef.current?.active) { event.preventDefault(); event.stopPropagation(); }
+      setMenu(undefined); setEditor(undefined); setDeleting(undefined); setDeletingWorker(undefined); setMovingSteward(undefined); if (dragRef.current?.active) cancelDrag();
     };
-    window.addEventListener("keydown", handle);
-    return () => window.removeEventListener("keydown", handle);
+    window.addEventListener("keydown", handle, true);
+    return () => window.removeEventListener("keydown", handle, true);
   }, []);
   const expand = (id: string) => setClosed((old) => { const next = new Set(old); next.delete(id); return next; });
   const cleanupDrag = useRef<() => void>(undefined);

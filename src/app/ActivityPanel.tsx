@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Radio, SquareTerminal, X } from "lucide-react";
 import { workerLogSummary, type workerLogRows } from "../worker-log";
 import { toggleTerminal } from "../terminal-events";
@@ -16,11 +16,65 @@ const filterTypes: Record<Exclude<Filter, "all">, EventType[]> = {
 };
 const filters: Filter[] = ["all", "commands", "files", "errors"];
 
+// The panel's width, set by dragging its left edge (long commands and paths were cut at a fixed 360px).
+// Remembered per browser, like the sidebar's.
+export const ACTIVITY_DEFAULT = 340, ACTIVITY_MIN = 280, ACTIVITY_MAX = 720;
+const WIDTH_KEY = "sinawi.activityWidth";
+export const clampActivity = (value: number) => Math.round(Math.min(ACTIVITY_MAX, Math.max(ACTIVITY_MIN, Number.isFinite(value) ? value : ACTIVITY_DEFAULT)));
+
+function useActivityWidth(): [number | undefined, (width: number) => void, () => void] {
+  // Undefined until the user sets one: the stylesheet's own width (it follows the window) applies.
+  const [width, setWidth] = useState<number | undefined>(() => { try { const value = Number(localStorage.getItem(WIDTH_KEY)); return value ? clampActivity(value) : undefined; } catch { return undefined; } });
+  const set = useCallback((next: number) => {
+    const value = clampActivity(next);
+    setWidth(value);
+    try { localStorage.setItem(WIDTH_KEY, String(value)); } catch { /* private window: this session only */ }
+  }, []);
+  // Back to the stylesheet's width, which follows the window.
+  const reset = useCallback(() => { setWidth(undefined); try { localStorage.removeItem(WIDTH_KEY); } catch { /* nothing saved */ } }, []);
+  return [width, set, reset];
+}
+
+function ActivityResizer({ onChange, onReset }: { onChange: (width: number) => void; onReset: () => void }) {
+  const current = (handle: HTMLElement) => handle.parentElement?.getBoundingClientRect().width ?? ACTIVITY_DEFAULT;
+  const start = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    try { handle.setPointerCapture(event.pointerId); } catch { /* no active pointer */ }
+    const from = event.clientX, base = current(handle);
+    document.body.classList.add("sidebar-resizing");
+    // The panel is on the right: dragging its left edge leftwards makes it wider.
+    const move = (next: PointerEvent) => onChange(base - (next.clientX - from));
+    const end = () => {
+      document.body.classList.remove("sidebar-resizing");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  };
+  const key = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key === "ArrowLeft") onChange(current(event.currentTarget) + step);
+    else if (event.key === "ArrowRight") onChange(current(event.currentTarget) - step);
+    else if (event.key === "Home") onReset();
+    else return;
+    event.preventDefault();
+  };
+  return <div className="activity-resizer" role="separator" aria-orientation="vertical" tabIndex={0} aria-label={t("activity.resize")} title={t("activity.resizeHint")}
+    aria-valuemin={ACTIVITY_MIN} aria-valuemax={ACTIVITY_MAX} onPointerDown={start} onKeyDown={key} onDoubleClick={onReset} />;
+}
+
 /** Right column: recent non-message activity of the active session, filterable by kind. */
 export function ActivityPanel({ active, connected, rows, onClose }: { active: Session | undefined; connected: boolean; rows: Row[]; onClose: () => void }) {
   const [filter, setFilter] = useState<Filter>("all");
   const shown = filter === "all" ? rows : rows.filter((row) => filterTypes[filter].includes(row.type));
-  return <aside className="activity-panel" id="activity-panel" aria-label={t("activity.label")}>
+  const [width, setWidth, resetWidth] = useActivityWidth();
+  return <aside className="activity-panel" id="activity-panel" aria-label={t("activity.label")} style={width ? { "--activity-width": `${width}px` } as React.CSSProperties : undefined}>
+    <ActivityResizer onChange={setWidth} onReset={resetWidth} />
     <div className="activity-heading">
       <h2>{t("activity.label")}</h2>
       <span className={`live-badge ${!connected ? "offline" : ""}`} role="status">

@@ -475,6 +475,14 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     connected,
   );
   const canSend = Boolean((prompt.trim() || attachments.some((item) => item.kind === "element" || item.screenshotPath)) && canSendBase && attachmentsReady);
+  // Why a typed message cannot go out right now, for the send button's tooltip (it used to be grey with no word).
+  const sendBlocked = !connected ? t("comp.blocked.offline")
+    : leadNeedsFolder ? t("comp.blocked.folder")
+    : allowedAgents.length < 1 ? t("comp.blocked.noAgent")
+    : new Set([...skills, ...messageSkills]).size > 20 ? t("comp.blocked.skills")
+    : mode === "manual" && unavailableWarning ? unavailableWarning
+    : !attachmentsReady ? t("comp.blocked.attachments")
+    : undefined;
   const { bottom, chatBody, showChatBottom, hasAbove, scrollToChatBottom, chatScrollHandlers } = useChatScroll({
     resetKey: [selected, workerSelection?.taskId],
     followKey: [active?.events.at(-1)?.id, active?.events.at(-1)?.text, pendingRecommendation, editingRecommendation],
@@ -1046,7 +1054,7 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
                     mode={mode} setMode={setMode} autoSwitch={active ? active.autoSwitch ?? autoSwitch : autoSwitch}
                     setAutoSwitch={(enabled) => { if (!active) setAutoSwitch(enabled); else void safe(async () => { replaceFromServer(await api<Session>(`/sessions/${active.id}/auto-switch`, { enabled }, "PATCH")); }); }}
                     permissionMode={shownPermissionMode} fullAccessAllowed={fullAccessAllowed}
-                    setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={leadNeedsFolder ? "" : cwd} shownCwd={leadNeedsFolder ? "" : shownCwd} canSend={canSend} choiceOptions={choiceOptions}
+                    setPermissionMode={(next) => { if (next === "plan" && shownPermissionMode !== "plan") permissionModeBeforePlan.current = shownPermissionMode; setPermissionMode(next); }} agent={agent} cwd={leadNeedsFolder ? "" : cwd} shownCwd={leadNeedsFolder ? "" : shownCwd} canSend={canSend} sendBlocked={sendBlocked} choiceOptions={choiceOptions}
                     send={send} runCommand={runCommand} stopActive={stopActive} openModal={setModal} openViewer={openViewer}
                     teamPicker={<TeamBarSlot key={active?.id ?? "new"} workspaceId={workspaceId} active={active} pendingRecommendation={pendingRecommendation} mode={mode}
                       manual={manualTeam} availableAgents={teamAgents}

@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { ArrowRight, Bot, ChevronDown, Folder, Plus, Trash2, Users } from "lucide-react";
+import { DeleteDialog } from "../DeleteDialog";
 import { AgentMark } from "../AgentMark";
 import { GlassSelect } from "../GlassSelect";
 import { names } from "./labels";
@@ -23,7 +25,10 @@ export type BotsViewProps = {
 
 /** "봇" tab: saved bot presets and a two-bot conversation launcher. */
 export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, prompt, setPrompt, cwd, busy, connected, onCreate, onPickFolder, onUse, onDelete, onStart }: BotsViewProps) {
+  const [deleting, setDeleting] = useState<Preset>();
   return <div className="bots-grid">
+    {deleting && <DeleteDialog title={t("bots.deleteConfirm", { name: deleting.name })} body={t("bots.deleteBody")}
+      actions={[{ label: t("bots.delete"), primary: true, onClick: () => { onDelete(deleting); setDeleting(undefined); } }]} onCancel={() => setDeleting(undefined)} />}
     <section className="panel full-panel">
       <div className="panel-header">
         <h2>{t("bots.title")}</h2>
@@ -61,6 +66,7 @@ export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, 
             <button
               className="icon-button"
               title={t("bots.use")}
+              aria-label={t("bots.use")}
               onClick={() => onUse(b)}
             >
               <ArrowRight size={17} />
@@ -68,7 +74,8 @@ export function BotsView({ bots, botA, setBotA, botB, setBotB, turns, setTurns, 
             <button
               className="icon-button"
               title={t("bots.delete")}
-              onClick={() => onDelete(b)}
+              aria-label={t("bots.delete")}
+              onClick={() => setDeleting(b)}
             >
               <Trash2 size={15} />
             </button>

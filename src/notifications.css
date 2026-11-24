@@ -75,6 +75,9 @@
   font-size: calc(12px * var(--font-scale));
 }
 
+/* "Clear all" asks once more before it clears (it cannot be undone). */
+.notifications-controls button.confirming { color: var(--warn); font-weight: 700; }
+
 .notifications-list {
   max-height: min(480px, calc(100vh - 110px));
   overflow-y: auto;

@@ -500,30 +500,43 @@ export function TerminalPanel({
     setPanelVisible(!visibleRef.current);
   }, [addTab, setPanelVisible]);
 
+  const clampHeight = (value: number) => Math.round(Math.min(Math.max(MIN_HEIGHT, window.innerHeight - 120), Math.max(MIN_HEIGHT, value)));
+  const saveHeight = (value: number) => { const next = clampHeight(value); setHeight(next); localStorage.setItem(HEIGHT_KEY, String(next)); };
   const startResize = (event: React.PointerEvent) => {
+    if (event.button !== 0) return;
     event.preventDefault();
     const initialY = event.clientY;
     const initial = height;
-    const move = (pointer: PointerEvent) => {
-      const maximum = Math.max(MIN_HEIGHT, window.innerHeight - 120);
-      setHeight(Math.min(maximum, Math.max(MIN_HEIGHT, initial + initialY - pointer.clientY)));
-    };
+    const move = (pointer: PointerEvent) => setHeight(clampHeight(initial + initialY - pointer.clientY));
     const finish = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
       setHeight((current) => {
         localStorage.setItem(HEIGHT_KEY, String(current));
         return current;
       });
     };
     window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", finish, { once: true });
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  };
+  // Like the sidebar's edge: arrows change the height, Home (or a double-click) puts it back.
+  const resizeKey = (event: React.KeyboardEvent) => {
+    const step = event.shiftKey ? 72 : 24;
+    if (event.key === "ArrowUp") saveHeight(height + step);
+    else if (event.key === "ArrowDown") saveHeight(height - step);
+    else if (event.key === "Home") saveHeight(DEFAULT_HEIGHT);
+    else return;
+    event.preventDefault();
+    event.stopPropagation();
   };
 
   const active = tabs.find((tab) => tab.id === activeId);
   return (
     <section className={`terminal-panel${visible ? " terminal-panel-visible" : ""}`} style={{ height }} aria-hidden={!visible}>
-      <div className="terminal-resize-handle" onPointerDown={startResize} aria-hidden="true" />
+      <div className="terminal-resize-handle" role="separator" aria-orientation="horizontal" tabIndex={visible ? 0 : -1} aria-label={t("term.resize")} title={t("term.resizeHint")}
+        aria-valuemin={MIN_HEIGHT} aria-valuenow={height} onPointerDown={startResize} onKeyDown={resizeKey} onDoubleClick={() => saveHeight(DEFAULT_HEIGHT)} />
       <header className="terminal-toolbar">
         <div className="terminal-tabs" role="tablist" aria-label={t("term.tabs")}>
           <SquareTerminal size={15} className="terminal-mark" aria-hidden="true" />

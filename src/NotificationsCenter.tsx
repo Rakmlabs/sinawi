@@ -190,7 +190,7 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
       const timer = window.setTimeout(() => {
         toastTimers.current.delete(timer);
         setToasts((current) => current.filter((toast) => toastVersion(toast) !== toastVersion(notification)));
-      }, 4_000);
+      }, notification.type === "error" ? 9_000 : 4_000);
       toastTimers.current.add(timer);
     }
   }, [notifications, workspaceId]);
@@ -200,14 +200,21 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
     const closeOutside = (event: MouseEvent) => {
       if (!centerRef.current?.contains(event.target as Node)) setOpen(false);
     };
+    // Capture, and the key ends here: the same Escape must not also reach the composer or the window's
+    // "stop the running chat" shortcut (it used to close this list and stop the work at once).
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !terminalOwnsKeyboardEvent(event)) setOpen(false);
+      if (event.key !== "Escape" || terminalOwnsKeyboardEvent(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      // The keyboard goes back to the bell, not nowhere.
+      centerRef.current?.querySelector<HTMLButtonElement>(".notifications-trigger")?.focus();
     };
     document.addEventListener("mousedown", closeOutside);
-    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("keydown", closeOnEscape, true);
     return () => {
       document.removeEventListener("mousedown", closeOutside);
-      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("keydown", closeOnEscape, true);
     };
   }, [open]);
 
@@ -237,11 +244,21 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
     }).then(() => refresh(), () => refresh());
   }, [refresh, workspaceId]);
 
+  // Clearing cannot be undone, so the button asks once more: the second press within a few seconds does it.
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  useEffect(() => {
+    if (!confirmingClear) return;
+    const timer = window.setTimeout(() => setConfirmingClear(false), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [confirmingClear]);
+  useEffect(() => { if (!open) setConfirmingClear(false); }, [open]);
   const clearAll = useCallback(() => {
+    if (!confirmingClear) { setConfirmingClear(true); return; }
+    setConfirmingClear(false);
     setNotifications([]);
     void fetch(`/api/notifications?workspace=${encodeURIComponent(workspaceId)}`, { method: "DELETE" })
       .then(() => refresh(), () => refresh());
-  }, [refresh, workspaceId]);
+  }, [confirmingClear, refresh, workspaceId]);
 
   const activate = useCallback((notification: AppNotification) => {
     if (!notification.read) markRead([notification.id]);
@@ -305,7 +322,7 @@ export function NotificationsCenter({ workspaceId, cwd, connected = false, onSes
             </div>
             <div className="notifications-controls">
               <button type="button" disabled={!unread} onClick={markAllRead}>{t("noti.markAllRead")}</button>
-              <button type="button" disabled={!notifications.length} onClick={clearAll}>{t("noti.clearAll")}</button>
+              <button type="button" className={confirmingClear ? "confirming" : undefined} disabled={!notifications.length} onClick={clearAll}>{confirmingClear ? t("noti.clearAllConfirm") : t("noti.clearAll")}</button>
             </div>
           </header>
           <div className="notifications-list">

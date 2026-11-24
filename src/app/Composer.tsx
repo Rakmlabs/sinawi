@@ -48,6 +48,8 @@ export type ComposerProps = {
   cwd: string;
   shownCwd: string;
   canSend: boolean;
+  /** Why a message cannot be sent right now (offline, no folder, files still uploading…); shown on the send button. */
+  sendBlocked?: string;
   choiceOptions: string[];
   send: (executeRecommendation?: boolean, message?: string) => Promise<unknown>;
   stopActive: () => void;
@@ -231,7 +233,12 @@ export function Composer(props: ComposerProps) {
           }
           if (e.key === "Escape") {
             const time = Date.now();
-            if (time - lastEscape.current <= 1_000) setPrompt("");
+            if (time - lastEscape.current <= 1_000 && prompt) {
+              // Cleared through the editor, not by setting the state: the text stays in the undo history, so ⌘Z brings it back.
+              const field = e.currentTarget;
+              field.select();
+              if (!document.execCommand("delete") || field.value) setPrompt("");
+            }
             lastEscape.current = time;
             return;
           }
@@ -321,7 +328,7 @@ export function Composer(props: ComposerProps) {
         <button
           type="button"
           className="send-button"
-          title={action === "stop" ? t("comp.stopTitle") : t("comp.sendTitle")}
+          title={action === "stop" ? t("comp.stopTitle") : props.sendBlocked ?? t("comp.sendTitle")}
           aria-label={action === "stop" ? t("comp.stop") : routing ? t("comp.routing") : t("comp.send")}
           disabled={action === "stop" ? busy : !canSend && !slashCommandOf(prompt)}
           onClick={action === "stop" ? clickStop : () => void send()}
