@@ -77,6 +77,11 @@ export function loadAppKey(refresh = false, win: KeyWindow = typeof window === "
   return loading;
 }
 
+/** `#sinawi-app-key=…` for a page this window opens itself (a browser window on `npm run dev`); empty without a key. */
+export function appKeyFragment(): string {
+  return key ? `#sinawi-app-key=${key}` : "";
+}
+
 /** Subprotocols for a WebSocket to the app server. */
 export function appKeyProtocols(): string[] {
   return key ? [`${PROTOCOL}${key}`] : [];

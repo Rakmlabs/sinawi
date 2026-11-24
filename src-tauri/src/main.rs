@@ -5,13 +5,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod browser_window;
 mod computer;
 mod native_browser;
 mod peer_check;
 mod permissions;
 mod server_agent;
 
-use tauri::{path::BaseDirectory, webview::PageLoadEvent, Manager};
+use tauri::{path::BaseDirectory, webview::PageLoadEvent, Manager, WindowEvent};
 
 const SERVER_ADDRESS: &str = "127.0.0.1:3001";
 const SERVER_URL: &str = "http://127.0.0.1:3001";
@@ -96,10 +97,11 @@ fn server_layout<R: tauri::Runtime, M: Manager<R>>(app: &M) -> Result<server_age
     Ok(layout)
 }
 
-/// The main window's key for the app server (server/app-key.ts). It comes over the server's unix socket
+/// The app window's key for the app server (server/app-key.ts). It comes over the server's unix socket
 /// in the data folder, where the server lets it go only after this binary, run as the peer checker,
-/// confirmed the connecting process is this signed app (peer_check.rs). This hands it only to the main
-/// window showing the app server, never to a browser tab or another page.
+/// confirmed the connecting process is this signed app (peer_check.rs). This hands it only to the app's
+/// own windows showing the app server (the main window, and the browser windows it moved out of
+/// itself, which show the same page), never to a browser tab or another page.
 #[tauri::command]
 fn app_key(webview: tauri::Webview) -> Result<String, String> {
     use std::os::unix::net::UnixStream;
@@ -107,7 +109,7 @@ fn app_key(webview: tauri::Webview) -> Result<String, String> {
     let local = url.scheme() == "http" && url.host_str() == Some("127.0.0.1");
     // A dev window shows the Vite page (any port); the installed one, the app server itself.
     let on_server = local && (cfg!(dev) || url.port_or_known_default() == Some(3001));
-    if webview.label() != "main" || !on_server { return Err("only the app window".into()); }
+    if !native_browser::is_app_window(webview.label()) || !on_server { return Err("only the app window".into()); }
     let socket = key_socket(&webview)?;
     let mut stream = UnixStream::connect(&socket).map_err(|e| format!("{}: {e}", socket.display()))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
@@ -235,7 +237,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .on_page_load(|webview, payload| {
-            if webview.label() == native_browser::MAIN_LABEL && payload.event() == PageLoadEvent::Started {
+            if native_browser::is_app_window(webview.label()) && payload.event() == PageLoadEvent::Started {
                 native_browser::reset(webview);
             }
             let is_production_page = payload.url().scheme() == "http"
@@ -266,6 +268,14 @@ fn main() {
                 }
             }
         })
+        .on_window_event(|window, event| {
+            if let WindowEvent::Destroyed = event {
+                let app = window.app_handle();
+                native_browser::window_closed(app, window.label());
+                // Browser windows outside the main window cannot outlive it: nothing could bring it back.
+                if window.label() == native_browser::MAIN_LABEL { browser_window::close_all(app); }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             open_devtools,
             app_key,
@@ -290,6 +300,8 @@ fn main() {
             native_browser::native_browser_events,
             native_browser::native_browser_downloads,
             native_browser::native_browser_input,
+            browser_window::browser_window_open,
+            browser_window::browser_window_close,
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]

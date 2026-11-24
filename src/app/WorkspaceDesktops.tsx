@@ -3,6 +3,8 @@ import { BrowserDesktop, type DesktopRequest } from "../BrowserDesktop";
 import { claimCommand, holdCommand, type AgentCommand } from "../browser-agent";
 import { browserRegistry } from "../browser-registry";
 import { useDesktopHost } from "../desktop-host";
+import { DOCK_EVENT, forgetOutside, rememberedOutside, type BrowserWindowTarget } from "../browser-window";
+import { desktopStoreKey, loadWorkspaceWindows, newWindow } from "../desktop-windows";
 import { t } from "../i18n";
 
 const IDLE: DesktopRequest = { n: 0 };
@@ -22,6 +24,22 @@ export function WorkspaceDesktops({ current, workspaceIds, firstId }: { current:
   useEffect(() => { setAlive((old) => (old.includes(current) ? old : [...old, current])); }, [current]);
   const currentRef = useRef(current); currentRef.current = current;
   const idsRef = useRef(workspaceIds); idsRef.current = workspaceIds;
+  const aliveRef = useRef(list); aliveRef.current = list;
+  const firstRef = useRef(firstId); firstRef.current = firstId;
+  // A window outside the app comes back for a workspace that has no desktop mounted: put it in that
+  // workspace's saved list, where its desktop finds it on the next visit (a mounted one adds it itself).
+  useEffect(() => {
+    const dock = (event: Event) => {
+      const target = (event as CustomEvent<BrowserWindowTarget>).detail;
+      if (!target?.id || !idsRef.current.includes(target.workspaceId) || aliveRef.current.includes(target.workspaceId)) return;
+      forgetOutside(target.workspaceId, target.id);
+      const saved = loadWorkspaceWindows((key) => localStorage.getItem(key), target.workspaceId, target.workspaceId === firstRef.current);
+      if (saved.some((item) => item.id === target.id)) return;
+      localStorage.setItem(desktopStoreKey(target.workspaceId), JSON.stringify([...saved, newWindow(saved, { width: window.innerWidth, height: window.innerHeight }, target.id)]));
+    };
+    window.addEventListener(DOCK_EVENT, dock);
+    return () => window.removeEventListener(DOCK_EVENT, dock);
+  }, []);
   // An agent of a workspace that is not on screen and has no browser window yet: open one there.
   useEffect(() => {
     const onCommand = (event: Event) => {
@@ -34,8 +52,12 @@ export function WorkspaceDesktops({ current, workspaceIds, firstId }: { current:
       }
       if (browserRegistry.countIn(workspaceId) > 0) return;
       holdCommand(command);
+      // Its browser was moved out of the app and that window is gone: the command brings it back in
+      // (the dock listeners put it on that workspace's desktop, mounted or saved) instead of a second one.
+      const outside = rememberedOutside(workspaceId)[0];
+      if (outside) window.dispatchEvent(new CustomEvent(DOCK_EVENT, { detail: { id: outside, workspaceId } }));
       setAlive((old) => (old.includes(workspaceId) ? old : [...old, workspaceId]));
-      setRequests((old) => ({ ...old, [workspaceId]: { n: (old[workspaceId]?.n ?? 0) + 1 } }));
+      if (!outside) setRequests((old) => ({ ...old, [workspaceId]: { n: (old[workspaceId]?.n ?? 0) + 1 } }));
     };
     window.addEventListener("orchestra:browser-command", onCommand);
     return () => window.removeEventListener("orchestra:browser-command", onCommand);
@@ -44,6 +66,6 @@ export function WorkspaceDesktops({ current, workspaceIds, firstId }: { current:
     const onScreen = id === current && host?.workspaceId === id ? host : undefined;
     return <BrowserDesktop key={id} workspaceId={id} firstWorkspace={id === firstId} background={id !== current}
       onAttach={onScreen?.onAttach ?? ignore} request={onScreen?.request ?? requests[id] ?? IDLE}
-      onModeChange={onScreen?.onModeChange ?? ignore} />;
+      onModeChange={onScreen?.onModeChange ?? ignore} room={onScreen?.layout} />;
   })}</>;
 }

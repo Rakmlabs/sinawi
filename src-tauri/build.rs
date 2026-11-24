@@ -25,6 +25,8 @@ const COMMANDS: &[&str] = &[
     "native_browser_events",
     "native_browser_downloads",
     "native_browser_input",
+    "browser_window_open",
+    "browser_window_close",
 ];
 
 fn main() {

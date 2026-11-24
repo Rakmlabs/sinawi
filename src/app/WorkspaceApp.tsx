@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MotionConfig } from "framer-motion";
-import { ArrowDown, ArrowLeft, ChevronDown, Folder, MessageSquare, PanelRightClose, PanelRightOpen, Square, UserCheck } from "lucide-react";
+import { ArrowDown, ArrowLeft, Folder, MessageSquare, PanelRightClose, PanelRightOpen, Square, UserCheck } from "lucide-react";
 import { MarkdownSessionContext } from "../markdown-images";
 import { isNetworkFailure, teamAvailabilityWarning } from "../team";
 import { normalizeWorkerConfigs } from "../../server/workers";
@@ -25,6 +25,7 @@ import type { DesktopRequest } from "../BrowserDesktop";
 import { setDesktopHost } from "../desktop-host";
 import type { DesktopMode } from "../desktop-windows";
 import { commandForThisWorkspace, holdCommand, setBrowserWorkspace } from "../browser-agent";
+import { DOCK_EVENT, outsideWindowsUnknown, rememberedOutside, setOutsideWindows } from "../browser-window";
 import { browserRegistry } from "../browser-registry";
 import { APP_ERROR_EVENT, holdUrl, OPEN_URL_EVENT } from "../link-open";
 import { chatShortcut, globalBrowserShortcut, browserOwnsFocus } from "../browser-shortcuts";
@@ -182,11 +183,16 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   useEffect(() => { setViewer(null); }, [selected]);
   const [desktopRequest, setDesktopRequest] = useState<DesktopRequest>({ n: 0 });
   const [desktopMode, setDesktopMode] = useState<DesktopMode>("none");
-  const focusMode = desktopMode !== "none";
-  // Sidebar: a docked column on wide windows (persisted), an overlay on narrow ones or over the browser.
+  // How wide the snapped browser window is drawn: the chat takes the rest (--desk-browser).
+  const [deskBrowserWidth, setDeskBrowserWidth] = useState(0);
+  const onDesktopMode = useCallback((mode: DesktopMode, browserWidth: number) => { setDesktopMode(mode); setDeskBrowserWidth(browserWidth); }, []);
+  // Sidebar: a docked column on wide windows (persisted), also beside a snapped or maximised browser; an overlay on narrow ones.
   const narrow = useMediaQuery(SIDEBAR_OVERLAY_QUERY);
   const [overlayOpen, setOverlayOpen] = useState(false);
-  const { overlay: sidebarOverlay, open: sidebarOpen } = sidebarLayout({ collapsed: sidebarCollapsed, narrow, focusMode, overlayOpen });
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
+  const { overlay: sidebarOverlay, open: sidebarOpen } = sidebarLayout({ collapsed: sidebarCollapsed, narrow, overlayOpen });
+  // The docked sidebar's column: snapped and maximised browser windows start to its right.
+  const deskLeft = sidebarOpen && !sidebarOverlay ? sidebarWidth : 0;
   useEffect(() => { setOverlayOpen(false); }, [sidebarOverlay]);
   const sidebarState = useRef({ overlay: sidebarOverlay, open: sidebarOpen });
   sidebarState.current = { overlay: sidebarOverlay, open: sidebarOpen };
@@ -222,8 +228,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   const [chatWidgetOpen, setChatWidgetOpen] = useState(() => localStorage.getItem("orchestra.chat.widget") === "1");
   useEffect(() => { localStorage.setItem("orchestra.chat.widget", chatWidgetOpen ? "1" : "0"); }, [chatWidgetOpen]);
   const showBrowser = useCallback((toggle: boolean) => { setDesktopRequest((old) => ({ n: old.n + 1, toggle })); }, []);
-  // Chat fold: in browser focus (maximized) the chat is a floating widget; otherwise the pane folds to a rail.
-  const toggleChat = useCallback(() => { if (desktopMode === "max") setChatWidgetOpen((v) => !v); else setChatCollapsed((v) => !v); }, [desktopMode]);
+  // Chat fold: beside a maximized browser the chat is hidden until asked for (then it docks beside the
+  // browser, never over the page: a native page view would paint over it); beside a snapped one the pane
+  // folds to a rail. With no browser docked there is nothing to make room for, so the chat stays.
+  const toggleChat = useCallback(() => { if (desktopMode === "max") setChatWidgetOpen((v) => !v); else if (desktopMode !== "none") setChatCollapsed((v) => !v); }, [desktopMode]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (!event.repeat && chatShortcut(event)) { event.preventDefault(); toggleChat(); } };
     const onEvent = () => toggleChat();
@@ -245,7 +253,11 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       if (!commandForThisWorkspace(detail)) return;
       if (browserRegistry.count() > 0) return;
       holdCommand(detail);
-      showBrowser(false);
+      // This workspace's browser was moved out of the app and its window is gone (the server waits for a
+      // window that only dropped): bring that browser back in, tabs and all, rather than open a second one.
+      const outside = rememberedOutside(workspaceId)[0];
+      if (outside) window.dispatchEvent(new CustomEvent(DOCK_EVENT, { detail: { id: outside, workspaceId } }));
+      else showBrowser(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.repeat || browserRegistry.count() > 0) return;
@@ -311,7 +323,13 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     void fetch("/api/sim-view/open", { method: "POST" }).then((res) => { if (!res.ok) setChatError(t("ws.simulatorFailed")); }).catch(() => setChatError(t("ws.simulatorFailed")));
   }, []);
   const attachToComposer = useCallback((items: Parameters<typeof addAttachments>[0]) => attachRef.current(items), []);
-  useLayoutEffect(() => { setDesktopHost({ workspaceId, onAttach: attachToComposer, request: desktopRequest, onModeChange: setDesktopMode }); }, [workspaceId, attachToComposer, desktopRequest]);
+  // Folded only beside a snapped browser, in the chat view: the browser then takes the chat's width too.
+  const chatFolded = chatCollapsed && (desktopMode === "left" || desktopMode === "right") && tab === "workspace";
+  // Beside a maximized browser the chat (or the page of another tab) shows only when asked for, and then takes its share of the width.
+  const chatBeside = desktopMode === "max" && chatWidgetOpen;
+  useLayoutEffect(() => {
+    setDesktopHost({ workspaceId, onAttach: attachToComposer, request: desktopRequest, onModeChange: onDesktopMode, layout: { left: deskLeft, bottom: terminalHeight, chatCollapsed: chatFolded, chatBeside } });
+  }, [workspaceId, attachToComposer, desktopRequest, onDesktopMode, deskLeft, terminalHeight, chatFolded, chatBeside]);
   useLayoutEffect(() => () => setDesktopHost(undefined), []);
   useEffect(() => {
     if (selected && allSessions.some((session) => session.id === selected && session.workspaceId !== workspaceId)) {
@@ -421,6 +439,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     if (message.type === "permissions") window.dispatchEvent(new CustomEvent(PERMISSIONS_EVENT, { detail: message.requests }));
     if (message.type === "app-approvals") window.dispatchEvent(new CustomEvent(APP_APPROVALS_EVENT, { detail: message.approvals }));
     if (message.type === "browser-command") window.dispatchEvent(new CustomEvent("orchestra:browser-command", { detail: message }));
+    // Browser windows outside the app window (browser-window.ts): which are open, one coming back in, elements picked there.
+    if (message.type === "browser-windows") setOutsideWindows(message.windows);
+    if (message.type === "browser-dock") window.dispatchEvent(new CustomEvent(DOCK_EVENT, { detail: { id: message.id, workspaceId: message.workspaceId } }));
+    if (message.type === "browser-attach" && message.workspaceId === workspaceId && Array.isArray(message.items)) attachRef.current(message.items);
     if (message.type.startsWith("computer-")) handleComputerMessage(message);
     if (message.type === "sessions") { sessionListFrames.current += 1; setSessions(message.sessions); }
     if (message.type === "groups") setBoot((old) => ({ ...old, groups: message.groups }));
@@ -438,6 +460,8 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
   };
   useEffect(() => { void load(); }, []);
   const connected = useAppSocket(onServerMessage, () => { draftStore.clear(); void load(); });
+  // Offline, the list of browser windows outside the app is stale: nothing is decided from it (BrowserDesktop).
+  useEffect(() => { if (!connected) outsideWindowsUnknown(); }, [connected]);
   const emptyChat = Boolean(active && active.status !== "running" && !active.events.some((event) => event.type === "message"));
   // A new lead owns one project: it starts only once a folder is picked, never in the home folder.
   const leadNeedsFolder = !active && Boolean(stewardDraft && !stewardDraft.id) && (!cwd || cwd === boot.homeCwd);
@@ -451,7 +475,6 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     connected,
   );
   const canSend = Boolean((prompt.trim() || attachments.some((item) => item.kind === "element" || item.screenshotPath)) && canSendBase && attachmentsReady);
-  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   const { bottom, chatBody, showChatBottom, hasAbove, scrollToChatBottom, chatScrollHandlers } = useChatScroll({
     resetKey: [selected, workerSelection?.taskId],
     followKey: [active?.events.at(-1)?.id, active?.events.at(-1)?.text, pendingRecommendation, editingRecommendation],
@@ -913,11 +936,16 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
     <MarkdownSessionContext.Provider value={active?.id}>
     <ViewerContext.Provider value={viewerApi}>
     <MotionConfig reducedMotion="user">
-      <div style={{ "--terminal-height": `${terminalHeight}px`, "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatCollapsed && desktopMode !== "max" ? " chat-collapsed" : ""}`}>
+      <div style={{ "--terminal-height": `${terminalHeight}px`, "--sidebar-width": `${sidebarWidth}px`, "--desk-left": `${deskLeft}px`, ...(deskBrowserWidth ? { "--desk-browser": `${deskBrowserWidth}px` } : {}) } as React.CSSProperties} className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}${sidebarOverlay ? " sidebar-overlay" : ""} desk-${desktopMode}${chatFolded ? " chat-collapsed" : ""}`}>
         <WindowHeader title={tab === "workspace" ? active?.title : viewTitles[tab]} project={tab === "workspace" && !leadNeedsFolder ? activeProject : undefined} runningSince={tab === "workspace" ? runningSince : undefined}
           sidebar={{ open: sidebarOpen, controls: SIDEBAR_ID, onToggle: toggleSidebar, buttonRef: sidebarToggle }}
           workspace={<WorkspaceSwitcher onManage={openWorkspaceSettings} />}
-          extra={desktopMode !== "none" && desktopMode !== "max" && tab === "workspace" ? <button type="button" className="header-icon-button" aria-label={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} title={chatCollapsed ? t("ws.expandChat") : t("ws.collapseChat")} aria-pressed={chatCollapsed} onClick={() => setChatCollapsed((value) => !value)}>{chatCollapsed ? <PanelRightOpen size={18} aria-hidden="true" /> : <PanelRightClose size={18} aria-hidden="true" />}</button> : undefined}
+          extra={desktopMode === "max" || (desktopMode !== "none" && tab === "workspace") ? (() => {
+            // Beside a maximized browser: show or hide the chat. Beside a snapped one: fold it to its rail.
+            const hidden = desktopMode === "max" ? !chatWidgetOpen : chatCollapsed;
+            const label = hidden ? t("ws.expandChat") : t("ws.collapseChat");
+            return <button type="button" className="header-icon-button" aria-label={label} title={label} aria-pressed={hidden} onClick={toggleChat}>{hidden ? <PanelRightOpen size={18} aria-hidden="true" /> : <PanelRightClose size={18} aria-hidden="true" />}{desktopMode === "max" && hidden && active?.status === "running" && <span className="header-chat-running" aria-hidden="true" />}</button>;
+          })() : undefined}
           onBrowser={() => showBrowser(false)}
           onSimulator={openSimulator}
           activity={tab === "workspace" ? { open: activityOpen, controls: "activity-panel", onToggle: () => setActivityOpen((value) => !value) } : undefined}
@@ -936,14 +964,10 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
         >
           {lastAnnouncement}
         </div>
-        {chatCollapsed && desktopMode !== "max" && <aside className="chat-rail" aria-label={t("ws.collapsedChat")}>
+        {chatFolded && <aside className="chat-rail" aria-label={t("ws.collapsedChat")}>
           <button type="button" onClick={() => setChatCollapsed(false)} aria-label={t("ws.expandChat")} title={t("ws.expandChat")}><PanelRightOpen size={18} /><MessageSquare size={18} /><span>{t("ws.chat")}</span></button>
         </aside>}
-        {desktopMode === "max" && !chatWidgetOpen && <button type="button" className="chat-bubble" onClick={() => setChatWidgetOpen(true)} aria-label={t("ws.openChat")} title={t("ws.openChat")}>
-          <MessageSquare size={22} />{active?.status === "running" && <span className="chat-bubble-dot" />}
-        </button>}
-        <main className={`${tab === "workspace" ? "chat-view" : "management-view"}${desktopMode === "max" ? (chatWidgetOpen ? " chat-float" : " chat-hidden") : ""}`}>
-          {desktopMode === "max" && chatWidgetOpen && <button type="button" className="chat-float-close" onClick={() => setChatWidgetOpen(false)} aria-label={t("ws.collapseChat")} title={t("ws.collapseChat")}><ChevronDown size={16} /></button>}
+        <main className={`${tab === "workspace" ? "chat-view" : "management-view"}${desktopMode === "max" && !chatWidgetOpen ? " chat-hidden" : ""}`}>
           {tab === "usage" && <section className="usage-page" aria-labelledby="usage-page-title"><header className="usage-page-head"><h2 id="usage-page-title">{t("side.usage")}</h2></header><UsagePanel initialWorkspace={workspaceId} /></section>}
           {tab === "tools" && <ToolsPanel key={toolsTab.n} initialTab={toolsTab.tab} workspaceId={workspaceId} cwd={shownCwd} onChange={() => {
             void api<Skill[]>(`/skills?cwd=${encodeURIComponent(shownCwd)}&workspace=${encodeURIComponent(workspaceId)}`).then((next) => {

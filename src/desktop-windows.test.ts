@@ -46,3 +46,34 @@ test("each workspace keeps its own browser windows; the first one inherits the o
   assert.deepEqual(loadWorkspaceWindows(read, "other", false), []);
   assert.equal(desktopStoreKey("company"), "orchestra.browser.desktop.company");
 });
+
+test("a snapped window shares the width with the docked sidebar, the terminal and the chat", async () => {
+  const { applySnap, clampSnapWidth, clampSplit, frameOf, snapWidth, CHAT_RAIL, SPLIT_MIN_BROWSER, SPLIT_MIN_CHAT } = await import("./desktop-windows");
+  const area = { width: 1480, height: 852 };
+  const win = { id: "a", x: 40, y: 30, w: 700, h: 500, z: 1 };
+  const room = { left: 280, bottom: 240, split: 0.5, chatCollapsed: false, chatBeside: false };
+  // Half of what the sidebar leaves, above the terminal.
+  assert.deepEqual(frameOf(applySnap(win, "left"), area, room), { x: 280, y: 0, w: 600, h: 612 });
+  assert.deepEqual(frameOf(applySnap(win, "right"), area, room), { x: 880, y: 0, w: 600, h: 612 });
+  assert.deepEqual(frameOf(applySnap(win, "max"), area, room), { x: 280, y: 0, w: 1200, h: 612 });
+  // A floating window keeps its own frame, wherever the sidebar is.
+  assert.deepEqual(frameOf(win, area, room), { x: 40, y: 30, w: 700, h: 500 });
+  // The dragged split moves the edge; neither side drops under its minimum.
+  assert.equal(frameOf(applySnap(win, "left"), area, { ...room, split: 0.7 }).w, 840);
+  assert.equal(snapWidth(area, { ...room, split: 0.01 }), SPLIT_MIN_BROWSER);
+  assert.equal(snapWidth(area, { ...room, split: 0.99 }), 1200 - SPLIT_MIN_CHAT);
+  assert.equal(clampSnapWidth(5000, 1200), 1200 - SPLIT_MIN_CHAT);
+  assert.equal(clampSnapWidth(10, 1200), SPLIT_MIN_BROWSER);
+  assert.equal(clampSnapWidth(500, 600), 300, "too narrow for both minimums: halves");
+  assert.equal(clampSplit(Number.NaN), 0.5);
+  // A maximized window fills everything the sidebar and terminal leave, until the chat is opened beside
+  // it: then it shares the width like a left snap (the chat is never laid over the page).
+  const beside = { ...room, chatBeside: true };
+  assert.deepEqual(frameOf(applySnap(win, "max"), area, beside), { x: 280, y: 0, w: 600, h: 612 });
+  assert.deepEqual(frameOf(applySnap(win, "max"), area, { ...beside, split: 0.7 }), { x: 280, y: 0, w: 840, h: 612 });
+  assert.deepEqual(frameOf(applySnap(win, "left"), area, beside), { x: 280, y: 0, w: 600, h: 612 }, "a snapped window is not affected");
+  // A folded chat keeps only its rail: on the right of a left snap, between the sidebar and a right snap.
+  const folded = { ...room, chatCollapsed: true };
+  assert.deepEqual(frameOf(applySnap(win, "left"), area, folded), { x: 280, y: 0, w: 1200 - CHAT_RAIL, h: 612 });
+  assert.deepEqual(frameOf(applySnap(win, "right"), area, folded), { x: 280 + CHAT_RAIL, y: 0, w: 1200 - CHAT_RAIL, h: 612 });
+});

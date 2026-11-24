@@ -5,13 +5,12 @@ export const SIDEBAR_OVERLAY_QUERY = "(max-width: 899px)";
 
 /**
  * Where the sidebar lives and whether it is showing.
- * Docked (wide window, no browser focus): a column that follows the persisted `collapsed` preference.
- * Overlay (narrow window or a browser window snapped/maximised): floats over the content and starts
- * closed, so neither a narrow window nor the browser loses space to it; `overlayOpen` is transient.
+ * Docked (wide window): a column that follows the persisted `collapsed` preference, also beside a
+ * snapped or maximised browser window (they lay out to its right; folding it is the user's choice).
+ * Overlay (narrow window): floats over the content and starts closed; `overlayOpen` is transient.
  */
-export function sidebarLayout(state: { collapsed: boolean; narrow: boolean; focusMode: boolean; overlayOpen: boolean }): { overlay: boolean; open: boolean } {
-  const overlay = state.narrow || state.focusMode;
-  return { overlay, open: overlay ? state.overlayOpen : !state.collapsed };
+export function sidebarLayout(state: { collapsed: boolean; narrow: boolean; overlayOpen: boolean }): { overlay: boolean; open: boolean } {
+  return { overlay: state.narrow, open: state.narrow ? state.overlayOpen : !state.collapsed };
 }
 
 /** ⌘B / ⌘\ on macOS, Ctrl+B / Ctrl+\ elsewhere. */

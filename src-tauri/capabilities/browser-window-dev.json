@@ -1,0 +1,33 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browser-window-dev",
+  "description": "Dev-only: browser windows on the vite dev server. Enabled by tauri.dev.conf.json; not part of release builds.",
+  "windows": [
+    "browser-*"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-open-devtools",
+    "allow-app-key",
+    "allow-native-browser-supported",
+    "allow-native-browser-open",
+    "allow-native-browser-layout",
+    "allow-native-browser-close",
+    "allow-native-browser-history",
+    "allow-native-browser-emulate",
+    "allow-native-browser-devtools",
+    "allow-native-browser-call",
+    "allow-native-browser-poll",
+    "allow-native-browser-screenshot",
+    "allow-native-browser-dialog",
+    "allow-native-browser-events",
+    "allow-native-browser-downloads",
+    "allow-native-browser-input",
+    "allow-browser-window-close"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:5188/*"
+    ]
+  }
+}

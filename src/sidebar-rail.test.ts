@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { railToggleLabel, sidebarLayout, sidebarShortcut } from "./sidebar-rail";
 
 test("a wide window docks the sidebar and follows the saved preference", () => {
-  assert.deepEqual(sidebarLayout({ collapsed: false, narrow: false, focusMode: false, overlayOpen: false }), { overlay: false, open: true });
-  assert.deepEqual(sidebarLayout({ collapsed: true, narrow: false, focusMode: false, overlayOpen: true }), { overlay: false, open: false });
+  assert.deepEqual(sidebarLayout({ collapsed: false, narrow: false, overlayOpen: false }), { overlay: false, open: true });
+  assert.deepEqual(sidebarLayout({ collapsed: true, narrow: false, overlayOpen: true }), { overlay: false, open: false });
 });
 
-test("narrow windows and browser focus overlay the sidebar and ignore the saved preference", () => {
-  assert.deepEqual(sidebarLayout({ collapsed: false, narrow: true, focusMode: false, overlayOpen: false }), { overlay: true, open: false });
-  assert.deepEqual(sidebarLayout({ collapsed: true, narrow: false, focusMode: true, overlayOpen: true }), { overlay: true, open: true });
+test("only a narrow window overlays the sidebar and ignores the saved preference", () => {
+  assert.deepEqual(sidebarLayout({ collapsed: false, narrow: true, overlayOpen: false }), { overlay: true, open: false });
+  assert.deepEqual(sidebarLayout({ collapsed: true, narrow: true, overlayOpen: true }), { overlay: true, open: true });
 });
 
 test("the sidebar shortcut is ⌘B / ⌘\\ on macOS and Ctrl elsewhere, never with Shift or Alt", () => {

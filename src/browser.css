@@ -158,23 +158,36 @@
 .desktop-dock { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; gap: 6px; padding: 5px; border-radius: var(--radius-mobile-team); pointer-events: auto; background: var(--bg-sidebar); box-shadow: 0 8px 26px var(--shadow-color); }
 .desktop-dock button { display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: var(--radius-message); padding: 6px 10px; font: inherit; font-size: var(--text-title); font-weight: 600; color: var(--text); background: var(--bg-strong); cursor: pointer; }
 .desktop-dock button:hover { background: var(--bg-strong); }
+.desktop-dock button.outside { background: var(--accent-tint); }
+.desktop-dock span[role="alert"] { align-self: center; padding: 0 8px; font-size: var(--text-title); color: var(--warn); }
 
-/* ---- 브라우저가 반쪽/전체를 차지할 때 채팅 배치 (사이드바는 이때 오버레이) ---- */
-.app-shell.desk-left main { margin-left: 50vw; border-left: 1px solid var(--border); }
-.app-shell.desk-right main { margin-right: 50vw; border-right: 1px solid var(--border); }
-.app-shell main.chat-hidden { display: none; }
-.app-shell main.chat-float {
-  position: fixed; right: 20px; bottom: 20px; z-index: 95; width: min(440px, calc(100vw - 40px)); height: min(660px, calc(100dvh - 90px));
-  margin: 0; border-radius: var(--radius-emblem); overflow: hidden; box-shadow: 0 24px 70px var(--shadow-color), 0 0 0 1px var(--highlight);
+/* ---- 앱 밖으로 뺀 브라우저 창 (BrowserWindowApp): 창 전체가 브라우저 패널 ---- */
+.browser-window-root { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--bg-app); }
+.browser-window-root > .browser-panel { flex: 1 1 auto; min-width: 0; max-width: none; min-height: 0; border-radius: 0; }
+.browser-window-offline { flex: none; padding: 6px 14px; font-size: var(--text-title); color: var(--text); background: var(--warn-tint, var(--info-tint)); }
+.browser-dock-back { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 30px; margin: 0 6px 6px 0; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--bg-active); color: var(--text); font: inherit; font-size: var(--text-title); font-weight: 600; white-space: nowrap; cursor: pointer; }
+.browser-dock-back:hover:not(:disabled) { background: var(--bg-strong); }
+.browser-dock-back:disabled { opacity: .5; cursor: default; }
+
+/* ---- 브라우저가 한쪽/전체를 차지할 때 채팅 배치: 브라우저 폭(--desk-browser)만큼 비켜 선다. 사이드바는 그대로 고정 ---- */
+.app-shell.desk-left main { margin-left: var(--desk-browser, 50vw); border-left: 1px solid var(--border); }
+.app-shell.desk-right main { margin-right: var(--desk-browser, 50vw); border-right: 1px solid var(--border); }
+/* 꽉 채운 브라우저 옆의 채팅: 숨겨 두었다가(헤더 버튼, ⌘⇧J) 열면 옆에 붙는다. 페이지 위에 띄우지 않는다 —
+   네이티브 페이지 뷰는 앱 UI보다 위에 그려져서, 그 위에 올린 채팅은 보이지 않는다. */
+.app-shell.desk-max main { margin-left: var(--desk-browser, 50vw); border-left: 1px solid var(--border); }
+.header-chat-running { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; border-radius: var(--radius-round); background: var(--accent); }
+/* The edge between a snapped browser window and the chat: drag (or arrow keys) to share the width (BrowserDesktop.tsx).
+   It sits on the chat's side of the edge: the page itself is a native layer that would swallow the pointer. */
+.desktop-split { position: absolute; top: 0; width: 9px; margin-left: -2px; pointer-events: auto; cursor: col-resize; touch-action: none; }
+.desktop-split.split-right { margin-left: -7px; }
+.desktop-split:hover, .desktop-split:focus-visible, body.desk-splitting .desktop-split {
+  background: linear-gradient(to right, transparent 4px, var(--border-focus) 4px, var(--border-focus) 6px, transparent 6px); outline: none;
 }
-.app-shell main.chat-float .activity-panel { display: none; }
-.chat-float-close { position: absolute; top: 10px; right: 12px; z-index: 5; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: var(--radius-control); color: var(--text); background: var(--bg-strong); cursor: pointer; }
-.chat-float-close:hover { background: var(--bg-strong); }
-.app-shell main.chat-float .chat-context-bar { margin-right: 38px; }
-.chat-bubble { position: fixed; right: 22px; bottom: 22px; z-index: 95; display: grid; place-items: center; width: 56px; height: 56px; border: 0; border-radius: var(--radius-round); color: var(--on-status); cursor: pointer;
-  background: var(--info); box-shadow: 0 14px 34px var(--shadow-color); transition: transform .15s; }
-.chat-bubble:hover { transform: scale(1.07); }
-.chat-bubble-dot { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: var(--radius-round); background: var(--accent); border: 2px solid var(--bg-app); }
+.desktop-split.split-left:hover, .desktop-split.split-left:focus-visible, body.desk-splitting .desktop-split.split-left {
+  background: linear-gradient(to right, transparent 1px, var(--border-focus) 1px, var(--border-focus) 3px, transparent 3px);
+}
+body.desk-splitting, body.desk-splitting * { cursor: col-resize !important; user-select: none; }
+.app-shell main.chat-hidden { display: none; }
 
 /* ---- 채팅 접기: 오른쪽 얇은 레일 ---- */
 .app-shell.chat-collapsed main.chat-view { display: none; }
@@ -182,6 +195,8 @@
 .chat-rail button { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; height: 100%; padding: 14px 0; border: 0; border-radius: 0; color: var(--text-secondary); background: transparent; cursor: pointer; font: inherit; font-size: var(--text-title); font-weight: 600; }
 .chat-rail button:hover { background: var(--bg-active); }
 .chat-rail span { writing-mode: vertical-rl; letter-spacing: .1em; }
+/* The chat's side of the window: with the browser snapped right, the folded chat's rail sits left of it, after the sidebar. */
+.app-shell.desk-right .chat-rail { right: auto; left: var(--desk-left, 0px); border-left: 0; border-right: 1px solid var(--border); }
 
 /* Native tab page dialogs (alert/confirm/prompt) and downloads: bars above the page, never over it
    (the page view is a native layer that app UI cannot cover without hiding it). */

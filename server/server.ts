@@ -36,6 +36,7 @@ import type { NotificationInput, NotificationType } from "./notification-types.j
 import { createTerminalService } from "./terminal.js";
 import { appContentSecurityPolicy, isAllowedOrigin } from "./origin-policy.js";
 import { hasAppKey } from "./app-key.js";
+import { BrowserWindows, parseBrowserWindowMessage, parseBrowserWindowUrl } from "./browser-windows.js";
 import { applyMcpClient, isMcpClient, McpClientConfigError, planMcpClient } from "./mcp-clients.js";
 import { mcpClientsSeen, noteMcpClient } from "./mcp-seen.js";
 import { commandAvailable, runCli } from "./cli.js";
@@ -435,7 +436,7 @@ export function withWorkspaceAccounts(runner: PlannerRunner, policyFor?: Workspa
   };
 }
 
-export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean; wsPingMs?: number; wsBufferLimit?: number } = {}) {
+export function createServer(options: { staticDir?: string; folderRunner?: FolderRunner; dataDir?: string; routingRunner?: PlannerRunner; limitsRunner?: typeof runCli; routingSkillLoader?: typeof publicSkills; toolSkillLoader?: typeof publicSkills; toolRunner?: ToolCommandRunner; codexConfigPath?: string; availableAgents?: AgentId[]; availabilityLoader?: () => Promise<AgentId[]>; modelRunner?: ModelCommandRunner; modelHomeDir?: string; sessionSaver?: typeof saveSessions; sessionSaveDelayMs?: number; inactivityTimeoutMs?: number; worktrees?: boolean; authDiscovery?: { sleep?: (ms: number) => Promise<void> }; browserQueue?: boolean; appMcp?: boolean; wsPingMs?: number; wsBufferLimit?: number; browserWindowGraceMs?: number } = {}) {
   const app = express();
   app.disable("x-powered-by");
   const smallJson = express.json({ limit: "1mb" });
@@ -449,6 +450,13 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   httpServer.setMaxListeners(40);
   const websocket = new WebSocketServer({ noServer: true, maxPayload: 16_384 });
   const deliveredEvents = new WeakMap<WebSocket, Map<string, string>>();
+  // Browser windows outside the app window (`/ws/browser`): not app windows, so they get no sessions and
+  // do not count in /api/health. They may send picked elements with screenshots, hence the larger frames.
+  const browserSockets = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
+  const sendAppWindows = (message: string) => { for (const client of websocket.clients) if (client.readyState === WebSocket.OPEN) client.send(message); };
+  const toAppWindows = (payload: unknown) => sendAppWindows(JSON.stringify(payload));
+  const browserWindows = new BrowserWindows((windows) => toAppWindows({ type: "browser-windows", windows }), sendAppWindows, options.browserWindowGraceMs);
+  httpServer.once("close", () => { browserWindows.dispose(); for (const client of browserSockets.clients) client.terminate(); browserSockets.close(); });
 
   const notifications = new NotificationStore(options.dataDir, (workspaceId) => {
     const message = JSON.stringify({ type: "notifications", workspaceId });
@@ -502,6 +510,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   // ao-computer, /api/health). A window that was behind gets what it missed.
   const alive = new WeakSet<WebSocket>();
   const keepalive = setInterval(() => {
+    for (const client of browserSockets.clients) {
+      if (!alive.has(client)) { client.terminate(); continue; }
+      alive.delete(client);
+      try { client.ping(); } catch { client.terminate(); }
+    }
     for (const client of websocket.clients) {
       if (!alive.has(client)) { client.terminate(); continue; }
       alive.delete(client);
@@ -723,6 +736,11 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   httpServer.once("close", () => previewProxies.close());
   const browserBridge = new BrowserBridge((command) => {
     const message = JSON.stringify(command);
+    // A workspace's browser window outside the app answers alone (browser-windows.ts): one command, one page.
+    const outside = browserWindows.target(command.workspaceId);
+    if (outside) { outside.send(message); return 1; }
+    // Its window just dropped (a reload, a reconnect): the command waits a moment for it rather than open a second browser in the app.
+    if (browserWindows.hold(command.workspaceId, command.id, message)) return 1;
     let count = 0;
     for (const client of websocket.clients) if (client.readyState === WebSocket.OPEN) { client.send(message); count++; }
     return count;
@@ -1896,10 +1914,28 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   httpServer.on("upgrade", (request, socket, head) => {
     if (terminal.handleUpgrade(request, socket, head)) return;
     // Every session, live: the app window only (its key, see app-key.ts), never just a matching Origin.
-    if (request.url !== "/ws" || !isLoopbackHost(request.headers.host) || !request.headers.origin || !isAllowedOrigin(request.headers.origin) || !hasAppKey(request.headers)) {
+    const outside = parseBrowserWindowUrl(request.url);
+    if ((request.url !== "/ws" && !outside) || !isLoopbackHost(request.headers.host) || !request.headers.origin || !isAllowedOrigin(request.headers.origin) || !hasAppKey(request.headers)) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n"); socket.destroy(); return;
     }
+    if (outside) { browserSockets.handleUpgrade(request, socket, head, (client) => browserSockets.emit("connection", client, outside)); return; }
     websocket.handleUpgrade(request, socket, head, (client) => websocket.emit("connection", client, request));
+  });
+  // A browser window outside the app window: the same app (its key), showing one workspace's browser.
+  browserSockets.on("connection", (client: WebSocket, info: { id: string; workspaceId: string }) => {
+    alive.add(client);
+    client.on("pong", () => alive.add(client));
+    client.on("error", (error) => console.error("[sinawi] browser window socket:", error.message));
+    client.on("close", () => browserWindows.remove(client));
+    client.on("message", (data) => {
+      const message = parseBrowserWindowMessage(data.toString());
+      if (!message) return;
+      if (message.type === "focus") browserWindows.touch(client);
+      // Back into the app window, or elements picked for the chat: the app window of that workspace acts on it.
+      else if (message.type === "dock") toAppWindows({ type: "browser-dock", ...info });
+      else toAppWindows({ type: "browser-attach", workspaceId: info.workspaceId, items: message.items });
+    });
+    browserWindows.add(client, info);
   });
   websocket.on("connection", async (client) => {
     alive.add(client);
@@ -1910,6 +1946,7 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
       if (client.readyState !== WebSocket.OPEN) return;
       const sessions = orchestra.list();
       client.send(JSON.stringify({ type: "sessions", sessions }));
+      client.send(JSON.stringify({ type: "browser-windows", windows: browserWindows.list() }));
       deliveredEvents.set(client, new Map(sessions.flatMap((session) => {
         const latest = session.events.at(-1)?.id;
         return latest ? [[session.id, latest] as const] : [];
@@ -1922,5 +1959,5 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
 
   const flushSessions = () => persistAllSessions(orchestra.list());
-  return { app, httpServer, websocket, orchestra, terminal, notifications, browserBridge, flushSessions };
+  return { app, httpServer, websocket, browserSockets, orchestra, terminal, notifications, browserBridge, flushSessions };
 }

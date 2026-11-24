@@ -33,7 +33,9 @@
     "allow-native-browser-dialog",
     "allow-native-browser-events",
     "allow-native-browser-downloads",
-    "allow-native-browser-input"
+    "allow-native-browser-input",
+    "allow-browser-window-open",
+    "allow-browser-window-close"
   ],
   "remote": {
     "urls": [

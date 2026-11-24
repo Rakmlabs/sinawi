@@ -42,13 +42,43 @@ export type Snap = "left" | "right" | "max";
 export type DesktopMode = "none" | Snap;
 type Area = { width: number; height: number };
 
+/**
+ * What a snapped or maximized window shares the area with: the docked sidebar on the left (`left`),
+ * the terminal at the bottom (`bottom`) and the chat beside it. `split` is the browser's share of
+ * the width that is left; a folded chat keeps only its rail. A maximized window fills everything
+ * else, unless the chat is open beside it (`chatBeside`): then it shares the width like a left snap.
+ * Nothing of the app is ever laid over the page: a native page view draws above all app UI.
+ */
+export type DeskLayout = { left: number; bottom: number; split: number; chatCollapsed: boolean; chatBeside: boolean };
+export const SPLIT_DEFAULT = 0.5;
+export const SPLIT_MIN_BROWSER = 320, SPLIT_MIN_CHAT = 340;
+/** Width of the folded chat's rail (.chat-rail). */
+export const CHAT_RAIL = 48;
+export const DEFAULT_LAYOUT: DeskLayout = { left: 0, bottom: 0, split: SPLIT_DEFAULT, chatCollapsed: false, chatBeside: false };
+
+export const clampSplit = (value: number) => (Number.isFinite(value) ? Math.min(0.85, Math.max(0.15, value)) : SPLIT_DEFAULT);
+
+/** A snapped window's width within `usable` px: both the page and the chat keep a workable minimum. */
+export function clampSnapWidth(width: number, usable: number): number {
+  if (usable < SPLIT_MIN_BROWSER + SPLIT_MIN_CHAT) return Math.round(usable / 2);
+  return Math.round(Math.min(usable - SPLIT_MIN_CHAT, Math.max(SPLIT_MIN_BROWSER, width)));
+}
+
+/** Width of a snapped browser window. */
+export function snapWidth(area: Area, layout: DeskLayout = DEFAULT_LAYOUT): number {
+  const usable = Math.max(0, area.width - layout.left);
+  if (layout.chatCollapsed) return Math.max(0, usable - CHAT_RAIL);
+  return clampSnapWidth(usable * clampSplit(layout.split), usable);
+}
+
 /** Where a window is drawn: snapped/maximized windows fill part of the area, others use their own frame. */
-export function frameOf(win: DesktopWindow, area: Area): { x: number; y: number; w: number; h: number } {
-  const half = Math.round(area.width / 2);
-  if (win.maximized) return { x: 0, y: 0, w: area.width, h: area.height };
-  if (win.snap === "left") return { x: 0, y: 0, w: half, h: area.height };
-  if (win.snap === "right") return { x: area.width - half, y: 0, w: half, h: area.height };
-  return { x: win.x, y: win.y, w: win.w, h: win.h };
+export function frameOf(win: DesktopWindow, area: Area, layout: DeskLayout = DEFAULT_LAYOUT): { x: number; y: number; w: number; h: number } {
+  const h = Math.max(0, area.height - layout.bottom);
+  if (win.maximized) return { x: layout.left, y: 0, w: layout.chatBeside ? snapWidth(area, { ...layout, chatCollapsed: false }) : Math.max(0, area.width - layout.left), h };
+  if (!win.snap) return { x: win.x, y: win.y, w: win.w, h: win.h };
+  const w = snapWidth(area, layout);
+  // The chat (or its rail) takes the other side, between the sidebar and the page for a right snap.
+  return { x: win.snap === "left" ? layout.left : area.width - w, y: 0, w, h };
 }
 
 /** Snap toggles: pressing the same snap again restores the floating frame. */

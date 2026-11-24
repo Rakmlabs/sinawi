@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Globe, Maximize2, Minimize2, Minus, PanelLeft, PanelRight, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ExternalLink, Globe, Maximize2, Minimize2, Minus, PanelLeft, PanelRight, Plus, X } from "lucide-react";
 import { BrowserPanel } from "./BrowserPanel";
 import { browserRegistry } from "./browser-registry";
 import { windowShortcut } from "./browser-shortcuts";
-import { applySnap, clampPosition, desktopMode, desktopStoreKey, frameOf, loadWorkspaceWindows, newWindow, resizeWindow, topZ, type DesktopMode, type DesktopWindow, type Edge, type Snap } from "./desktop-windows";
+import { applySnap, clampPosition, clampSnapWidth, desktopMode, desktopStoreKey, frameOf, loadWorkspaceWindows, newWindow, resizeWindow, SPLIT_DEFAULT, SPLIT_MIN_BROWSER, SPLIT_MIN_CHAT, topZ, type DeskLayout, type DesktopMode, type DesktopWindow, type Edge, type Snap } from "./desktop-windows";
+import { setDeskSplit, useDeskSplit } from "./desktop-split";
+import { DOCK_EVENT, forgetOutside, lostOutside, openBrowserWindow, OUTSIDE_GRACE_MS, rememberedOutside, rememberOutside, stillOpening, useOutsideReport, useOutsideWindows, type BrowserWindowTarget } from "./browser-window";
 import type { ComposerAttachment } from "./preview-attachments";
 import { t } from "./i18n";
 
@@ -12,21 +14,34 @@ const newId = () => Math.random().toString(36).slice(2, 10);
 
 export type DesktopRequest = { n: number; toggle?: boolean };
 type Props = {
-  workspaceId: string; firstWorkspace: boolean; onAttach: (items: ComposerAttachment[]) => void; request: DesktopRequest; onModeChange: (mode: DesktopMode) => void;
+  workspaceId: string; firstWorkspace: boolean; onAttach: (items: ComposerAttachment[]) => void; request: DesktopRequest; onModeChange: (mode: DesktopMode, browserWidth: number) => void;
   /** The user is in another workspace: the windows stay alive, out of sight, for this workspace's agents. */
   background?: boolean;
+  /** Room the workspace on screen keeps for its docked sidebar, terminal and folded chat. */
+  room?: { left: number; bottom: number; chatCollapsed: boolean; chatBeside: boolean };
 };
+const NO_ROOM = { left: 0, bottom: 0, chatCollapsed: false, chatBeside: false };
 
 /** Browser windows floating over the workspace (the only browser layout). */
-export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request, onModeChange, background = false }: Props) {
+export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request, onModeChange, background = false, room = NO_ROOM }: Props) {
   const area = useRef<HTMLDivElement>(null);
+  const split = useDeskSplit();
+  const layout = useMemo<DeskLayout>(() => ({ left: room.left, bottom: room.bottom, chatCollapsed: room.chatCollapsed, chatBeside: room.chatBeside, split }), [room.left, room.bottom, room.chatCollapsed, room.chatBeside, split]);
   const [windows, setWindows] = useState<DesktopWindow[]>(() => loadWorkspaceWindows((key) => localStorage.getItem(key), workspaceId, firstWorkspace));
   const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const sizeRef = useRef(size); sizeRef.current = size;
   const [, force] = useState(0);
   useEffect(() => browserRegistry.subscribe(() => force((n) => n + 1)), []);
   useEffect(() => { localStorage.setItem(desktopStoreKey(workspaceId), JSON.stringify(windows)); }, [windows, workspaceId]);
   const mode = desktopMode(windows);
-  useEffect(() => { if (!background) onModeChange(mode); }, [mode, onModeChange, background]);
+  // The window the chat sits beside, and on which side of the chat it is: the snapped one on top (the
+  // same one desktopMode picked), or the maximized one while the chat is open beside it.
+  const side: "left" | "right" | undefined = mode === "max" ? (layout.chatBeside ? "left" : undefined) : mode === "none" ? undefined : mode;
+  const splitWindow = side ? windows.filter((w) => !w.minimized && (mode === "max" ? w.maximized : !w.maximized && w.snap === mode)).sort((a, b) => b.z - a.z)[0] : undefined;
+  const splitFrame = splitWindow ? frameOf(splitWindow, size, layout) : undefined;
+  const browserWidth = splitFrame?.w ?? 0;
+  // Layout, not a passive effect: the chat's margin must follow the window's width in the same frame.
+  useLayoutEffect(() => { if (!background) onModeChange(mode, browserWidth); }, [mode, browserWidth, onModeChange, background]);
   // Requests come from whichever source drives this desktop now (the workspace on screen, or an
   // agent while it is off screen): each request object is acted on once, so switching sources
   // never replays an old one.
@@ -57,6 +72,52 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
     browserRegistry.setDesktopFocused(false);
   }, []);
   const snap = useCallback((id: string, to: Snap) => { update(id, (w) => applySnap(w, to)); focus(id); }, [update, focus]);
+  // Out of the app into its own OS window: the window keeps its id, so its saved tabs open there
+  // (BrowserPanel's store is keyed by it) and come back with it. The agents follow (server/browser-windows.ts).
+  const everyOutside = useOutsideWindows();
+  const outside = everyOutside.filter((item) => item.workspaceId === workspaceId);
+  const outsideRef = useRef(everyOutside); outsideRef.current = everyOutside;
+  const [popOutError, setPopOutError] = useState(false);
+  useEffect(() => { if (!popOutError) return; const timer = setTimeout(() => setPopOutError(false), 5000); return () => clearTimeout(timer); }, [popOutError]);
+  const popOut = useCallback((id: string) => {
+    void openBrowserWindow({ id, workspaceId }, t("bw.title")).then((opened) => {
+      if (!opened) { setPopOutError(true); return; }
+      rememberOutside(workspaceId, id);
+      setWindows((old) => old.filter((w) => w.id !== id));
+      browserRegistry.setDesktopFocused(false);
+    });
+  }, [workspaceId]);
+  useEffect(() => {
+    const dock = (event: Event) => {
+      const target = (event as CustomEvent<BrowserWindowTarget>).detail;
+      if (target?.workspaceId !== workspaceId || !target.id) return;
+      forgetOutside(workspaceId, target.id);
+      setWindows((old) => old.some((w) => w.id === target.id) ? old.map((w) => w.id === target.id ? { ...w, minimized: false, z: topZ(old) + 1 } : w) : [...old, newWindow(old, sizeRef.current, target.id)]);
+      browserRegistry.activate(target.id);
+    };
+    window.addEventListener(DOCK_EVENT, dock);
+    return () => window.removeEventListener(DOCK_EVENT, dock);
+  }, [workspaceId]);
+  // A window that was moved out and is no longer open out there (closed by its own close button, or
+  // the app restarted) comes back minimized, tabs and all. Checked a while after each report from the
+  // server, so a window whose socket is only reconnecting is left alone; with no report (the app
+  // itself is offline) nothing is known, and nothing is brought back.
+  const outsideReport = useOutsideReport();
+  const [lookAgain, setLookAgain] = useState(0);
+  useEffect(() => {
+    if (!outsideReport) return;
+    const timer = setTimeout(() => {
+      // A window moved out moments ago may still be opening (its report has not come yet): look again later.
+      const remembered = rememberedOutside(workspaceId);
+      const opening = remembered.filter((id) => stillOpening(id));
+      if (opening.length) setLookAgain((n) => n + 1);
+      const lost = lostOutside(remembered.filter((id) => !opening.includes(id)), outsideRef.current, workspaceId);
+      if (!lost.length) return;
+      for (const id of lost) forgetOutside(workspaceId, id);
+      setWindows((old) => lost.filter((id) => !old.some((w) => w.id === id)).reduce((list, id) => [...list, { ...newWindow(list, sizeRef.current, id), minimized: true }], old));
+    }, OUTSIDE_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [outsideReport, lookAgain, workspaceId]);
   // ⌘⇧B / toolbar / agent commands: show the focused window (or make one); toggle minimizes it again.
   // Layout, not a timer: a background WKWebView does not run requestAnimationFrame.
   useLayoutEffect(() => {
@@ -93,7 +154,7 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
     if (win.maximized && !edge) return;
     const startX = event.clientX, startY = event.clientY;
     // Dragging a snapped window un-snaps it under the cursor, like macOS.
-    const start = frameOf(win, size);
+    const start = frameOf(win, size, layout);
     const base: DesktopWindow = win.snap ? { ...win, snap: undefined, x: event.clientX - Math.min(win.w / 2, start.w / 2), y: start.y } : win;
     // The cover (keeps the iframe from eating pointer events) appears only once the pointer moves,
     // so a plain double-click on the header still reaches it.
@@ -111,6 +172,37 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
     const up = () => { cover?.remove(); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
+  // The edge between a snapped window and the chat: drag (or arrow keys) to change how they share the width.
+  const usable = Math.max(0, size.width - layout.left);
+  const resizeSplit = (width: number) => { if (usable > 0) setDeskSplit(clampSnapWidth(width, usable) / usable); };
+  const dragSplit = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !splitFrame) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    // Capture keeps the drag alive over the page (an iframe, or the native view) and the chat.
+    try { handle.setPointerCapture(event.pointerId); } catch { /* no active pointer (synthetic event): the handle still gets its own moves */ }
+    const from = event.clientX, base = splitFrame.w, sign = side === "left" ? 1 : -1;
+    document.body.classList.add("desk-splitting");
+    const move = (next: PointerEvent) => resizeSplit(base + sign * (next.clientX - from));
+    const end = () => {
+      document.body.classList.remove("desk-splitting");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  };
+  const keySplit = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!splitFrame) return;
+    const step = (event.shiftKey ? 48 : 16) * (side === "left" ? 1 : -1);
+    if (event.key === "ArrowRight") resizeSplit(splitFrame.w + step);
+    else if (event.key === "ArrowLeft") resizeSplit(splitFrame.w - step);
+    else if (event.key === "Home") setDeskSplit(SPLIT_DEFAULT);
+    else return;
+    event.preventDefault();
+  };
   const activeId = browserRegistry.active();
   const minimized = windows.filter((w) => w.minimized);
   const browsers = windows;
@@ -119,7 +211,7 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
   return (
     <div ref={area} className={`browser-desktop desk-${mode}${background ? " background" : ""}`} aria-label={t("desk.label")} aria-hidden={background || undefined}>
       {windows.map((win) => {
-        const frame = frameOf(win, size);
+        const frame = frameOf(win, size, layout);
         const fixed = Boolean(win.maximized || win.snap);
         return (
           <section key={win.id} className={`desktop-window${win.id === activeId ? " focused" : ""}${fixed ? " snapped" : ""}`} hidden={win.minimized}
@@ -134,6 +226,7 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
               <span className="desktop-title"><Globe size={13} />{label(win)}{win.id === activeId && browsers.length > 1 && <em>{t("desk.aiTarget")}</em>}</span>
               <div className="desktop-snaps" role="group" aria-label={t("desk.layout")}>
                 <button type="button" aria-label={t("desk.newWindow")} title={t("desk.newWindow")} onClick={open}><Plus size={14} /></button>
+                <button type="button" aria-label={t("desk.popOut")} title={t("desk.popOutTitle")} onClick={() => popOut(win.id)}><ExternalLink size={14} /></button>
                 <button type="button" className={win.snap === "left" ? "on" : ""} aria-label={t("desk.leftHalf")} title={t("desk.leftHalfTitle")} onClick={() => snap(win.id, "left")}><PanelLeft size={14} /></button>
                 <button type="button" className={win.snap === "right" ? "on" : ""} aria-label={t("desk.rightHalf")} title={t("desk.rightHalfTitle")} onClick={() => snap(win.id, "right")}><PanelRight size={14} /></button>
                 <button type="button" className={win.maximized ? "on" : ""} aria-label={win.maximized ? t("desk.restoreTo") : t("desk.fill")} title={win.maximized ? t("desk.restoreToTitle") : t("desk.fillTitle")} onClick={() => snap(win.id, "max")}>{win.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
@@ -147,8 +240,14 @@ export function BrowserDesktop({ workspaceId, firstWorkspace, onAttach, request,
           </section>
         );
       })}
-      {minimized.length > 0 && <nav className="desktop-dock" aria-label={t("desk.dock")}>
+      {splitWindow && splitFrame && side && (mode === "max" || !layout.chatCollapsed) && !background && <div className={`desktop-split split-${side}`} role="separator" aria-orientation="vertical" tabIndex={0}
+        aria-label={t("desk.split")} title={t("desk.splitHint")} aria-valuemin={SPLIT_MIN_BROWSER} aria-valuemax={Math.max(SPLIT_MIN_BROWSER, usable - SPLIT_MIN_CHAT)} aria-valuenow={splitFrame.w}
+        style={{ left: side === "left" ? splitFrame.x + splitFrame.w : splitFrame.x, height: splitFrame.h, zIndex: splitWindow.z }}
+        onPointerDown={dragSplit} onKeyDown={keySplit} onDoubleClick={() => setDeskSplit(SPLIT_DEFAULT)} />}
+      {(minimized.length > 0 || outside.length > 0 || popOutError) && !background && <nav className="desktop-dock" aria-label={t("desk.dock")}>
         {minimized.map((win) => <button type="button" key={win.id} onClick={() => { update(win.id, (w) => ({ ...w, minimized: false })); focus(win.id); }} title={t("desk.restoreWindow")}><Globe size={14} />{t("desk.dockItem", { n: browsers.indexOf(win) + 1 })}</button>)}
+        {outside.map((item, index) => <button type="button" key={item.id} className="outside" onClick={() => { void openBrowserWindow(item, t("bw.title")); }} title={t("desk.outsideTitle")}><ExternalLink size={14} />{t("desk.outside", { n: index + 1 })}</button>)}
+        {popOutError && <span role="alert">{t("desk.popOutFailed")}</span>}
       </nav>}
     </div>
   );

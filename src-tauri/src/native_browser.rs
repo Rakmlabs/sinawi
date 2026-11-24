@@ -1,16 +1,32 @@
 //! Native in-app browser: one WKWebView per browser tab, placed over the React browser panel.
 //!
 //! The views are plain WKWebViews created here (not Tauri webviews), so pages never get Tauri's IPC
-//! bridge or any app command. Everything is driven from the app's main webview through the commands
-//! below, and results come back as command return values (Rust → main webview), never through the page.
+//! bridge or any app command. Everything is driven from the app's own webviews through the commands
+//! below, and results come back as command return values (Rust → app webview), never through the page.
+//! A tab lives in the window of the webview that opened it: the main window, or a browser window the
+//! user moved out of it (browser_window.rs), whose page is the same panel.
 //!
 //! The automation script runs in its own WebKit content world ("sinawi"): it shares the DOM with the
 //! page but not JS globals, so a page cannot see or patch it. A small page-world bridge only reports
 //! console/network activity and applies device emulation.
 use serde::{Deserialize, Serialize};
 
-/// Main webview label: the only caller allowed to drive native browser tabs.
+/// Main webview label.
 pub const MAIN_LABEL: &str = "main";
+
+/// Label prefix of the browser windows outside the main window (browser_window.rs).
+pub const WINDOW_PREFIX: &str = "browser-";
+
+/// Label of the browser window with this id, when the id is a plain token.
+pub fn window_label(id: &str) -> Option<String> {
+    valid_tab_id(id).then(|| format!("{WINDOW_PREFIX}{id}"))
+}
+
+/// The app's own webviews, the only callers allowed to drive native browser tabs: the main window
+/// and the browser windows it opened.
+pub fn is_app_window(label: &str) -> bool {
+    label == MAIN_LABEL || label.strip_prefix(WINDOW_PREFIX).is_some_and(valid_tab_id)
+}
 
 /// Content world of the automation script.
 pub const SCRIPT_WORLD: &str = "sinawi";
@@ -198,9 +214,11 @@ pub const DRAIN_SCRIPT: &str = "return window.__aoNative ? JSON.stringify(window
 /// Error for calls into a page that is blocked on a dialog (its JS would never answer).
 pub const DIALOG_BLOCKED: &str = "페이지에 대화상자가 열려 있어 실행할 수 없습니다. ao-browser dialog accept 또는 dismiss 로 먼저 답하세요.";
 
+const NOT_APP_WINDOW: &str = "native browser commands are only available to the app's own windows";
+
 fn check_caller(webview: &tauri::Webview, tab: &str) -> Result<(), String> {
-    if webview.label() != MAIN_LABEL {
-        return Err("native browser commands are only available to the app window".into());
+    if !is_app_window(webview.label()) {
+        return Err(NOT_APP_WINDOW.into());
     }
     if !valid_tab_id(tab) {
         return Err("invalid tab id".into());
@@ -241,6 +259,8 @@ mod mac {
     thread_local! {
         /// Main-thread only: AppKit objects never leave the main thread.
         static TABS: RefCell<HashMap<String, Retained<WKWebView>>> = RefCell::new(HashMap::new());
+        /// The window (webview label) each tab lives in: its tabs go away with it, not with another window's reload.
+        static OWNERS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
         /// Tabs laid out behind the app's own webview: not on screen, but not hidden either, so
         /// WebKit keeps painting them and snapshots and real input work (an agent's tab the user
         /// is not looking at, or a workspace the user is not in).
@@ -471,6 +491,8 @@ mod mac {
         }
         let id = format!("pop{}", next_seq());
         TABS.with(|tabs| tabs.borrow_mut().insert(id.clone(), view.clone()));
+        // A popup opens in its opener's window.
+        OWNERS.with(|owners| { let mut owners = owners.borrow_mut(); if let Some(owner) = owners.get(&opener_id).cloned() { owners.insert(id.clone(), owner); } });
         let url = unsafe { url_text(action.request().URL()) };
         push_event(json!({ "type": "popup", "tab": id, "opener": opener_id, "url": url }));
         Some(view)
@@ -586,12 +608,14 @@ mod mac {
         ARMED.with(|armed| armed.borrow_mut().remove(tab));
         LAST_DIALOG.with(|last| last.borrow_mut().remove(tab));
         BEHIND.with(|behind| behind.borrow_mut().remove(tab));
+        OWNERS.with(|owners| owners.borrow_mut().remove(tab));
         if let Some(view) = TABS.with(|tabs| tabs.borrow_mut().remove(tab)) {
             unsafe { view.stopLoading(); view.removeFromSuperview(); }
         }
     }
 
     pub async fn open(main: &Webview, tab: String, url: String, script: String, page_script: Option<String>, user_agent: Option<String>) -> Result<(), String> {
+        let owner = main.label().to_string();
         on_main(main, QUICK, move |mtm, host, reply| unsafe {
             let view = match tab_view(&tab) {
                 Some(view) => view,
@@ -600,6 +624,7 @@ mod mac {
                     let view = create(mtm, &script, page_script.as_deref(), user_agent.as_deref());
                     parent.addSubview(&view);
                     TABS.with(|tabs| tabs.borrow_mut().insert(tab.clone(), view.clone()));
+                    OWNERS.with(|owners| owners.borrow_mut().insert(tab.clone(), owner));
                     view
                 }
             };
@@ -895,11 +920,12 @@ mod mac {
         }).await
     }
 
-    /// Drops every view (main thread).
-    pub fn reset() {
-        let ids: Vec<String> = TABS.with(|tabs| tabs.borrow().keys().cloned().collect());
-        for id in ids { remove_tab(&id); }
-        EVENTS.with(|events| events.borrow_mut().clear());
+    /// Drops every view of one window (main thread): its page reloaded, or the window is gone.
+    pub fn reset_window(label: &str) {
+        let ids: Vec<String> = OWNERS.with(|owners| owners.borrow().iter().filter(|(_, owner)| owner.as_str() == label).map(|(id, _)| id.clone()).collect());
+        for id in &ids { remove_tab(id); }
+        let gone = |event: &Value| ["tab", "opener"].iter().any(|key| event.get(*key).and_then(Value::as_str).is_some_and(|id| ids.iter().any(|tab| tab == id)));
+        EVENTS.with(|events| events.borrow_mut().retain(|event| !gone(event)));
     }
 
     /// The native tab that has keyboard focus (menu ⌘W/⌘R should act on it). Main thread only.
@@ -908,7 +934,10 @@ mod mac {
         TABS.with(|tabs| {
             tabs.borrow().iter().find_map(|(id, view)| {
                 if view.isHidden() { return None; }
-                let responder = view.window()?.firstResponder()?;
+                // The window the user is in: each window keeps its own first responder.
+                let window = view.window()?;
+                if !window.isKeyWindow() { return None; }
+                let responder = window.firstResponder()?;
                 let responder: Retained<NSView> = responder.downcast::<NSView>().ok()?;
                 responder.isDescendantOf(view).then(|| id.clone())
             })
@@ -939,12 +968,26 @@ mod mac {
 
 pub use mac::focused_tab;
 
-/// The main webview started loading a page (app reload): its React tabs are gone, so drop all native views.
-pub fn reset(main: &tauri::Webview) {
+/// An app webview started loading a page (reload): its React tabs are gone, so drop that window's native views.
+pub fn reset(webview: &tauri::Webview) {
     #[cfg(target_os = "macos")]
-    let _ = main.with_webview(|_| mac::reset());
+    {
+        let label = webview.label().to_string();
+        let _ = webview.with_webview(move |_| mac::reset_window(&label));
+    }
     #[cfg(not(target_os = "macos"))]
-    let _ = main;
+    let _ = webview;
+}
+
+/// A window is gone: so are the native views that lived in it (a page there must not keep playing).
+pub fn window_closed<R: tauri::Runtime>(app: &tauri::AppHandle<R>, label: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let label = label.to_string();
+        let _ = app.run_on_main_thread(move || mac::reset_window(&label));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, label);
 }
 
 #[tauri::command]
@@ -1009,13 +1052,13 @@ pub async fn native_browser_dialog(webview: tauri::Webview, tab: String, op: Str
 
 #[tauri::command]
 pub async fn native_browser_events(webview: tauri::Webview, tabs: Vec<String>) -> Result<String, String> {
-    if webview.label() != MAIN_LABEL { return Err("native browser commands are only available to the app window".into()); }
+    if !is_app_window(webview.label()) { return Err(NOT_APP_WINDOW.into()); }
     mac::events(&webview, tabs.into_iter().filter(|tab| valid_tab_id(tab)).collect()).await
 }
 
 #[tauri::command]
 pub async fn native_browser_downloads(webview: tauri::Webview, cancel: Option<String>) -> Result<Vec<DownloadInfo>, String> {
-    if webview.label() != MAIN_LABEL { return Err("native browser commands are only available to the app window".into()); }
+    if !is_app_window(webview.label()) { return Err(NOT_APP_WINDOW.into()); }
     mac::downloads(&webview, cancel).await
 }
 
@@ -1056,6 +1099,18 @@ mod tests {
         assert!(!valid_tab_id(""));
         assert!(!valid_tab_id("a\"); alert(1); (\""));
         assert!(!valid_tab_id(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn only_the_apps_own_windows_drive_tabs() {
+        assert!(is_app_window("main"));
+        assert!(is_app_window("browser-w3k9x0ab"));
+        assert_eq!(window_label("w3k9x0ab").as_deref(), Some("browser-w3k9x0ab"));
+        assert!(!is_app_window("browser-"));
+        assert!(!is_app_window("browser-a b"));
+        assert!(!is_app_window("settings"));
+        assert!(!is_app_window("mainx"));
+        assert_eq!(window_label("../x"), None);
     }
 
     #[test]

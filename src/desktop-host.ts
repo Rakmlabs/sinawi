@@ -12,7 +12,10 @@ export type DesktopHost = {
   workspaceId: string;
   onAttach: (items: ComposerAttachment[]) => void;
   request: DesktopRequest;
-  onModeChange: (mode: DesktopMode) => void;
+  /** `browserWidth`: how wide the snapped window is drawn (0 unless snapped left or right). */
+  onModeChange: (mode: DesktopMode, browserWidth: number) => void;
+  /** What snapped and maximized windows leave room for (desktop-windows.ts DeskLayout, minus the split). */
+  layout: { left: number; bottom: number; chatCollapsed: boolean; chatBeside: boolean };
 };
 
 let host: DesktopHost | undefined;

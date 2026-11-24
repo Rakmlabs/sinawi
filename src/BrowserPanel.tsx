@@ -1,7 +1,7 @@
 import { canGo, emptyHistory, recordLocation, traverse, type TabHistory } from "./tab-history";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Bot, ChevronDown, Download, Globe, Monitor, MousePointerClick, Plus, RefreshCw, RotateCw, Server, Smartphone, Square, SquareCode, X } from "lucide-react";
-import { pushRecent, RECENT_STORE, type RecentSite } from "./browser-surface";
+import { loadSavedTabs, pushRecent, RECENT_STORE, type RecentSite } from "./browser-surface";
 import { emulationOf, emulationPayload, fitDevice, isViewportError, parseViewportArg, readViewport, serializeViewport, toggleViewport, VIEWPORT_STORE, viewportLabel, type ViewportChoice } from "./browser-viewport";
 import { browserRegistry } from "./browser-registry";
 import { OPEN_URL_EVENT, takeHeldUrl } from "./link-open";
@@ -52,9 +52,12 @@ export type BrowserPanelProps = {
   workspaceId?: string;
   /** The workspace is not on screen: pages stay laid out behind the app so its agents keep working. */
   background?: boolean;
+  /** A control at the end of the tab strip (the "back into the app" button of a window outside the app). */
+  extra?: ReactNode;
 };
 
-export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAttach, onNotice, instanceId = "main", workspaceId, background = false }: BrowserPanelProps) {
+
+export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAttach, onNotice, instanceId = "main", workspaceId, background = false, extra }: BrowserPanelProps) {
   const STORE = instanceId === "main" ? BASE_STORE : `${BASE_STORE}.${instanceId}`;
   useLayoutEffect(() => browserRegistry.mount(instanceId, workspaceId), [instanceId, workspaceId]);
   const workspaceRef = useRef(workspaceId); workspaceRef.current = workspaceId;
@@ -74,14 +77,9 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const [downloadsHidden, setDownloadsHidden] = useState<string[]>([]);
   const [dialogText, setDialogText] = useState("");
   const [recent, setRecent] = useState<RecentSite[]>(() => { try { const list = JSON.parse(localStorage.getItem(RECENT_STORE) ?? "[]"); return Array.isArray(list) ? list : []; } catch { return []; } });
-  const [tabs, setTabs] = useState<Tab[]>(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORE) ?? "null");
-      if (Array.isArray(saved?.tabs) && saved.tabs.length) return saved.tabs.map((tab: { url?: string; title?: string }) => ({ ...blankTab(), input: tab.url ?? "", url: tab.url ?? "", title: tab.title || t("br.newTab") }));
-    } catch { /* ignore */ }
-    return [blankTab()];
-  });
-  const [activeId, setActiveId] = useState(() => tabs[0].id);
+  const [saved] = useState(() => loadSavedTabs<Tab>(localStorage.getItem(STORE), (tab) => ({ ...blankTab(), input: tab.url ?? "", url: tab.url ?? "", title: tab.title || t("br.newTab") }), blankTab));
+  const [tabs, setTabs] = useState<Tab[]>(saved.tabs);
+  const [activeId, setActiveId] = useState(saved.activeId);
   const [closed, setClosed] = useState<string[]>([]);
   const [ports, setPorts] = useState<Port[]>([]);
   const [picking, setPicking] = useState<{ on: boolean; count: number }>({ on: false, count: 0 });
@@ -107,8 +105,9 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
 
   useEffect(() => {
-    localStorage.setItem(STORE, JSON.stringify({ tabs: tabs.filter((tab) => tab.url).map((tab) => ({ url: tab.url, title: tab.title })) }));
-  }, [tabs]);
+    const kept = tabs.filter((tab) => tab.url);
+    localStorage.setItem(STORE, JSON.stringify({ tabs: kept.map((tab) => ({ url: tab.url, title: tab.title })), active: Math.max(0, kept.findIndex((tab) => tab.id === activeId)) }));
+  }, [tabs, activeId]);
 
   const patch = useCallback((id: string, next: Partial<Tab>) => setTabs((old) => old.map((tab) => tab.id === id ? { ...tab, ...next } : tab)), []);
 
@@ -883,6 +882,7 @@ export function BrowserPanel({ open, onOpenChange, onLastTabClosed, onSnap, onAt
         ))}
         <button type="button" className="browser-icon" aria-label={t("br.newTabShortcut")} title={t("br.newTabShortcut")} onClick={() => addTab()}><Plus size={16} /></button>
         <span className="browser-tabs-spacer" />
+        {extra}
       </div>
       <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); const id = active.id; void navigate(id, active.input).then((opened) => { if (opened?.native) void nativeBrowser.history(id, "focus").catch(() => undefined); }).catch(() => undefined); frames.current.get(id)?.focus(); }}>
         <button type="button" className="browser-icon" aria-label={t("br.back")} title={t("br.back")} disabled={active.native ? !active.canBack : !active.proxied || !canGo(histories.current.get(active.id), -1)} onClick={() => go(active.id, -1)}><ArrowLeft size={17} /></button>
