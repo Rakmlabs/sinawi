@@ -1,7 +1,26 @@
-import type { PendingInstruction, Session, SessionEvent } from "./types.js";
+import type { AgentId, PendingInstruction, Session, SessionEvent } from "./types.js";
 
 /** Low-cost default Grok model for read-only status answers. */
 export const STATUS_AGENT_MODEL = "grok-4.7-build-fast";
+
+/** Each CLI's low-cost setting for the read-only reply to a message typed during a run. */
+export const STATUS_MODELS: Record<AgentId, { model?: string; reasoningEffort?: string }> = {
+  grok: { model: STATUS_AGENT_MODEL },
+  claude: { model: "haiku" },
+  codex: { reasoningEffort: "low" },
+};
+
+/**
+ * Who answers a message typed during a run: always a member of the chat's own team, never a CLI the
+ * user did not pick (a Claude-only team used to get its reply from Grok). Grok first when it is on
+ * the team (the cheapest fast model), else the lead's CLI, else a worker's. Undefined when the
+ * workspace allows none of them: the message then goes to the lead without a reply run.
+ */
+export function statusAgentFor(lead: AgentId, workers: readonly AgentId[], allowed: readonly AgentId[]): { agent: AgentId; model?: string; reasoningEffort?: string } | undefined {
+  const team = [lead, ...workers];
+  const agent = (["grok", ...team] as AgentId[]).find((candidate) => team.includes(candidate) && allowed.includes(candidate));
+  return agent ? { agent, ...STATUS_MODELS[agent] } : undefined;
+}
 
 export interface LiveWorker {
   id: string;

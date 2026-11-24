@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, statusDigest, takePending, STATUS_AGENT_MODEL } from "./live-turn.js";
+import { classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, statusAgentFor, statusDigest, takePending, STATUS_AGENT_MODEL } from "./live-turn.js";
 import type { Session, SessionEvent } from "./types.js";
 
 const workers = [
@@ -53,6 +53,20 @@ test("status digest keeps each worker's recent tools, errors and delegations", (
   assert.match(prompt, /도구를 호출하지 말고/);
   assert.match(prompt, /npm test/);
   assert.equal(STATUS_AGENT_MODEL, "grok-4.7-build-fast");
+});
+
+test("the live reply comes from the chat's own team, at each CLI's low-cost setting", () => {
+  const all = ["codex", "claude", "grok"] as const;
+  assert.deepEqual(statusAgentFor("claude", ["claude", "claude"], all), { agent: "claude", model: "haiku" });
+  assert.deepEqual(statusAgentFor("claude", [], all), { agent: "claude", model: "haiku" });
+  assert.deepEqual(statusAgentFor("codex", ["claude"], all), { agent: "codex", reasoningEffort: "low" });
+  // Grok on the team is the cheapest answer, wherever it sits.
+  assert.deepEqual(statusAgentFor("claude", ["codex", "grok"], all), { agent: "grok", model: "grok-4.7-build-fast" });
+  assert.deepEqual(statusAgentFor("grok", ["claude"], all), { agent: "grok", model: "grok-4.7-build-fast" });
+  // The workspace's policy still applies: a forbidden member is skipped, and no outsider steps in.
+  assert.deepEqual(statusAgentFor("claude", ["grok"], ["codex", "claude"]), { agent: "claude", model: "haiku" });
+  assert.deepEqual(statusAgentFor("codex", ["claude"], ["claude", "grok"]), { agent: "claude", model: "haiku" });
+  assert.equal(statusAgentFor("claude", ["claude"], ["grok", "codex"]), undefined);
 });
 
 test("pending instructions stay with the named worker until that worker's turn", () => {

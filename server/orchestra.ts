@@ -28,7 +28,7 @@ import { cliNotes, compactHandoff, ensureBrief, ORCHESTRATOR_RULES, permissionMo
 import { ensureWorkerWorktree, mergeWorktree, gitRepo, mainTreeDirty, pruneEmptyWorktrees, repoSnapshot, userWorktrees, worktreeReviewNote, worktreeStatus, worktreeWorkerNote } from "./worktrees.js";
 import { applyStewardPatch, askPrompt, DEFAULT_MERGE_POLICY, mergeThreadReports, isReportPrompt, LEGACY_MERGE_POLICY, MAX_ASK_DEPTH, mergeRule, parseAsks, parseLeadCreates, MAX_NEW_CHATS, MAX_NEW_LEADS, parseNotes, projectState, readNotes, readUserPreferences, replyPrompt, reportDue, reportPrompt, rolloverContext, removeStewardDir, saveNotes, saveTranscript, sessionSummary, STEWARD_ROLLOVER_TURNS, stewardFromSession, stewardName, stewardNotesId, stewardRules, stewardStartText, stripLeadBlocks, transcriptPath, type SessionSummary, type NewChatRequest, type NewLeadRequest, type StewardAsk, type StewardPatch } from "./steward.js";
 import { COMMANDER_RULES, commanderActive, commanderBoard, goalRules, GOAL_STOP_TEXT, GOAL_DONE_BUT_BLOCKED, goalStateLabel, goalTurnPrompt, nextGoalStep, parseChecklist, parseGoals, renderChecklist, settledCount } from "./goals.js";
-import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, STATUS_AGENT_MODEL, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
+import { carriedOverPrompt, classifyLiveMessage, instructionSuffix, pushInstruction, liveReplyPrompt, parseLiveReply, statusAgentFor, statusDigest, takePending, type LiveWorker } from "./live-turn.js";
 import { withJosa } from "./korean.js";
 import { existingEvidence, VerifyEvidenceGuard } from "./verify-evidence.js";
 
@@ -1156,15 +1156,16 @@ export class Orchestra {
     }));
   }
 
-  /** Queues a message for the team's next turn; `answer` is the reply already given to it, shown above the note. */
-  private enqueueInstruction(session: Session, text: string, targetWorkerId?: string, answer = ""): void {
+  /** Queues a message for the team's next turn; `answer` is the reply already given to it (by `from`), shown above the note. */
+  private enqueueInstruction(session: Session, text: string, targetWorkerId?: string, answer = "", from: AgentId = session.agent): void {
     const item = { id: randomUUID(), text, targetWorkerId, createdAt: new Date().toISOString() };
     session.pendingInstructions = pushInstruction(session.pendingInstructions, item);
     const worker = this.liveWorkers(session).find((candidate) => candidate.id === targetWorkerId);
     const ack = worker
       ? `${worker.label}의 다음 턴에 전달합니다. 진행 중인 작업은 그대로 둡니다.`
       : "총괄의 다음 턴에 전달합니다. 진행 중인 작업은 그대로 둡니다.";
-    this.event(session, "grok", "message", answer ? `${answer}\n\n${ack}` : ack, { metadata: { live: "directive", targetWorkerId } });
+    // The note is the app's, shown under the lead's name unless a team member wrote the reply above it.
+    this.event(session, from, "message", answer ? `${answer}\n\n${ack}` : ack, { metadata: { live: "directive", targetWorkerId } });
   }
 
   /**
@@ -1181,8 +1182,10 @@ export class Orchestra {
     if (classifyLiveMessage(prompt, workers).intent === "stop") return this.stop(id);
     const digest = statusDigest(session);
     this.event(session, "user", "message", prompt);
-    // The reply is a Grok CLI run, so it obeys the workspace policy; without Grok the message still reaches the lead.
-    if (!this.agentAllowed(session.workspaceId, "grok")) {
+    // The reply is a CLI run by a member of this chat's team (statusAgentFor), so it obeys the workspace
+    // policy; when none of them is allowed the message still reaches the lead.
+    const replier = statusAgentFor(session.agent, workers.map((worker) => worker.agent as AgentId), this.allowedAgents(session));
+    if (!replier) {
       this.enqueueInstruction(session, prompt);
       return session;
     }
@@ -1192,11 +1195,12 @@ export class Orchestra {
     let text = "";
     try {
       const result = await this.runner({
-        accountDir: accountDirFor(this.workspacePolicyResolver?.(session.workspaceId), "grok"),
-        agent: "grok",
+        accountDir: accountDirFor(this.workspacePolicyResolver?.(session.workspaceId), replier.agent),
+        agent: replier.agent,
         prompt: liveReplyPrompt(prompt, digest, workers),
         cwd: session.cwd,
-        model: STATUS_AGENT_MODEL,
+        model: replier.model,
+        reasoningEffort: replier.reasoningEffort,
         readOnly: true,
         signal: controller.signal,
         usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role: "status", dataDir: this.usageDataDir },
@@ -1212,11 +1216,11 @@ export class Orchestra {
     let answer = reply.answer.length > 2000 ? `${reply.answer.slice(0, 1999)}…` : reply.answer;
     // No usable routing line: pass it on. A dropped instruction costs far more than an extra note to the lead.
     if (reply.forward || !reply.decided) {
-      this.enqueueInstruction(session, prompt, reply.forward?.targetWorkerId, answer || (text ? "" : "지금 바로 답하지 못했습니다."));
+      this.enqueueInstruction(session, prompt, reply.forward?.targetWorkerId, answer || (text ? "" : "지금 바로 답하지 못했습니다."), replier.agent);
       return session;
     }
     if (!answer) answer = "로그에서 상태를 정리하지 못했습니다. 작업은 그대로 진행 중입니다.";
-    this.event(session, "grok", "message", answer, { metadata: { live: "status", ambiguous: false, prompt } });
+    this.event(session, replier.agent, "message", answer, { metadata: { live: "status", ambiguous: false, prompt } });
     return session;
   }
 

@@ -46,8 +46,10 @@ test("a running session answers status from the log and delivers a directive on 
   assert.equal(session.status, "running");
   const statusCall = calls.find((call) => call.usageContext?.role === "status");
   assert.ok(statusCall);
-  assert.equal(statusCall.agent, "grok");
-  assert.equal(statusCall.model, "grok-4.7-build-fast");
+  // The reply comes from this team (Codex lead, Claude workers), at its low-cost setting: never from Grok.
+  assert.equal(statusCall.agent, "codex");
+  assert.equal(statusCall.model, undefined);
+  assert.equal(statusCall.reasoningEffort, "low");
   assert.equal(statusCall.resumeSessionId, undefined);
   assert.notEqual(statusCall.signal, workerSignal);
   assert.match(statusCall.prompt, /파일을 수정하지 말고/);
@@ -55,6 +57,7 @@ test("a running session answers status from the log and delivers a directive on 
   assert.equal(statusCall.usageContext?.role, "status");
   const statusEvent = session.events.find((event) => event.metadata?.live === "status");
   assert.equal(statusEvent?.text, "B가 npm test를 실행 중입니다.");
+  assert.equal(statusEvent?.agent, "codex");
   assert.equal(statusEvent?.metadata?.ambiguous, false);
 
   assert.equal(session.pendingInstructions, undefined, "a question is answered, not queued");
@@ -85,7 +88,57 @@ test("a running session answers status from the log and delivers a directive on 
   const synthesis = calls.find((call) => call.prompt.includes("위임한 워커들의 결과"));
   assert.match(synthesis?.prompt ?? "", /옆 문서를 먼저/);
   assert.equal(session.pendingInstructions, undefined);
-  assert.equal(session.events.some((event) => event.agent === "grok" && event.type === "tool"), false);
+  assert.equal(session.events.some((event) => event.agent === "grok"), false, "a CLI outside the team never shows up in the chat");
+});
+
+test("a Claude-only team gets its live reply and the forwarding note from Claude, not Grok", async () => {
+  let releaseWorker = () => {};
+  const workerGate = new Promise<void>((resolve) => { releaseWorker = () => resolve(); });
+  const calls: RunCliOptions[] = [];
+  const runner = async (options: RunCliOptions) => {
+    calls.push(options);
+    if (options.usageContext?.role === "status") return { exitCode: 0, finalText: liveReply(options.prompt) };
+    if (options.usageContext?.role === "worker") { await workerGate; return { exitCode: 0, finalText: "worker done" }; }
+    if (options.prompt.includes("위임한 워커들의 결과")) return { exitCode: 0, finalText: "final" };
+    return { exitCode: 0, finalText: '<<DELEGATE to="claude-1">>조사<</DELEGATE>>' };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "조사", agent: "claude", workers: ["claude", "claude"], cwd: process.cwd() });
+  await waitFor(() => callsWaiting(session));
+  await orchestra.liveTurn(session.id, "뭐하고 있어?");
+  await orchestra.liveTurn(session.id, "추가로 모든 함수에 JSDoc 주석도 달아줘.");
+  const statusCalls = calls.filter((call) => call.usageContext?.role === "status");
+  assert.equal(statusCalls.length, 2);
+  assert.deepEqual(statusCalls.map((call) => [call.agent, call.model]), [["claude", "haiku"], ["claude", "haiku"]]);
+  assert.equal(statusCalls.every((call) => call.readOnly === true && call.resumeSessionId === undefined), true);
+  const live = session.events.filter((event) => event.metadata?.live);
+  assert.deepEqual(live.map((event) => [event.agent, event.metadata?.live]), [["claude", "status"], ["claude", "directive"]]);
+  assert.equal(session.events.some((event) => event.agent === "grok"), false);
+  await orchestra.stop(session.id);
+  releaseWorker();
+});
+
+test("a team with Grok on it answers live messages with Grok's fast model", async () => {
+  let releaseWorker = () => {};
+  const workerGate = new Promise<void>((resolve) => { releaseWorker = () => resolve(); });
+  const calls: RunCliOptions[] = [];
+  const runner = async (options: RunCliOptions) => {
+    calls.push(options);
+    if (options.usageContext?.role === "status") return { exitCode: 0, finalText: liveReply(options.prompt) };
+    if (options.usageContext?.role === "worker") { await workerGate; return { exitCode: 0, finalText: "worker done" }; }
+    if (options.prompt.includes("위임한 워커들의 결과")) return { exitCode: 0, finalText: "final" };
+    return { exitCode: 0, finalText: '<<DELEGATE to="grok">>조사<</DELEGATE>>' };
+  };
+  const orchestra = new Orchestra(undefined, runner);
+  const session = await orchestra.create({ prompt: "조사", agent: "claude", workers: ["grok"], cwd: process.cwd() });
+  await waitFor(() => callsWaiting(session));
+  await orchestra.liveTurn(session.id, "뭐하고 있어?");
+  const statusCall = calls.find((call) => call.usageContext?.role === "status");
+  assert.equal(statusCall?.agent, "grok");
+  assert.equal(statusCall?.model, "grok-4.7-build-fast");
+  assert.equal(session.events.find((event) => event.metadata?.live === "status")?.agent, "grok");
+  await orchestra.stop(session.id);
+  releaseWorker();
 });
 
 test("a status agent failure leaves the running task untouched", async () => {
@@ -125,7 +178,7 @@ function callsWaiting(session: { events: Array<{ type: string; role?: string }> 
   return session.events.some((event) => event.type === "delegation");
 }
 
-test("without Grok in the workspace, a live message skips the reply run and still reaches the lead", async () => {
+test("when the workspace allows none of the team's agents, a live message skips the reply run and still reaches the lead", async () => {
   let releaseWorker = () => {};
   const workerGate = new Promise<void>((resolve) => { releaseWorker = () => resolve(); });
   const calls: RunCliOptions[] = [];
@@ -140,10 +193,12 @@ test("without Grok in the workspace, a live message skips the reply run and stil
   const orchestra = new Orchestra(undefined, runner, undefined, undefined, undefined, () => allowed);
   const session = await orchestra.create({ prompt: "조사", agent: "codex", workers: ["claude"], cwd: process.cwd() });
   await waitFor(() => callsWaiting(session));
-  allowed = ["codex", "claude"];
+  // Policy changed under a running chat: its team (Codex, Claude) is no longer allowed, and Grok is not on it.
+  allowed = ["grok"];
   await orchestra.liveTurn(session.id, "뭐하고 있어?");
-  assert.equal(calls.some((call) => call.usageContext?.role === "status"), false, "Grok must not be spawned when the workspace forbids it");
+  assert.equal(calls.some((call) => call.usageContext?.role === "status"), false, "no CLI outside the team, and none the workspace forbids, is spawned for the reply");
   assert.equal(session.pendingInstructions?.[0]?.text, "뭐하고 있어?");
+  assert.equal(session.events.find((event) => event.metadata?.live === "directive")?.agent, "codex", "the note shows under the lead's name");
   assert.equal(session.status, "running");
   await orchestra.stop(session.id);
   releaseWorker();
