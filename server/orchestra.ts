@@ -6,6 +6,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { killSessionProcessGroups, runCli } from "./cli.js";
+import { cliOnlyHint, contextEvents, HELP_TEXT, lastContextReset, parseSlash } from "./slash-commands.js";
 import { QUEUE_DIR } from "./browser-bridge.js";
 import { SHOT_DIR } from "./computer-bridge.js";
 import { workerSessionId, setWorkerSessionId, resumeIdFits, loadToolSettings, workspaceToolSettings } from "./store.js";
@@ -276,6 +277,8 @@ export class Orchestra {
   private goalAutoNext = new Set<string>();
   /** Chats between a follow-up call and its turn running (Orchestra.isWorking). */
   private starting = new Set<string>();
+  /** Chats whose `/compact` summary run is in flight: no turn starts until it is done. */
+  private compacting = new Set<string>();
   /** Lead chats whose turn ended and whose merge and next step are still being worked out. */
   private settling = new Set<string>();
   /** The lead's end-of-turn merge in flight per chat: the next turn waits for it (L8). */
@@ -615,6 +618,9 @@ export class Orchestra {
   }
 
   async create(requested: StartSessionInput): Promise<Session> {
+    // A built-in `/` command needs a conversation to act on; a new chat would only send it to the CLI as text.
+    const slash = parseSlash(requested.prompt ?? "");
+    if (slash) throw new Error(slash.kind === "cli" ? cliOnlyHint(slash.name) : slash.command === "help" ? HELP_TEXT : `/${slash.command}은(는) 대화가 있는 채팅에서 씁니다.`);
     // A new thread of an existing lead runs with the lead's own team, instructions and skills.
     const entity = requested.steward?.id ? this.stewardEntities.get(requested.steward.id) : undefined;
     if (requested.steward?.id && !entity) throw new Error("담당을 찾을 수 없습니다.");
@@ -765,7 +771,7 @@ export class Orchestra {
     const hadResume = Boolean(session.cliSessionId);
     const leadResume = this.leadResumeId(session);
     // A dropped foreign id: the fresh CLI session gets the conversation instead.
-    const resumeBrief = leadResume ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events)}`
+    const resumeBrief = leadResume ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(contextEvents(session.events))}`
       : hadResume && !session.handoffContext ? `\n\n이전 대화 요약:\n${this.conversationSummary(session, session.agent)}` : "";
     const planMode = this.permissionModeOf(session) === "plan";
     const planNotice = planMode ? `\n\n${PLAN_MODE_NOTICE}${await repoSnapshot(session.cwd).then((facts) => facts ? `\n\n${facts}` : "").catch(() => "")}` : "";
@@ -894,7 +900,7 @@ export class Orchestra {
       const stewardReview = await this.stewardContext(session);
       const evidence = await existingEvidence(workerResults.join("\n"), session.cwd, [...(session.worktrees?.map((item) => item.path) ?? []), QUEUE_DIR, SHOT_DIR]);
       const evidenceNote = evidence.length ? `\n\n앱이 존재를 확인한 증거 파일(내용의 정확성·완료 여부는 별도 판단):\n${evidence.map((file) => `- \`${file}\``).join("\n")}\n이 경로를 사용하세요. 메인 폴더에서 상대 경로가 없다는 이유로 다시 촬영하지 마세요.` : "";
-      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(session.events)}\n\n${ORCHESTRATOR_RULES}${skillPreferences}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${evidenceNote}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
+      const reviewText = `이어받기 전 압축 요약:\n${compactHandoff(contextEvents(session.events))}\n\n${ORCHESTRATOR_RULES}${skillPreferences}\n\n${reviewPrompt(workerResults, originalContext, roundsLeft)}${evidenceNote}${goalReview}${stewardReview}${worktreeNote ? `\n\n${worktreeNote}` : ""}${gitFacts ? `\n\n${gitFacts}` : ""}` + (strict ? `\n\n[필수] 실패한 워커가 있습니다. 총괄은 파일 수정·명령 실행으로 직접 일을 하지 말고, 다른 접근의 <<DELEGATE>>로 재위임하세요. 읽기 전용 확인만 허용됩니다.` : "");
       const reviewStart = this.eventCount;
       let review: Awaited<ReturnType<Orchestra["runAgent"]>>;
       try {
@@ -970,7 +976,7 @@ export class Orchestra {
     const brief = ensureBrief(task, userWords);
     const workerId = worker.id!;
     const resumeIdForBrief = worker.sessionMode === "new" ? undefined : this.workerResumeId(session, worker);
-    const workerResume = resumeIdForBrief ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(session.events, workerId)}` : "";
+    const workerResume = resumeIdForBrief ? `\n\n이어받기 전 압축 요약:\n${compactHandoff(contextEvents(session.events), workerId)}` : "";
     const label = workerLabel(worker);
     const worktree = await this.prepareWorktree(session, workerId, label);
     if (controller.signal.aborted) return STOPPED;
@@ -1170,6 +1176,7 @@ export class Orchestra {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
     if (session.status !== "running") return this.followup(id, prompt);
+    if (parseSlash(prompt)) return this.slashCommand(session, prompt)!;
     const workers = this.liveWorkers(session);
     if (classifyLiveMessage(prompt, workers).intent === "stop") return this.stop(id);
     const digest = statusDigest(session);
@@ -1601,6 +1608,9 @@ export class Orchestra {
   async followup(id: string, prompt: string, skills: string[] = [], settings: ConversationSettings = {}, alreadyLogged = false): Promise<Session> {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    // `/clear`, `/compact`, `/model`…: the app answers them; a headless CLI would only read them as text.
+    if (!alreadyLogged) { const handled = this.slashCommand(session, prompt); if (handled) return handled; }
+    if (this.compacting.has(id)) throw new Error("대화를 압축하는 중입니다. 끝난 뒤 다시 보내세요.");
     // A second message while the first is still starting (it awaits before the status flips) would
     // replace the first run's controller and drop that message silently: refuse it like a running chat.
     if (session.status === "running" || this.starting.has(id)) throw new Error("세션이 이미 실행 중입니다.");
@@ -1618,7 +1628,7 @@ export class Orchestra {
   isWorking(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
-    return session.status === "running" || this.starting.has(id) || this.settling.has(id) || this.goalAutoNext.has(id) || Boolean(session.commander?.goals.length && commanderActive(session));
+    return session.status === "running" || this.starting.has(id) || this.compacting.has(id) || this.settling.has(id) || this.goalAutoNext.has(id) || Boolean(session.commander?.goals.length && commanderActive(session));
   }
 
   private async startFollowup(session: Session, prompt: string, skills: string[], settings: ConversationSettings, alreadyLogged: boolean): Promise<Session> {
@@ -1878,24 +1888,117 @@ export class Orchestra {
   }
 
   private conversationSummary(session: Session, orchestrator: AgentId): string {
-    const lines = session.events
+    const reset = session.events[lastContextReset(session.events)];
+    const compacted = reset?.metadata?.contextReset === "compact" && reset.metadata.summary ? `압축한 이전 대화:\n${reset.metadata.summary}` : "";
+    const lines = contextEvents(session.events)
       .filter((event) => event.type === "message" && (event.agent === "user" || event.role === "orchestrator" || (!event.role && event.agent === orchestrator)))
       .slice(-12)
       .map((event) => `${event.agent === "user" ? "사용자" : agentNames[event.agent as AgentId]}: ${event.text.replace(/\s+/g, " ").trim()}`);
-    const summary = lines.join("\n");
-    return summary.length > 4_000 ? `…${summary.slice(-3_999)}` : summary || "이전 대화 내용이 없습니다.";
+    const recent = lines.join("\n");
+    const summary = [compacted, recent.length > 4_000 ? `…${recent.slice(-3_999)}` : recent].filter(Boolean).join("\n\n");
+    return summary || "이전 대화 내용이 없습니다.";
   }
 
-  /** "/compact", like Claude Code's: the next turn starts fresh CLI sessions that get a summary instead of the full history. */
-  compact(id: string): Session {
+  /**
+   * The `/` command a message is, run by the app (server/slash-commands.ts): undefined when the message is not
+   * one and goes to the agent. Unsupported CLI commands are refused with a pointer instead of reaching the CLI as text.
+   */
+  private slashCommand(session: Session, prompt: string): Promise<Session> | undefined {
+    const slash = parseSlash(prompt);
+    if (!slash) return;
+    if (slash.kind === "cli") return Promise.reject(new Error(cliOnlyHint(slash.name)));
+    if (slash.command === "clear") return Promise.resolve().then(() => this.clearContext(session.id));
+    if (slash.command === "compact") return this.compact(session.id, slash.args);
+    if (slash.command === "help") return Promise.reject(new Error(HELP_TEXT));
+    return Promise.reject(new Error("/usage는 앱의 사용량 화면에서 봅니다."));
+  }
+
+  /** Drops every CLI session the chat would resume, so the next turn starts fresh (`/clear`, `/compact`). */
+  private dropAgentContext(session: Session): void {
+    this.forgetLeadSession(session);
+    delete session.workerSessionIds;
+    delete session.workerSessionOrigins;
+    delete session.handoffContext;
+    if (session.steward) session.steward.turns = 0;
+  }
+
+  private assertResettable(session: Session, what: string): void {
+    if (session.status === "running" || this.starting.has(session.id) || this.settling.has(session.id)) throw new Error(`작업 중에는 ${what} 수 없습니다. 끝난 뒤 다시 시도하세요.`);
+    if (this.compacting.has(session.id)) throw new Error("대화를 압축하는 중입니다. 끝난 뒤 다시 시도하세요.");
+  }
+
+  /**
+   * "/clear", like Claude Code's: the lead and workers start fresh CLI sessions with none of this chat's history.
+   * The events stay (the screen folds them under a divider, the lead's transcript keeps them); only the agents forget.
+   */
+  clearContext(id: string): Session {
     const session = this.sessions.get(id);
     if (!session) throw new Error("세션을 찾을 수 없습니다.");
-    if (session.status === "running") throw new Error("작업 중에는 압축할 수 없습니다. 끝난 뒤 다시 시도하세요.");
-    session.handoffContext = this.conversationSummary(session, session.agent);
-    delete session.cliSessionId;
-    delete session.workerSessionIds;
-    this.event(session, session.agent, "status", "대화를 압축했습니다. 다음 메시지부터 요약을 이어받은 새 CLI 세션으로 시작합니다.");
+    this.assertResettable(session, "맥락을 지울");
+    this.dropAgentContext(session);
+    this.event(session, session.agent, "status", "맥락을 지웠습니다. 다음 메시지부터 총괄·워커가 이전 대화 없이 새 CLI 세션으로 시작합니다.", { metadata: { contextReset: "clear" } });
     return session;
+  }
+
+  /**
+   * "/compact", like Claude Code's: the lead writes a summary of the conversation so far (resuming its own CLI
+   * session when it has one, else from the chat's messages), and the next turn starts fresh CLI sessions that get
+   * only that summary. If the summary run fails, a summary built from the messages stands in.
+   */
+  async compact(id: string, instructions = ""): Promise<Session> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("세션을 찾을 수 없습니다.");
+    this.assertResettable(session, "압축할");
+    const messages = contextEvents(session.events).filter((event) => event.type === "message" && (event.agent === "user" || event.role === "orchestrator" || (!event.role && event.agent === session.agent)));
+    if (!messages.length) throw new Error("압축할 대화가 없습니다.");
+    this.compacting.add(id);
+    let summary = "";
+    try {
+      summary = await this.compactSummary(session, messages, instructions.slice(0, 2_000));
+    } finally {
+      this.compacting.delete(id);
+    }
+    const fallback = !summary;
+    if (fallback) summary = this.conversationSummary(session, session.agent);
+    this.dropAgentContext(session);
+    session.handoffContext = summary;
+    this.event(session, session.agent, "status", fallback
+      ? "대화를 압축했습니다(요약 실행이 실패해 최근 메시지로 대신 요약). 다음 메시지부터 이 요약을 이어받은 새 CLI 세션으로 시작합니다."
+      : "대화를 압축했습니다. 다음 메시지부터 이 요약을 이어받은 새 CLI 세션으로 시작합니다.", { metadata: { contextReset: "compact", summary } });
+    return session;
+  }
+
+  private async compactSummary(session: Session, messages: SessionEvent[], instructions: string): Promise<string> {
+    const resume = this.leadResumeId(session);
+    const ask = `[앱 — /compact] 지금까지의 대화를 새 세션이 이어받을 수 있게 요약하세요. 도구를 쓰지 말고 요약만 출력합니다.
+포함할 것: 사용자의 목표와 요청, 정한 것과 제약, 한 일과 바뀐 파일·브랜치·PR, 남은 일과 다음 단계, 다시 필요할 경로·명령·식별자.
+Markdown, 한국어, 2,000자 이내.${instructions ? `\n\n사용자가 요약에 준 지시: ${instructions}` : ""}`;
+    const transcript = () => {
+      const text = messages.map((event) => `${event.agent === "user" ? "사용자" : agentNames[event.agent as AgentId]}: ${event.text.trim()}`).join("\n\n");
+      return text.length > 40_000 ? `…${text.slice(-39_999)}` : text;
+    };
+    const run = async (resumeSessionId: string | undefined) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 180_000);
+      try {
+        const result = await this.runner({
+          accountDir: accountDirFor(this.workspacePolicyResolver?.(session.workspaceId), session.agent),
+          agent: session.agent,
+          prompt: resumeSessionId ? ask : `${ask}\n\n지금까지의 대화:\n${transcript()}`,
+          cwd: session.cwd, model: session.model, reasoningEffort: session.reasoningEffort,
+          readOnly: true, resumeSessionId, signal: controller.signal,
+          usageContext: { workspaceId: session.workspaceId, sessionId: session.id, role: "orchestrator", dataDir: this.usageDataDir },
+          onLine: () => undefined,
+        });
+        return result.exitCode === 0 ? result.finalText.trim() : "";
+      } catch {
+        return "";
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    // The lead's own session knows the tool results too; without one (or if it is gone) the messages do.
+    return (resume ? await run(resume) : "") || await run(undefined);
   }
 
   /** Replaces the session's worktree list (after a worktree was removed from the UI). */

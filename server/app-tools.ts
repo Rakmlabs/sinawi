@@ -403,10 +403,17 @@ const APP: AppTool[] = [
   }),
   routeTool({
     name: "compact_session", risk: "approval", method: "POST", route: "/api/sessions/:id/compact",
-    description: "긴 채팅의 맥락을 요약으로 줄인다(이전 대화는 요약만 남음). 되돌릴 수 없어 사용자 승인 후 실행된다.",
-    properties: { session_id: str("채팅 ID.") }, required: ["session_id"],
-    path: (args) => `/api/sessions/${seg(args, "session_id")}/compact`, pick: (output) => sessionRow(output as Row),
+    description: "긴 채팅의 맥락을 요약으로 줄인다(채팅 \"/compact\"와 같다). 총괄이 지금까지를 요약하고, 다음 메시지부터 총괄·워커가 그 요약만 이어받은 새 CLI 세션으로 시작한다. 이전 CLI 세션은 다시 이어지지 않아 사용자 승인 후 실행된다.",
+    properties: { session_id: str("채팅 ID."), instructions: str("요약에 줄 지시(선택). 예: API 결정 위주로.") }, required: ["session_id"],
+    path: (args) => `/api/sessions/${seg(args, "session_id")}/compact`, body: (args) => defined({ instructions: args.instructions }), pick: (output) => sessionRow(output as Row),
     summary: (args, names) => `채팅 ${names.session(args.session_id)} 맥락 압축`,
+  }),
+  routeTool({
+    name: "clear_session", risk: "approval", method: "POST", route: "/api/sessions/:id/clear",
+    description: "채팅의 에이전트 맥락을 새로 시작한다(채팅 \"/clear\"와 같다). 다음 메시지부터 총괄·워커가 이전 대화 없이 새 CLI 세션으로 시작한다. 기록은 화면에 접혀 남는다. 이전 CLI 세션은 다시 이어지지 않아 사용자 승인 후 실행된다.",
+    properties: { session_id: str("채팅 ID.") }, required: ["session_id"],
+    path: (args) => `/api/sessions/${seg(args, "session_id")}/clear`, pick: (output) => sessionRow(output as Row),
+    summary: (args, names) => `채팅 ${names.session(args.session_id)} 맥락 새로 시작`,
   }),
   routeTool({
     name: "delete_session", risk: "approval", method: "DELETE", route: "/api/sessions/:id",

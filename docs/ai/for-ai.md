@@ -75,7 +75,7 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 <!-- tools:start -->
 <!-- Generated from server/app-tools.ts by `npm run docs:ai`. Do not edit by hand. -->
 
-91 tools (85 on the lead surface, 81 on the external surface), 30 of them need approval.
+92 tools (86 on the lead surface, 82 on the external surface), 31 of them need approval.
 
 ### Lead-only (inside a lead's run)
 
@@ -117,7 +117,8 @@ Surface: `lead` = `sinawi_lead`, `external` = `sinawi`. Approval **yes** = the c
 | `move_session_to_group` | lead, external | no | Put a chat into a project group, or take it out (empty group_id). |
 | `move_session_to_workspace` | lead, external | **yes** | Move a chat to another workspace; it then follows that workspace's policy. |
 | `stop_session` | lead, external | **yes** | Stop a running chat. |
-| `compact_session` | lead, external | **yes** | Compress a long chat's context into a summary (cannot be undone). |
+| `compact_session` | lead, external | **yes** | Compress a long chat's context into a summary the next turn starts from (like typing "/compact"). |
+| `clear_session` | lead, external | **yes** | Start a chat's agent context over: the next turn runs fresh CLI sessions (like typing "/clear"). |
 | `delete_session` | lead, external | **yes** | Delete a chat (not while running); optionally clean up worker worktrees. |
 | `set_session_team` | lead, external | **yes** | Change a chat's team (main agent, model, workers); not while running. |
 | `set_session_auto_switch` | lead, external | **yes** | Turn a chat's auto switch (pick the fitting agent per message) on or off. |

@@ -98,10 +98,13 @@ test("slash menu: name matches rank first, plugin skills match their last segmen
   assert.deepEqual(matchingSkills(skills, "front").map((item: { name: string }) => item.name), ["frontend-design", "my-frontend", "docx"]);
   assert.deepEqual(matchingSkills(skills, "ask").map((item: { name: string }) => item.name), ["oh-my-claudecode:ask"]);
   assert.deepEqual(matchingCommands("c"), ["clear", "compact"]);
-  assert.deepEqual(matchingCommands(""), ["clear", "compact", "usage"]);
-  assert.equal(slashCommandOf(" /compact\n"), "compact");
-  assert.equal(slashCommandOf("/compact now"), undefined);
-  assert.equal(slashCommandOf("/frontend-design"), undefined);
+  assert.deepEqual(matchingCommands(""), ["clear", "compact", "usage", "help"]);
+  assert.deepEqual(slashCommandOf(" /compact\n"), { kind: "app", command: "compact", args: "" });
+  assert.deepEqual(slashCommandOf("/compact API 결정 위주로"), { kind: "app", command: "compact", args: "API 결정 위주로" }, "/compact takes instructions like Claude Code's");
+  assert.deepEqual(slashCommandOf("/new"), { kind: "app", command: "clear", args: "" });
+  assert.deepEqual(slashCommandOf("/model opus"), { kind: "cli", name: "model" }, "a CLI's terminal-only command is caught, not sent as text");
+  assert.equal(slashCommandOf("/frontend-design"), undefined, "a skill or custom command still reaches the CLI");
+  assert.equal(slashCommandOf("/tmp/x 파일 봐줘"), undefined, "a path is a message");
 });
 
 test("a click right after send turned into stop does not stop the run", () => {
@@ -117,6 +120,7 @@ test("slash completion offers built-in commands only, never installed skills", a
     { kind: "command", command: "clear" },
     { kind: "command", command: "compact" },
     { kind: "command", command: "usage" },
+    { kind: "command", command: "help" },
   ]);
   assert.deepEqual(composer.commandItems("frontend-design"), []);
 });

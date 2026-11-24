@@ -1208,7 +1208,14 @@ export function createServer(options: { staticDir?: string; folderRunner?: Folde
   });
   app.post("/api/sessions/:id/compact", async (req, res) => {
     try {
-      const session = orchestra.compact(routeParam(req.params.id));
+      const session = await orchestra.compact(routeParam(req.params.id), typeof req.body?.instructions === "string" ? string(req.body.instructions, 2_000) : "");
+      await persistSessions(orchestra.list());
+      res.json(session);
+    } catch (error) { errorResponse(res, error); }
+  });
+  app.post("/api/sessions/:id/clear", async (req, res) => {
+    try {
+      const session = orchestra.clearContext(routeParam(req.params.id));
       await persistSessions(orchestra.list());
       res.json(session);
     } catch (error) { errorResponse(res, error); }

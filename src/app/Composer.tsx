@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, FileText, Folder, LoaderCircle, MousePointerClick, Paperclip, ShieldCheck, Shuffle, Square, WandSparkles, X } from "lucide-react";
 import { ComposerPopover } from "../ComposerPopover";
-import { composerAction, composerLocked, stopClickAllowed, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken, type SlashCommand } from "../composer";
+import { composerAction, composerLocked, stopClickAllowed, fileToken, handlesCompletionKey, historyEntries, historyStep, slashCommandOf, slashToken } from "../composer";
+import type { SlashParse } from "../../server/slash-commands";
 import { continueListOnNewline, indentListLine, isImeComposing, listItemAt } from "../composer-lists";
 import { applyFieldEdit } from "./field-edit";
 import type { SlashItem } from "./useComposerCompletion";
@@ -52,8 +53,8 @@ export type ComposerProps = {
   stopActive: () => void;
   openModal: (modal: string) => void;
   openViewer: (items: MediaRef[], index: number) => void;
-  /** Runs a built-in `/` command (`/clear`, `/compact`, `/usage`). */
-  runCommand: (command: SlashCommand) => void;
+  /** Runs a built-in `/` command (`/clear`, `/compact`, `/usage`, `/help`) or explains a CLI-only one. */
+  runCommand: (slash: SlashParse) => void;
   /** Team/agent picker rendered in the bottom bar (TeamBarSlot). */
   teamPicker?: ReactNode;
 };
@@ -61,7 +62,7 @@ export type ComposerProps = {
 
 
 function slashDetail(item: SlashItem): string {
-  return { clear: t("comp.cmd.clear"), compact: t("comp.cmd.compact"), usage: t("comp.usageHint") }[item.command];
+  return { clear: t("comp.cmd.clear"), compact: t("comp.cmd.compact"), usage: t("comp.usageHint"), help: t("comp.cmd.help") }[item.command];
 }
 
 function permissionModes(fullAccessAllowed: boolean): { mode: PermissionMode; label: string; title: string }[] {
@@ -81,7 +82,7 @@ export function Composer(props: ComposerProps) {
     if (!slash) return;
     setPrompt(prompt.slice(0, slash.start) + prompt.slice(slash.end));
     setSlash(undefined);
-    props.runCommand(item.command);
+    props.runCommand({ kind: "app", command: item.command, args: "" });
   };
   const attachFile = (file: string) => {
     if (!fileCompletion) return;
