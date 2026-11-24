@@ -6,7 +6,8 @@ import { isNetworkFailure, teamAvailabilityWarning } from "../team";
 import { normalizeWorkerConfigs } from "../../server/workers";
 import { WorkspaceAgentPolicy, RecommendationCard } from "../RoutingControls";
 import type { RoutingSettings, RoutingRecommendation } from "../../server/routing";
-import { historyEntries, numberedOptions, recentPaths, isUsageCommand, slashCommandOf, type SlashCommand } from "../composer";
+import { historyEntries, numberedOptions, recentPaths, isUsageCommand, slashCommandOf, cliOnlyMessage } from "../composer";
+import type { SlashParse } from "../../server/slash-commands";
 import { allowedAgentsForWorkspace } from "../../server/workspace-policy";
 import { submitSession } from "../submit";
 import { WorkerThread } from "../WorkerThread";
@@ -545,14 +546,26 @@ export function WorkspaceApp({ workspaceId, defaults, onDefaultsChange }: {
       setChatError(error instanceof Error ? error.message : String(error));
     });
   };
-  const runCommand = (command: SlashCommand) => {
+  const runCommand = (slash: SlashParse) => {
     setChatError("");
+    // A CLI's terminal-only command (/model, /cost in Codex…): say where it lives instead of sending it as text.
+    if (slash.kind === "cli") { setChatError(cliOnlyMessage(slash.name)); return; }
+    const command = slash.command;
     if (command === "usage") { setTab("usage"); return; }
-    if (command === "clear") { newSession(); return; }
-    // "/compact": the next turn starts fresh CLI sessions from a summary of this one.
-    if (!active) { setChatError(t("comp.cmd.compactNoSession")); return; }
-    if (active.status === "running") { setChatError(t("comp.cmd.compactRunning")); return; }
-    void api<Session>(`/sessions/${active.id}/compact`, {}).then(adoptSession).catch((error) => setChatError(error instanceof Error ? error.message : String(error)));
+    // "/help": the command list with what each does, the same popup "/" opens.
+    if (command === "help") { setPrompt("/"); setSlash({ start: 0, end: 1, query: "" }); window.setTimeout(() => composerInput.current?.focus(), 0); return; }
+    // No conversation yet: nothing to clear; "/clear" just leaves the composer empty.
+    if (!active) { if (command === "clear") newSession(); else setChatError(t("comp.cmd.compactNoSession")); return; }
+    if (active.status === "running") { setChatError(t(command === "clear" ? "comp.cmd.clearRunning" : "comp.cmd.compactRunning")); return; }
+    // "/clear" and "/compact" keep this chat: the agents start fresh CLI sessions, the screen folds what came before.
+    if (command === "clear") {
+      void api<Session>(`/sessions/${active.id}/clear`, {}).then(adoptSession).catch((error) => setChatError(error instanceof Error ? error.message : String(error)));
+      return;
+    }
+    setLiveNote(t("comp.cmd.compacting"));
+    void api<Session>(`/sessions/${active.id}/compact`, slash.args ? { instructions: slash.args } : {}).then(adoptSession)
+      .catch((error) => setChatError(error instanceof Error ? error.message : String(error)))
+      .finally(() => setLiveNote(""));
   };
   const send = (executeRecommendation = false, message = prompt, permissionOverride?: PermissionMode) => {
     const sendMode = permissionOverride ?? shownPermissionMode;

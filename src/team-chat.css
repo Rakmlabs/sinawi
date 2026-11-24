@@ -176,3 +176,12 @@
 .delegation-brief[open] .delegation-brief-toggle { display: none; }
 .delegation-brief-body { max-height: 360px; overflow: auto; margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg-surface); font-size: calc(13px * var(--font-scale)); }
 .wt-draft { margin-top: 12px; }
+
+/* "/clear" and "/compact" (MessageList): the divider where the agents' context starts over, and the earlier context folded above it. */
+.context-divider .agent-label svg { color: var(--accent-fg); }
+.context-summary { margin: -12px 0 20px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.context-summary-toggle { padding: 0; border: 0; background: none; color: var(--text-muted); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.context-summary-toggle:hover { color: var(--text); }
+.context-fold-toggle { display: flex; align-items: center; gap: 6px; margin: 4px auto 12px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); font: inherit; font-size: calc(12px * var(--font-scale)); cursor: pointer; }
+.context-fold-toggle:hover { color: var(--text); }
+.context-fold-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }

@@ -170,6 +170,8 @@ export function mainConversation(session: Session): SessionEvent[] {
     if (event.type === "status" && event.text === "중지됨") return true;
     // A lead's schedule or skill change: a small card in the conversation.
     if (event.type === "status" && (event.metadata?.schedule || event.metadata?.leadSkill)) return true;
+    // "/clear" and "/compact": the divider the screen folds the earlier context under.
+    if (event.type === "status" && event.metadata?.contextReset) return true;
     if (event.type !== "message") return false;
     if (event.agent === "user") return true;
     if (event.role === "worker" || event.role === "planner") return false;

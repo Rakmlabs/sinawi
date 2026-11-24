@@ -1,6 +1,7 @@
-import { memo, useMemo, type RefObject } from "react";
+import { memo, useMemo, useState, type RefObject } from "react";
+import { lastContextReset } from "../../server/slash-commands";
 import { currentActivity, runPhase } from "../run-activity";
-import { ArrowRight, CalendarClock, LogIn, Plug, SquareTerminal, UserCheck, WandSparkles } from "lucide-react";
+import { Archive, ArrowRight, CalendarClock, ChevronDown, Eraser, LogIn, Plug, SquareTerminal, UserCheck, WandSparkles } from "lucide-react";
 import { openTerminal } from "../terminal-events";
 import { originLabel } from "../origin";
 import "../lead-tabs.css";
@@ -108,6 +109,18 @@ function ScheduleCardView({ e }: { e: SessionEvent }) {
   </article>;
 }
 
+/** Where "/clear" or "/compact" started the agents over; a compacted one opens to the summary they continue from. */
+function ContextResetDivider({ e }: { e: SessionEvent }) {
+  const [open, setOpen] = useState(false);
+  if (e.metadata?.contextReset === "clear") return <div className="handoff-divider context-divider" role="separator"><span className="agent-label"><Eraser size={13} aria-hidden="true" />{t("msg.contextCleared")}</span></div>;
+  return <div className="context-compacted">
+    <div className="handoff-divider context-divider" role="separator"><span className="agent-label"><Archive size={13} aria-hidden="true" />{t("msg.contextCompacted")}
+      {e.metadata?.summary && <button type="button" className="context-summary-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>{t("msg.contextSummary")}</button>}
+    </span></div>
+    {open && e.metadata?.summary && <div className="message-text context-summary"><Markdown text={e.metadata.summary} /></div>}
+  </div>;
+}
+
 /** One conversation event and the computer actions that followed it. Memoized: see `MessageRowProps`. */
 /** A CLI that is not signed in (first-run #4): what happened, the CLI's own words, and the way out. */
 function LoginNeeded({ login, text }: { login: NonNullable<NonNullable<SessionEvent["metadata"]>["loginNeeded"]>; text: string }) {
@@ -141,6 +154,7 @@ function MessageRowBody({ e, sessionId, continued, task, workerConfigs, undoable
       </div>;
       if (e.type === "delegation") return <DelegationCard e={e} task={task!} sessionId={sessionId} workerConfigs={workerConfigs} onOpenWorker={onOpenWorker} />;
       if (e.type === "status" && e.metadata?.schedule) return <ScheduleCardView e={e} />;
+      if (e.type === "status" && e.metadata?.contextReset) return <ContextResetDivider e={e} />;
       if (e.type === "status" && e.metadata?.leadSkill) return <div className="handoff-divider steward-divider"><span className="agent-label"><WandSparkles size={13} aria-hidden="true" />{t(`steward.skillCard.${e.metadata.leadSkill.action}` as MessageKey, { name: e.metadata.leadSkill.name })}</span></div>;
       const isUser = e.agent === "user";
       // A schedule's prompt arriving: the card above says why; the text folds under a divider.
@@ -203,10 +217,19 @@ export const MessageList = memo(function MessageList({ active, events, tasksById
   const draft = draftAgent ? { agent: draftAgent } : undefined;
   const draftContinues = Boolean(draft && last && last.agent === draft.agent && last.type !== "delegation" && last.type !== "handoff" && !last.metadata?.live);
   const handlers = useMemo<RowHandlers>(() => ({ onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan: () => onExecutePlan?.() }), [onUndoHandoff, onOpenWorker, onPromote, onChoose, onExecutePlan]);
+  const reset = useMemo(() => lastContextReset(events), [events]);
+  // Open for this chat's latest reset only: another chat, or a newer /clear, starts folded again.
+  const [openedFor, setOpenedFor] = useState("");
+  const foldKey = `${active.id}:${reset}`;
+  const showEarlier = openedFor === foldKey;
   const shared = { active, events, tasksById, latestHandoffId, latestAssistantId, choiceOptions, streamingMessageId, busy, drafting: Boolean(draft), canExecutePlan: Boolean(onExecutePlan), handlers };
   return <div className="messages">
     <GoalPanel session={active} lookup={lookupSession} onOpenSession={onOpenSession} onStop={onStop} />
-    {events.map((e, index) => <MessageRow key={e.id} {...messageRowProps({ ...shared, index })} />)}
+    {/* "/clear" and "/compact": what came before stays, folded, like Claude Code's cleared screen; nothing is deleted. */}
+    {reset > 0 && <button type="button" className="context-fold-toggle" aria-expanded={showEarlier} onClick={() => setOpenedFor(showEarlier ? "" : foldKey)}>
+      <ChevronDown size={13} aria-hidden="true" />{showEarlier ? t("msg.hideEarlierContext") : t("msg.earlierContext", { count: reset })}
+    </button>}
+    {events.map((e, index) => index < reset && !showEarlier ? null : <MessageRow key={e.id} {...messageRowProps({ ...shared, index })} />)}
     {draftKey && draft && <DraftMessage draftKey={draftKey} continued={draftContinues} />}
     <WorktreePanel session={active} />
     {active.status === "running" && (

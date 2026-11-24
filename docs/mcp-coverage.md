@@ -58,7 +58,8 @@
 | `PATCH /api/sessions/:id/group` | `move_session_to_group` | 생성/변경 · 즉시 | 담당·외부 | 채팅을 프로젝트 그룹에 넣거나(group_id) 그룹에서 뺀다(group_id 비움). |
 | `PATCH /api/sessions/:id/workspace` | `move_session_to_workspace` | **승인 필요** | 담당·외부 | 채팅을 다른 워크스페이스(공간)로 옮긴다. 옮긴 채팅은 그 공간의 정책을 따른다. |
 | `POST /api/sessions/:id/stop` | `stop_session` | **승인 필요** | 담당·외부 | 실행 중인 채팅을 멈춘다. |
-| `POST /api/sessions/:id/compact` | `compact_session` | **승인 필요** | 담당·외부 | 긴 채팅의 맥락을 요약으로 줄인다(이전 대화는 요약만 남음). |
+| `POST /api/sessions/:id/compact` | `compact_session` | **승인 필요** | 담당·외부 | 긴 채팅의 맥락을 요약으로 줄인다(채팅 `/compact`). 다음 턴은 그 요약으로 새 CLI 세션을 시작한다. |
+| `POST /api/sessions/:id/clear` | `clear_session` | **승인 필요** | 담당·외부 | 채팅의 에이전트 맥락을 새로 시작한다(채팅 `/clear`). 기록은 화면에 접혀 남는다. |
 | `DELETE /api/sessions/:id` | `delete_session` | **승인 필요** | 담당·외부 | 채팅을 지운다(실행 중이면 안 됨). |
 | `PATCH /api/sessions/:id/team` | `set_session_team` | **승인 필요** | 담당·외부 | 채팅의 팀(주 에이전트, 모델, 워커)을 바꾼다. |
 | `PATCH /api/sessions/:id/auto-switch` | `set_session_auto_switch` | **승인 필요** | 담당·외부 | 채팅의 자동 전환(메시지마다 맞는 에이전트로 바꾸기)을 켜거나 끈다. |

@@ -72,11 +72,15 @@ test("auto never stops to ask the user; only plan mode collects questions", asyn
 
 test("/compact drops the CLI sessions so the next turn starts fresh from a summary", async () => {
   const calls: RunCliOptions[] = [];
-  const orchestra = orchestraWith(defaultWorkspacePolicy(), async (options) => { calls.push(options); return { exitCode: 0, finalText: "답", sessionId: "cli-1" }; });
+  const orchestra = orchestraWith(defaultWorkspacePolicy(), async (options) => {
+    calls.push(options);
+    // The summary run (/compact) answers with the summary the next turn starts from.
+    return options.prompt.startsWith("[앱 — /compact]") ? { exitCode: 0, finalText: "요약: 첫 요청을 처리함" } : { exitCode: 0, finalText: "답", sessionId: "cli-1" };
+  });
   const session = await orchestra.create({ prompt: "첫 요청", agent: "codex", workers: ["claude"], cwd: process.cwd() });
   await settle(session);
   assert.equal(session.cliSessionId, "cli-1");
-  orchestra.compact(session.id);
+  await orchestra.compact(session.id);
   assert.equal(session.cliSessionId, undefined);
   await orchestra.followup(session.id, "다음 요청");
   await settle(session);

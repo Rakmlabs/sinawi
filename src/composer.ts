@@ -1,4 +1,6 @@
 import type { SkillInfo } from "../server/types";
+import { t } from "./i18n";
+import { APP_COMMANDS, parseSlash, type AppCommand, type SlashParse } from "../server/slash-commands";
 
 export function slashToken(text: string, cursor: number) {
   const match = /^\/([^\s/]*)$/.exec(text.slice(0, cursor));
@@ -26,9 +28,9 @@ export function matchingSkills(skills: SkillInfo[], query: string) {
     .map((item) => item.skill);
 }
 
-/** Built-in `/` commands, like Claude Code's: handled by the app, never sent to an agent. */
-export const SLASH_COMMANDS = ["clear", "compact", "usage"] as const;
-export type SlashCommand = (typeof SLASH_COMMANDS)[number];
+/** Built-in `/` commands, like Claude Code's: handled by the app, never sent to an agent (server/slash-commands.ts). */
+export const SLASH_COMMANDS = APP_COMMANDS;
+export type SlashCommand = AppCommand;
 
 export function matchingCommands(query: string): SlashCommand[] {
   const normalized = query.toLocaleLowerCase();
@@ -40,10 +42,21 @@ export function commandItems(query: string) {
   return matchingCommands(query).map((command) => ({ kind: "command" as const, command }));
 }
 
-/** The command a whole message names (`/clear`), if any. */
-export function slashCommandOf(text: string): SlashCommand | undefined {
-  const name = text.trim().match(/^\/([a-z]+)$/u)?.[1];
-  return SLASH_COMMANDS.find((command) => command === name);
+/**
+ * The command a whole message is (`/clear`, `/compact keep the API decisions`, or a CLI's terminal-only `/model`),
+ * if any. Those never reach an agent: the app runs them or says where that lives in Sinawi.
+ */
+export function slashCommandOf(text: string): SlashParse | undefined {
+  return parseSlash(text);
+}
+
+/** What the app says when a CLI's terminal-only command is typed: it does not run headless, and where to go instead. */
+export function cliOnlyMessage(name: string): string {
+  const hint = name === "model" ? t("comp.cmd.hintModel")
+    : name === "init" || name === "review" || name === "security-review" ? t("comp.cmd.hintAsk")
+    : name === "context" ? t("comp.cmd.hintContext")
+    : t("comp.cmd.hintDefault");
+  return `${t("comp.cmd.cliOnly", { name })} ${hint}`;
 }
 
 export function recentPaths(value: unknown, limit = 8): string[] {
