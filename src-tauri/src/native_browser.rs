@@ -123,6 +123,22 @@ pub fn sibling_frame(host: Rect, flipped: bool, css: Rect) -> Rect {
     Rect { x: host.x + css.x, y, width: css.width.max(0.0), height: css.height.max(0.0) }
 }
 
+/// How far below an app webview's top edge its page starts. WebKit pushes the page down by whatever
+/// part of the view lies under an opaque title bar (a full-size content view whose title bar is not
+/// transparent: Tauri's default "visible" style, which the browser windows outside the main one have).
+/// Under a transparent title bar (the main window's overlay style) the page starts at the view's top.
+/// `view_top` and `layout_top` are the tops of the view and of the window's content layout rect, in
+/// window coordinates (y grows upward).
+pub fn page_top_inset(full_size_content: bool, titlebar_transparent: bool, view_top: f64, layout_top: f64) -> f64 {
+    if !full_size_content || titlebar_transparent || !view_top.is_finite() || !layout_top.is_finite() { return 0.0; }
+    (view_top - layout_top).max(0.0)
+}
+
+/// A CSS rect of an app webview's page, moved to that webview's own coordinates (see `page_top_inset`).
+pub fn page_rect(css: Rect, top_inset: f64) -> Rect {
+    Rect { y: css.y + top_inset.max(0.0), ..css }
+}
+
 /// Snapshot area clipped to the visible view. None when nothing is left (off-screen element).
 pub fn clip_rect(rect: Rect, width: f64, height: f64) -> Option<Rect> {
     let left = rect.x.max(0.0);
@@ -232,11 +248,11 @@ fn now_ms() -> u64 {
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use super::{clamp_zoom, clip_rect, key_code, is_risky_download, now_ms, quarantine_value, should_download, sibling_frame, unique_filename, ArmedDialog, DialogInfo, DownloadInfo, Rect, TabState, DIALOG_BLOCKED, DRAIN_SCRIPT, SCRIPT_WORLD};
+    use super::{clamp_zoom, clip_rect, key_code, is_risky_download, now_ms, page_rect, page_top_inset, quarantine_value, should_download, sibling_frame, unique_filename, ArmedDialog, DialogInfo, DownloadInfo, Rect, TabState, DIALOG_BLOCKED, DRAIN_SCRIPT, SCRIPT_WORLD};
     use base64::Engine;
     use block2::{DynBlock, RcBlock};
     use objc2::{define_class, msg_send, rc::Retained, runtime::{AnyObject, Bool, ProtocolObject}, sel, Message, MainThreadMarker, MainThreadOnly};
-    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventModifierFlags, NSEventType, NSImage, NSOpenPanel, NSView, NSWindowOrderingMode};
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSEvent, NSEventModifierFlags, NSEventType, NSImage, NSOpenPanel, NSView, NSWindowOrderingMode, NSWindowStyleMask};
     use objc2_foundation::{NSArray, NSData, NSDictionary, NSError, NSHTTPURLResponse, NSNotFound, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSProcessInfo, NSProgressReporting, NSRange, NSRect, NSSize, NSString, NSURLRequest, NSURLResponse, NSURL};
     use objc2_web_kit::{
         WKContentWorld, WKDownload, WKDownloadDelegate, WKFrameInfo, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate, WKNavigationResponse, WKNavigationResponsePolicy,
@@ -633,13 +649,27 @@ mod mac {
         }).await
     }
 
+    /// Where the app webview's page starts below the view's own top edge (`page_top_inset`): the part
+    /// of the view under an opaque title bar. The slot rect the panel sends is in page coordinates.
+    unsafe fn host_page_inset(host: &WKWebView) -> f64 {
+        let Some(window) = host.window() else { return 0.0 };
+        let in_window = host.convertRect_toView(NSView::bounds(host), None);
+        let layout = window.contentLayoutRect();
+        page_top_inset(
+            window.styleMask().contains(NSWindowStyleMask::FullSizeContentView),
+            window.titlebarAppearsTransparent(),
+            in_window.origin.y + in_window.size.height,
+            layout.origin.y + layout.size.height,
+        )
+    }
+
     pub async fn layout(main: &Webview, tab: String, rect: Option<Rect>, visible: bool, zoom: f64, behind: bool) -> Result<bool, String> {
         on_main(main, QUICK, move |_mtm, host, reply| unsafe {
             let Some(view) = tab_view(&tab) else { reply.send(Ok(false)); return };
             match rect.filter(|_| visible) {
                 Some(rect) => {
                     let Some(parent) = host.superview() else { reply.send(Err("main webview has no superview".into())); return };
-                    let frame = sibling_frame(rect_of(host.frame()), parent.isFlipped(), rect);
+                    let frame = sibling_frame(rect_of(host.frame()), parent.isFlipped(), page_rect(rect, host_page_inset(host)));
                     view.setFrame(ns_rect(frame));
                     let zoom = clamp_zoom(zoom);
                     if (view.pageZoom() - zoom).abs() > 0.001 { view.setPageZoom(zoom); }
@@ -1136,6 +1166,29 @@ mod tests {
         let offset_host = Rect { x: 5.0, y: 20.0, width: 1000.0, height: 800.0 };
         assert_eq!(sibling_frame(offset_host, false, low), Rect { x: 15.0, y: 620.0, width: 100.0, height: 200.0 });
         assert_eq!(sibling_frame(offset_host, true, low), Rect { x: 15.0, y: 20.0, width: 100.0, height: 200.0 });
+    }
+
+    #[test]
+    fn a_page_under_an_opaque_title_bar_starts_below_it() {
+        // The main window: overlay (transparent) title bar over a full-size content view. The page starts at the view's top.
+        assert_eq!(page_top_inset(true, true, 900.0, 872.0), 0.0);
+        // A browser window outside it: Tauri's default visible title bar, also over a full-size content view.
+        // WebKit pushes the page down by the 28px under the title bar.
+        assert_eq!(page_top_inset(true, false, 848.0, 820.0), 28.0);
+        // A content view that ends below the title bar, or a full-screen window with no title bar: nothing to add.
+        assert_eq!(page_top_inset(false, false, 820.0, 820.0), 0.0);
+        assert_eq!(page_top_inset(true, false, 820.0, 820.0), 0.0);
+        assert_eq!(page_top_inset(true, false, 800.0, 820.0), 0.0);
+        assert_eq!(page_top_inset(true, false, f64::NAN, 820.0), 0.0);
+
+        // The page slot of that outside window (below a 42px tab strip and a 52px toolbar, to the bottom of an
+        // 820px page) lands exactly on the bottom 726px of the 848px view: it used to sit 28px too high, over the toolbar.
+        let host = Rect { x: 0.0, y: 0.0, width: 1180.0, height: 848.0 };
+        let slot = Rect { x: 0.0, y: 94.0, width: 1180.0, height: 726.0 };
+        assert_eq!(sibling_frame(host, false, page_rect(slot, 28.0)), Rect { x: 0.0, y: 0.0, width: 1180.0, height: 726.0 });
+        assert_eq!(sibling_frame(host, false, slot).y, 28.0, "without the inset: 28px too high");
+        assert_eq!(page_rect(slot, 0.0), slot);
+        assert_eq!(page_rect(slot, -5.0), slot);
     }
 
     #[test]
